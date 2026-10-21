@@ -1,4 +1,4 @@
-// Клиент HTTP API тела (FlyBot/FlyTest). Только встроенные модули Node.
+// Клиент HTTP API тела (FlyBot/FlyBot_01). Только встроенные модули Node.
 // Используется и исполнителем (runner.js), и дочерним процессом навыка (worker.js).
 'use strict';
 const http = require('http');

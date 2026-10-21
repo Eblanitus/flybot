@@ -11,7 +11,7 @@ function Log($t) { $s = "[$(Get-Date -Format 'HH:mm:ss')] handover: $t"; Write-H
 # старые петли night.cmd и их мозги (opencode)
 $loops = @(Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | ? { $_.CommandLine -match 'night(-[\d-]+)?\.cmd' })
 # мозги ищем по тексту задания: так находятся и те, чья петля уже закрыта
-$brains = @(Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | ? { $_.CommandLine -match 'brain of the Minecraft bot FlyTest' })
+$brains = @(Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | ? { $_.CommandLine -match 'brain of the Minecraft bot (FlyTest|FlyBot_01)' })
 Log "старых петель: $($loops.Count), мозгов: $($brains.Count)"
 
 Remove-Item $flag -Force -ErrorAction SilentlyContinue

@@ -208,17 +208,18 @@ function brainCommands(events, limit) {
 
 // Чат: игровой чат (type chat), реплики мозга в игру (info.say — их тело пишет само) и сообщения хозяина из программы.
 const OWNER_NAMES = new Set(['eblanitus228']);
+const BRAIN_NAMES = new Set(['flytest', 'flybot_01']);   // ник тела: старый и новый
 function chatFeed(events, limit, withSystem) {
   const out = [];
   for (const e of events) {
     if (e.type === 'owner_msg') out.push({ ts: e.ts, role: 'owner', app: true, who: 'Хозяин (из программы)', text: String(e.text || '') });
-    else if (e.type === 'info' && e.say != null) out.push({ ts: e.ts, role: 'brain', who: 'Мозг (FlyTest)', text: String(e.say) });
+    else if (e.type === 'info' && e.say != null) out.push({ ts: e.ts, role: 'brain', who: 'Мозг (FlyBot_01)', text: String(e.say) });
     else if (e.type === 'chat') {
       const kind = e.kind || 'chat';
       if (kind === 'chat' && e.from) {
         const low = String(e.from).toLowerCase();
-        const role = OWNER_NAMES.has(low) ? 'owner' : (low === 'flytest' ? 'brain' : 'player');
-        out.push({ ts: e.ts, role, who: role === 'brain' ? 'Мозг (FlyTest)' : e.from, text: String(e.text || '') });
+        const role = OWNER_NAMES.has(low) ? 'owner' : (BRAIN_NAMES.has(low) ? 'brain' : 'player');
+        out.push({ ts: e.ts, role, who: role === 'brain' ? 'Мозг (FlyBot_01)' : e.from, text: String(e.text || '') });
       } else if (withSystem && kind === 'system') out.push({ ts: e.ts, role: 'system', who: 'сервер', text: String(e.text || '') });
     }
   }

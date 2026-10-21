@@ -30,7 +30,7 @@ function BrainProcs {  # opencode-мозги среди потомков наш�
   $kids = @{}; foreach ($p in $all) { $kids[[int]$p.ParentProcessId] += @($p) }
   $out = @(); $queue = New-Object System.Collections.Queue; $queue.Enqueue([int]$loopPid)
   while ($queue.Count) { foreach ($c in @($kids[$queue.Dequeue()])) { if (-not $c) { continue }
-    if ($c.Name -eq 'opencode.exe' -and $c.CommandLine -match 'brain of the Minecraft bot FlyTest') { $out += $c }
+    if ($c.Name -eq 'opencode.exe' -and $c.CommandLine -match 'brain of the Minecraft bot (FlyTest|FlyBot_01)') { $out += $c }
     $queue.Enqueue([int]$c.ProcessId) } }
   $out
 }
@@ -82,7 +82,7 @@ while ($true) {
       if ((Test-Path $done) -and (Get-Item $done).LastWriteTime -ge $f.LastWriteTime) { continue }   # уже отвечено, заявку не меняли
       if ((Test-Path $lock) -and ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes -lt ($EngTimeoutMin + 5)) { continue }  # берёт другой сторож
       Set-Content $lock (Get-Date -Format s)
-      $prompt = "You are the engineer of the Minecraft bot FlyTest. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
+      $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
       $elog = "$fb\data\engineer-$name.log"
       # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет); проектный opencode.json не подмешивать
       $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $EngModel `"$prompt`" >> `"$elog`" 2>&1" `
@@ -108,7 +108,7 @@ while ($true) {
   if (-not $tch) {
     $c = Teach @('take')
     if ($c -and $c.id) {
-      $prompt = "You are the teacher of the Minecraft bot FlyTest. Read brain/TEACHER_PROMPT.md and follow it exactly. Case file: $($c.caseFile)"
+      $prompt = "You are the teacher of the Minecraft bot FlyBot_01. Read brain/TEACHER_PROMPT.md and follow it exactly. Case file: $($c.caseFile)"
       $tlog = "$fb\data\teacher-$($c.id).log"
       # у учителя свой конфиг opencode (пишет только учебник, журнал уроков, заявки и отчёты; без /do); проектный не подмешивать
       $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $TeachModel `"$prompt`" >> `"$tlog`" 2>&1" `
