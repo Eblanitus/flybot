@@ -13,6 +13,8 @@
 //   GET  /autopilot[?on=0|1]    — автопилот: состояние / выключить / включить
 //   GET  /critic                — критик: затупы за час, простой, смерти, прогресс, что чинить в теле
 //   GET  /variants[?list=1|family=melee] — способы действий (lib/variants): статистика исходов / описание вариантов
+//   GET  /behavior              — поведение (behavior/): активная версия, рабочие версии, история откатов
+//   POST /behavior/reload       — перечитать behavior/ без перезапуска тела (сломанная версия не включится)
 //   POST /cmd {"action":"...","params":{...}}  (Content-Type: application/json)
 'use strict';
 const fs = require('fs');
@@ -24,7 +26,8 @@ const { pathfinder } = require('mineflayer-pathfinder');
 const { EventHub } = require('./lib/events');
 const { TaskManager } = require('./lib/tasks');
 const { makeMovements } = require('./lib/actions');
-const reflexes = require('./lib/reflexes');
+const bodyEvents = require('./lib/body_events'); // события тела (факты); решения — в behavior/
+const { BehaviorHost } = require('./lib/behavior_host');
 const referee = require('./lib/referee');
 const { snapshot, eyes } = require('./lib/perception');
 const { makeDispatcher } = require('./lib/commands');
@@ -56,6 +59,7 @@ const ctx = {
 };
 ctx.tasks = new TaskManager(ctx);
 ctx.chat = new ChatLog(40); // чат/системные строки/экшн-бар — мозг читает их из /snapshot
+const behavior = new BehaviorHost(ctx); // поведение (behavior/): загрузка, проверка, перезагрузка, откат
 
 try { if (fs.existsSync(STATS_FILE)) Object.assign(ctx.stats, JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'))); } catch (e) { console.log('[stats] read fail', e.message); }
 delete ctx.stats.lastPos; delete ctx.stats.startTime; delete ctx.stats.timeAlive;
@@ -147,7 +151,8 @@ function connect() {
   const session = { bot, timers: [], ended: false, spawned: false };
   ctx.bot = bot; ctx.ready = false;
   bot.loadPlugin(pathfinder);
-  reflexes.attach(ctx, session); // один раз на экземпляр бота
+  bodyEvents.attach(ctx, session); // один раз на экземпляр бота: урон, смерть, сигналы, чат (ядро)
+  behavior.attachSession(session); // рефлексы и автопилот (behavior/) — через хост
   critic.attach(ctx, session); // критик: затупы мозга/тела -> событие advice
   vision.attach(ctx, bot, session); // честное зрение: память увиденного + периодический просмотр
   try { require('./lib/daylog').attach(ctx, session); require('./lib/owner').attach(ctx, session); } catch (e) { console.log('[daylog/owner] не подключились:', e.message); } // итог дня + приказы хозяина без LLM
@@ -160,8 +165,8 @@ function connect() {
     if (firstSpawn) {
       firstSpawn = false;
       try {
-        ctx.movements = makeMovements(bot);
-        ctx.sprintMovements = makeMovements(bot, { sprint: true });
+        ctx.movements = makeMovements(bot, { ctx });
+        ctx.sprintMovements = makeMovements(bot, { sprint: true, ctx });
         bot.pathfinder.setMovements(ctx.movements);
         bot.pathfinder.thinkTimeout = 8000;
       } catch (e) { console.log('[pf] movements err', e); }
@@ -180,6 +185,7 @@ function connect() {
     ctx.ready = false;
     for (const tm of session.timers) { clearInterval(tm); clearTimeout(tm); }
     session.timers = [];
+    behavior.sessionEnded(session);
     if (ctx.tasks.current) ctx.tasks.current.abort('отключение');
     try { bot.removeAllListeners(); bot.on('error', () => {}); } catch (e) {}
     console.log('[bot] ended:', reason);
@@ -249,7 +255,7 @@ const server = http.createServer(async (req, res) => {
           const source = await fromBrainOrAutopilot(req, cmd);
           return send(res, 200, await dispatch(cmd, { source, internal: !req.headers['user-agent'] }));
         }
-        case '/snapshot': return send(res, 200, require('./lib/daylog').decorate(ctx, require('./lib/worldmem').decorate(ctx, require('./lib/variants').decorate(ctx, require('./lib/experience').decorate(ctx, snapshot(ctx))))));
+        case '/snapshot': return send(res, 200, require('./lib/danger').decorate(ctx, require('./lib/daylog').decorate(ctx, require('./lib/worldmem').decorate(ctx, require('./lib/variants').decorate(ctx, require('./lib/experience').decorate(ctx, snapshot(ctx)))))));
         case '/memory': return send(res, 200, require('./lib/worldmem').handleMemory(ctx, q)); // ?kind=iron_ore&near=x,y,z&limit=5
         case '/memory/items': return send(res, 200, require('./lib/worldmem').handleItems(ctx, q)); // ?name=cobblestone
         case '/variants': {
@@ -265,6 +271,7 @@ const server = http.createServer(async (req, res) => {
           if (q.has('on')) { if (fromBrowser(req)) return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); return send(res, 200, { ok: true, autopilot: await ap.setOn(!['0', 'false', 'off'].includes(String(q.get('on')).toLowerCase())) }); }
           return send(res, 200, { ok: true, autopilot: ap.status(), history: ap.history.slice(-10) });
         }
+        case '/behavior': return send(res, 200, { ok: true, ...behavior.status() }); // для программы аудита
         case '/critic': return send(res, 200, ctx.critic ? ctx.critic.summary() : { ok: false, error: 'критик ещё не запущен (бот не подключён)' });
         case '/stats': return send(res, 200, { ...ctx.stats, ...ctx.statsBrief() });
         case '/task': return send(res, 200, { task: ctx.tasks.info(), history: ctx.tasks.history.slice(-10) });
@@ -312,6 +319,15 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/behavior/reload') {
+      // перечитать behavior/: проверка (загрузка, экспорт, selfTest) -> включить; сломанная не включается
+      if (fromBrowser(req)) { req.resume(); return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); }
+      const ct = String(req.headers['content-type'] || '').toLowerCase();
+      if (!ct.startsWith('application/json')) { req.resume(); return send(res, 415, { ok: false, error: 'нужен Content-Type: application/json' }); }
+      req.resume();
+      const r = await behavior.reload('POST /behavior/reload');
+      return send(res, 200, { ...r, behavior: behavior.status() });
+    }
     if (req.method === 'POST' && url.pathname === '/owner_msg') {
       // сообщение хозяина мозгу из программы «Аудит»: событие owner_msg в ленте (мозг видит в /wait, /events); в игровой чат НЕ идёт
       if (fromBrowser(req)) { req.resume(); return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); }
@@ -343,7 +359,8 @@ process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 server.on('error', (e) => { console.log('[http] error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
 server.listen(CONTROL, '127.0.0.1', () => {
   console.log(`[http] control API on http://127.0.0.1:${CONTROL}`);
-  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants   POST /cmd /owner_msg');
+  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior   POST /cmd /owner_msg /behavior/reload');
   try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
+  behavior.init().catch(e => console.log('[behavior] init:', e && e.message)); // проверка behavior/ и включение (к боту подключится, когда он будет)
   connect();
 });

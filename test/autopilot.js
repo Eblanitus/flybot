@@ -1,7 +1,8 @@
 // Офлайн-проверка цели мозга в автопилоте: parseGoal и ветка goal в decide
 'use strict';
 const assert = require('assert');
-const { decide, parseGoal, parseBase, baseTravel } = require('../lib/autopilot');
+const { decide } = require('../behavior/autopilot');
+const { parseGoal, parseBase, baseTravel } = require('../lib/basegoal');
 const { Vec3 } = require('../lib/util');
 const A = require('../lib/actions');
 

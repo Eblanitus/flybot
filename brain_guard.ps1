@@ -76,7 +76,8 @@ while ($true) {
       Set-Content $lock (Get-Date -Format s)
       $prompt = "You are the engineer of the Minecraft bot FlyTest. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
       $elog = "$fb\data\engineer-$name.log"
-      $p = Start-Process cmd.exe -ArgumentList '/c', "opencode run --auto -m $EngModel `"$prompt`" >> `"$elog`" 2>&1" `
+      # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет); проектный opencode.json не подмешивать
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $EngModel `"$prompt`" >> `"$elog`" 2>&1" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
       $eng = @{ proc = $p; name = $name; started = Get-Date }
       GLog "инженер: взял заявку $name (pid $($p.Id))"

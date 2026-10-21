@@ -1,103 +1,37 @@
-// Автопилот: когда мозг молчит >= 30 с и тело свободно, тело само делает полезное — по одному навыку за раз
+// Автопилот (поведение): когда мозг молчит >= 30 с и тело свободно, тело само делает полезное — по одному навыку за раз
 // (source:'autopilot'): защита → ночь (укрытие, night_mine) → день (day_routine) → простые навыки.
 // Мозг всегда главнее: любая его команда вытесняет навык автопилота (tasks.js) и прерывает выученный навык,
 // запущенный автопилотом через исполнитель (POST :3200/abort). Задачи рефлексов автопилот не трогает никогда.
-// Решение — чистая функция decide(state), её можно проверять без бота.
+// Решение — чистая функция decide(state), её можно проверять без бота. Перенесён из lib/autopilot.js как есть.
+// Пороги — behavior/thresholds.js; цель/база из notes.md и переход на базу — ядро (lib/basegoal.js).
 'use strict';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { goals } = require('mineflayer-pathfinder');
-const { isHostile, isAnimal, isBuildBlock, entName, SkillError } = require('./util');
-const A = require('./actions');
-const { timeInfo } = require('./perception');
-const threats = require('./threats');
-const AG = require('./aggressors');
-const vision = require('./vision');
+const L = require('./core');
+const { isHostile, isAnimal, isBuildBlock, entName } = L('util');
+const A = L('actions');
+const { timeInfo } = L('perception');
+const threats = L('threats');
+const AG = L('aggressors');
+const vision = L('vision');
+const { parseGoal, parseBase, baseTravel } = L('basegoal');
+const T = require('./thresholds');
 
 const RUNNER = (process.env.RUNNER_URL || 'http://127.0.0.1:3200').replace(/\/+$/, '');
-const IDLE_MS = 30000;     // столько мозг должен молчать (и тело стоять), чтобы автопилот взялся за дело
-const TICK_MS = 2000;
-const ENEMY_R = 16;        // враг-игрок ближе — реагировать сразу
-const FAIL_MAX = 3;        // провалов подряд до паузы
-const BACKOFF_MS = 60000;
-const CHAT_MS = 60000;     // не чаще одного сообщения в чат в минуту
+const IDLE_MS = T.idleMs;  // столько мозг должен молчать (и тело стоять), чтобы автопилот взялся за дело
+const TICK_MS = T.tickMs;
+const ENEMY_R = T.enemyR;  // враг-игрок ближе — реагировать сразу
+const FAIL_MAX = T.failMax; // провалов подряд до паузы
+const BACKOFF_MS = T.backoffMs;
+const CHAT_MS = T.chatMs;  // не чаще одного сообщения в чат в минуту
 const GAME = ['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom', 'goat'];
 // команды мозга, которые только читают/говорят: время молчания сбрасывают, но автопилот не прерывают
 const READONLY = new Set(['survey', 'snapshot', 'status', 'task', 'recipes', 'scan', 'chat', 'wait']);
 const norm = s => String(s || '').toLowerCase().replace(/[\s_\-]/g, '');
-const NOTES = path.join(__dirname, '..', 'brain', 'notes.md');
+const NOTES = path.join(process.env.FLYBOT_CORE || path.join(__dirname, '..'), 'brain', 'notes.md');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-// ---------- Цель мозга ----------
-// В notes.md раздел «## Текущая цель» может содержать машинную строку «Автопилот: <навык> ключ=значение …»
-// (например «Автопилот: collect block=stone count=60»). Днём автопилот продолжает её сам, пока мозг молчит.
-function parseGoal(text) {
-  const lines = String(text || '').split(/\r?\n/);
-  let i = lines.findIndex(l => /^##\s*Текущая цель/.test(l));
-  if (i < 0) return null;
-  let line = null;
-  for (i++; i < lines.length && !/^##\s/.test(lines[i]); i++) {
-    const m = /^[\s>*_-]*Автопилот\s*:[\s*]*(.+)$/i.exec(lines[i]);
-    if (m) { line = m[1]; break; }
-  }
-  if (!line) return null;
-  const toks = line.replace(/[`*]/g, ' ').trim().split(/\s+/);
-  const name = toks.shift();
-  if (!name || !/^[A-Za-z_][\w-]*$/.test(name)) return null;
-  const params = {};
-  for (const t of toks) {
-    const k = t.indexOf('=');
-    if (k <= 0) continue;
-    const v = t.slice(k + 1);
-    let val = v; try { if (/^(-?\d|true$|false$|\[|\{)/.test(v)) val = JSON.parse(v); } catch (e) {}
-    params[t.slice(0, k)] = val;
-  }
-  return { name, params, sig: name + ' ' + JSON.stringify(params) };
-}
-
-// ---------- База проекта ----------
-// Машинная строка «База: x y z [радиус=N]» в любом месте notes.md (допустимы маркер списка и **жирный**), берётся первая
-// найденная с тремя числами. Днём, если муха дальше радиуса (по горизонтали), автопилот сначала ведёт её на базу.
-const BASE_R = 96;
-function parseBase(text) {
-  for (const line of String(text || '').split(/\r?\n/)) {
-    const m = /^[\s>*_-]*База\s*:[\s*]*(.+)$/i.exec(line);
-    if (!m) continue;
-    const rest = m[1].replace(/[`*]/g, ' ');
-    const c = /(-?\d+(?:\.\d+)?)[\s,;]+(-?\d+(?:\.\d+)?)[\s,;]+(-?\d+(?:\.\d+)?)/.exec(rest);
-    if (!c) continue;
-    const rm = /радиус\s*=\s*(\d+(?:\.\d+)?)/i.exec(rest);
-    const r = rm ? Number(rm[1]) : BASE_R;
-    return { x: Number(c[1]), y: Number(c[2]), z: Number(c[3]), r: r > 0 ? r : BASE_R };
-  }
-  return null;
-}
-
-// Навык автопилота «goto»: дойти до базы скачками по ~64 блока (длинный путь pathfinder за раз ведёт ненадёжно), как go_safe.
-// params: {x,y,z,r,timeout(с)}. Бросает SkillError, если не дошла (нет продвижения / вышло время).
-async function baseTravel(ctx, t, p) {
-  const bot = ctx.bot;
-  const hd = () => Math.hypot(p.x - bot.entity.position.x, p.z - bot.entity.position.z);
-  const arrive = Math.min(12, Math.max(2, (p.r || BASE_R) * 0.5));
-  const deadline = Date.now() + (Number(p.timeout) > 0 ? Number(p.timeout) : 420) * 1000;
-  let stalls = 0, lastErr = null;
-  t.progress(`иду на базу (${Math.round(hd())} м)`);
-  for (let hop = 0; hop < 14 && hd() > arrive; hop++) {
-    t.check();
-    const left = deadline - Date.now();
-    if (left < 5000) throw new SkillError(`на базу не дошла: вышло время (осталось ${Math.round(hd())} м)`);
-    const before = hd(), me = bot.entity.position;
-    const goal = before <= 64 ? new goals.GoalNear(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), 3)
-      : new goals.GoalNearXZ(Math.round(me.x + (p.x - me.x) * 64 / before), Math.round(me.z + (p.z - me.z) * 64 / before), 3);
-    try { await A.goto(ctx, t, goal, { timeout: Math.min(left, 120000), sprint: true }); }
-    catch (e) { if (e.aborted) throw e; lastErr = e.message; }
-    if (before - hd() < 4) { if (++stalls >= 2) throw new SkillError(`на базу не дошла: ${lastErr || 'нет продвижения'} (осталось ${Math.round(hd())} м)`); }
-    else stalls = 0;
-  }
-  if (hd() > arrive) throw new SkillError(`на базу не дошла: осталось ${Math.round(hd())} м`);
-  return { arrived: true, left: Math.round(hd()) };
-}
+const MOD = {}; // метка этой версии модуля: после перезагрузки поведения автопилот создаётся заново
 
 // ---------- Решение (чистая функция) ----------
 // s: {on, idle, task:{name,source}|null, running:{key}|null, runnerOther, hp, food, hasFood, hasWeapon, hasPickaxe,
@@ -119,22 +53,22 @@ function decide(s) {
   const en = (s.enemies || [])[0];
   if (en) {
     if (run === 'fight_player' || run === 'escape_player') return null;
-    if (en.aggressor && s.hasWeapon && s.hp >= 12 && s.alone && ok('fight_player'))
-      return body('fight_player', 'fight', { target: en.name, radius: 16, flee_hp: 8, timeout: 45 }, `отбиваюсь от ${en.name}`, true);
-    if (ok('escape_player')) return body('escape_player', 'escape', { distance: 24, shelter: true }, `убегаю от ${en.name} (${en.why})`, true);
+    if (en.aggressor && s.hasWeapon && s.hp >= T.apFightHp && s.alone && ok('fight_player'))
+      return body('fight_player', 'fight', { target: en.name, radius: T.apFightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout }, `отбиваюсь от ${en.name}`, true);
+    if (ok('escape_player')) return body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why})`, true);
   }
   if (run || s.task) return null; // свой навык идёт — не дёргать
   if (!s.idle) return null;       // мозг недавно командовал — ждём
 
   // 2. безопасность
   if ((s.inLava || s.suffocating || s.stuck || s.underWater) && ok('unstuck'))
-    return body('unstuck', 'explore', { distance: 8 }, s.inLava ? 'выбираюсь из лавы' : s.suffocating ? 'выбираюсь из блока' : s.underWater ? 'выплываю из воды' : 'выбираюсь: застрял');
-  if (s.hp < 10) {
-    if (s.hostilesNear > 0 && ok('lowhp_escape')) return body('lowhp_escape', 'escape', { distance: 16, shelter: true }, `мало HP (${s.hp}) — убегаю`);
+    return body('unstuck', 'explore', { distance: T.unstuckDist }, s.inLava ? 'выбираюсь из лавы' : s.suffocating ? 'выбираюсь из блока' : s.underWater ? 'выплываю из воды' : 'выбираюсь: застрял');
+  if (s.hp < T.apLowHp) {
+    if (s.hostilesNear > 0 && ok('lowhp_escape')) return body('lowhp_escape', 'escape', { distance: T.apLowHpEscapeDist, shelter: true }, `мало HP (${s.hp}) — убегаю`);
     if (!s.sheltered && ok('lowhp_shelter')) return body('lowhp_shelter', 'shelter', {}, `мало HP (${s.hp}) — укрываюсь`);
     return null; // в укрытии восстанавливаемся (ест рефлекс)
   }
-  const night = s.isNight || s.nightIn < 40;
+  const night = s.isNight || s.nightIn < T.nightSoonSec;
   if (night && !s.sheltered && s.hostilesNear > 0 && ok('night_shelter')) return body('night_shelter', 'shelter', {}, 'монстры рядом ночью — укрываюсь');
 
   // 3. после смерти — за вещами (днём; если у места смерти враг — recover откажет сам)
@@ -143,20 +77,20 @@ function decide(s) {
   // 4. ночь: укрытие → туннель night_mine → кровать → переждать
   if (night) {
     if (!s.sheltered) {
-      if (s.blocks < 9 && s.hostilesNear === 0 && ok('night_dirt')) return body('night_dirt', 'collect', { block: 'dirt', count: 10 - s.blocks }, 'запасаю землю на укрытие');
+      if (s.blocks < T.nightBlocksMin && s.hostilesNear === 0 && ok('night_dirt')) return body('night_dirt', 'collect', { block: 'dirt', count: T.nightBlocksMin + 1 - s.blocks }, 'запасаю землю на укрытие');
       if (s.hasPickaxe && ok('night_shelter_dig')) return body('night_shelter_dig', 'shelter', { mode: 'dig' }, 'ночь: закапываюсь');
       if (ok('night_shelter')) return body('night_shelter', 'shelter', {}, 'ночь: строю укрытие');
     }
     if ((s.phase === 'ночь' || s.phase === 'закат') && ok('night_mine')) return learned('night_mine', 'night_mine', {}, 'копаю туннель ночью');
     if (s.isNight && s.freeBed && ok('sleep')) return body('sleep', 'sleep', {}, 'сплю в кровати');
-    if (s.isNight && ok('wait_night')) return body('wait_night', 'wait_night', { max_sec: 720 }, 'пережидаю ночь');
+    if (s.isNight && ok('wait_night')) return body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь');
     return null;
   }
 
   // 5a. день, далеко от базы проекта — сначала на базу (до цели мозга и day_routine); пока пауза после провала — стоим, а не уходим дальше
   if (s.base && s.baseDist != null && s.baseDist > s.base.r) {
     if (!ok('go_base')) return null;
-    return body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: 420 }, 'иду на базу');
+    return body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec }, 'иду на базу');
   }
 
   // 5. день: цель мозга (строка «Автопилот:» в notes.md), потом длинный навык, иначе простые
@@ -164,12 +98,12 @@ function decide(s) {
     const g = s.goal, why = `продолжаю цель мозга: ${g.name}${Object.keys(g.params).length ? ' ' + JSON.stringify(g.params) : ''}`;
     return g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why);
   }
-  if (ok('day_routine')) return learned('day_routine', 'day_routine', { max_sec: 600 }, 'дневная работа (day_routine)');
-  if (s.food < 14 && !s.hasFood && s.animals > 0 && ok('hunt')) return body('hunt', 'hunt', { count: 2 }, 'охочусь: нечего есть');
-  if (!s.hasPickaxe && s.logs >= 3 && ok('craft_pick')) return body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку');
-  if (!s.hasPickaxe && s.logs < 8 && ok('collect_log')) return body('collect_log', 'collect', { block: 'log', count: 6 }, 'рублю дерево');
-  if (s.hasPickaxe && s.cobble < 24 && ok('collect_stone')) return body('collect_stone', 'collect', { block: 'stone', count: 12 }, 'добываю камень');
-  if (ok('explore')) return body('explore', 'explore', { distance: 48 }, 'исследую окрестности');
+  if (ok('day_routine')) return learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)');
+  if (s.food < T.huntFood && !s.hasFood && s.animals > 0 && ok('hunt')) return body('hunt', 'hunt', { count: T.huntCount }, 'охочусь: нечего есть');
+  if (!s.hasPickaxe && s.logs >= T.pickLogs && ok('craft_pick')) return body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку');
+  if (!s.hasPickaxe && s.logs < T.needLogs && ok('collect_log')) return body('collect_log', 'collect', { block: 'log', count: T.logCount }, 'рублю дерево');
+  if (s.hasPickaxe && s.cobble < T.cobbleWant && ok('collect_stone')) return body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount }, 'добываю камень');
+  if (ok('explore')) return body('explore', 'explore', { distance: T.exploreDist }, 'исследую окрестности');
   return null;
 }
 
@@ -221,7 +155,7 @@ function gather(ctx, ap) {
     freeBed = vision.find(ctx, bedIds, { radius: 32, count: 20 }).map(q => bot.blockAt(q))
       .some(b => b && !(b.getProperties && b.getProperties().occupied));
   } catch (e) {}
-  let sheltered = false; try { sheltered = require('./skills/survival').isSheltered(bot); } catch (e) {}
+  let sheltered = false; try { sheltered = L('skills/survival').isSheltered(bot); } catch (e) {}
   const ti = timeInfo(bot);
   const cur = ctx.tasks.current;
   const ld = ctx.lastDeath;
@@ -240,12 +174,12 @@ function gather(ctx, ap) {
     phase: ti.phase, isNight: ti.isNight, nightIn: ti.nightIn, sheltered,
     inLava: [feet, head].some(b => b && b.name === 'lava'),
     suffocating: !!head && A.isSolid(head) && head.boundingBox === 'block',
-    stuck: ap.stuckSince > 0 && now - ap.stuckSince > 6000,
-    underWater: ap.wetSince > 0 && now - ap.wetSince > 10000,
-    hostilesNear: hostiles.filter(d => d <= 10).length,
-    enemies, alone: hostiles.filter(d => d <= 6).length === 0 && enemies.filter(e => e.d <= 10).length <= 1,
-    freeBed, animals: ents.filter(e => isAnimal(e) && GAME.includes(entName(e)) && e.position.distanceTo(p) <= 32).length,
-    recoverable: !!(ld && ld.at && now - ld.ts < 240000 && ap.recoverFor !== ld.ts),
+    stuck: ap.stuckSince > 0 && now - ap.stuckSince > T.stuckMs,
+    underWater: ap.wetSince > 0 && now - ap.wetSince > T.underWaterMs,
+    hostilesNear: hostiles.filter(d => d <= T.hostileR).length,
+    enemies, alone: hostiles.filter(d => d <= T.aloneR).length === 0 && enemies.filter(e => e.d <= T.aloneEnemyR).length <= 1,
+    freeBed, animals: ents.filter(e => isAnimal(e) && GAME.includes(entName(e)) && e.position.distanceTo(p) <= T.animalsR).length,
+    recoverable: !!(ld && ld.at && now - ld.ts < T.recoverMs && ap.recoverFor !== ld.ts),
     blocked, goal: ap.goal || null, goalDone: !!ap.goal && ap.goalDone === ap.goal.sig,
     base: ap.base || null, baseDist: ap.base && baseDimOk(bot) ? Math.hypot(ap.base.x - p.x, ap.base.z - p.z) : null
   };
@@ -256,7 +190,7 @@ function create(ctx) {
   const ap = {
     on: true, lastBrainCmd: Date.now(), lastBusy: 0, running: null, runnerOther: false,
     goal: null, goalDone: null, goalMtime: -1, base: null, baseSig: '', goalSkills: { t: 0, names: new Set() },
-    fails: {}, until: {}, lastChat: 0, recoverFor: 0, stuckSince: 0, wetSince: 0, lastPos: null, ticking: false, history: []
+    _mod: MOD, fails: {}, until: {}, lastChat: 0, recoverFor: 0, stuckSince: 0, wetSince: 0, lastPos: null, ticking: false, history: []
   };
   const note = (text, chat) => {
     ctx.events.push('info', { msg: 'автопилот: ' + text, autopilot: true });
@@ -395,13 +329,20 @@ function create(ctx) {
   return ap;
 }
 
-// Один раз на экземпляр бота (из reflexes.attach). Состояние живёт в ctx.autopilot между переподключениями.
-function attach(ctx, session) {
-  const ap = ctx.autopilot || (ctx.autopilot = create(ctx));
-  const bot = session.bot || ctx.bot;
-  try { bot.on('death', () => { ap.yieldAll('смерть').catch(() => {}); }); } catch (e) {}
-  session.timers.push(setInterval(() => { if (!session.ended && ctx.bot === bot) ap.tick(); }, TICK_MS));
-  return ap;
+// Подключение к ядру (из behavior/index.js): api — от lib/behavior_host.js. Состояние живёт в ctx.autopilot между
+// переподключениями; после перезагрузки поведения создаётся заново (с прежними «включён» и паузой хозяина).
+function attach(api) {
+  const { ctx, bot } = api;
+  let ap = ctx.autopilot;
+  if (!ap || ap._mod !== MOD) {
+    const prev = ap;
+    ap = create(ctx);
+    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; }
+    ctx.autopilot = ap;
+  }
+  api.on(bot, 'death', () => { ap.yieldAll('смерть').catch(() => {}); });
+  api.every(TICK_MS, () => ap.tick(), 'автопилот', { always: true });
+  return { detach: reason => ap.yieldAll(reason || 'поведение выгружено') };
 }
 
-module.exports = { attach, decide, gather, create, parseGoal, parseBase, baseTravel, IDLE_MS, READONLY };
+module.exports = { attach, decide, gather, create, IDLE_MS, READONLY };
