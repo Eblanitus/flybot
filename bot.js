@@ -240,7 +240,7 @@ const server = http.createServer(async (req, res) => {
           const { cmd, error } = queryToCmd(q, 'action');
           if (error) return send(res, 400, { ok: false, error });
           const source = await fromBrainOrAutopilot(req, cmd);
-          return send(res, 200, await dispatch(cmd, { source }));
+          return send(res, 200, await dispatch(cmd, { source, internal: !req.headers['user-agent'] }));
         }
         case '/snapshot': return send(res, 200, snapshot(ctx));
         case '/autopilot': {
@@ -291,7 +291,7 @@ const server = http.createServer(async (req, res) => {
         try { cmd = JSON.parse(body || '{}'); } catch (e) { return send(res, 400, { ok: false, error: 'bad json' }); }
         if (!cmd || typeof cmd !== 'object') return send(res, 400, { ok: false, error: 'bad json' });
         const source = await fromBrainOrAutopilot(req, cmd);
-        const result = await dispatch(cmd, { source });
+        const result = await dispatch(cmd, { source, internal: !req.headers['user-agent'] });
         send(res, 200, result);
       });
       return;

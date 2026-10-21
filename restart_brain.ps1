@@ -1,9 +1,11 @@
 ﻿# Перезапуск мозга с передачей управления:
-# старый мозг играет, пока новый не прочитает заметки и не создаст brain\ready.flag.
+# старый мозг играет, пока новый не прочитает заметки и не создаст brain\ready.flag
+# ИЛИ не пошлёт первую команду телу (/do, /cmd в его журнале) — он иногда забывает флажок.
 # Запуск: двойной клик по restart_brain.cmd
 $fb   = 'C:\Users\user\flybot'
 $flag = "$fb\brain\ready.flag"
 $log  = "$fb\data\handover.log"   # night.log занят открытым мозгом
+. "$PSScriptRoot\handover_lib.ps1"
 function Log($t) { $s = "[$(Get-Date -Format 'HH:mm:ss')] handover: $t"; Write-Host $s; Add-Content $log $s }
 
 # старые петли night.cmd и их мозги (opencode)
@@ -26,11 +28,12 @@ Get-ChildItem "$fb\data\night-*.cmd" | Sort-Object LastWriteTime -Descending | S
 Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
   CommandLine = "cmd.exe /c start `"flybot-night-brain`" /min cmd /c `"$loop`""; CurrentDirectory = $fb } | Out-Null
 Log "журнал нового мозга: data\night-$stamp.log"
-Log 'новый мозг запущен, жду ready.flag (до 6 мин)'
+Log 'новый мозг запущен, жду ready.flag или его первую команду телу (до 6 мин)'
 
 $deadline = (Get-Date).AddMinutes(6)
-while (-not (Test-Path $flag) -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
-if (Test-Path $flag) { Log 'новый мозг готов' } else { Log 'флажка нет за 6 мин — всё равно отключаю старый, чтобы не было двух мозгов' }
+$why = $null
+while (-not ($why = Test-BrainReady $flag "$fb\data\night-$stamp.log") -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
+if ($why) { Log "новый мозг готов: $why" } else { Log 'флажка нет за 6 мин — всё равно отключаю старый, чтобы не было двух мозгов' }
 
 foreach ($b in $brains) { taskkill /PID $b.ProcessId /T /F | Out-Null }
 Log "старый мозг отключён ($($brains.Count))"
