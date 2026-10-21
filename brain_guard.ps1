@@ -3,11 +3,15 @@
 #    Так 21.10 DeepSeek провисел 40 мин: процесс жив, модель не отвечает, петля не перезапускала.
 # 2) Инженер: мозг кладёт заявку brain\skill_requests\<имя>.md — сторож запускает отдельную модель (EngModel),
 #    она пишет brain\learned\<имя>.js, проверяет через :3200/check и отвечает в <имя>.done.md.
+# 3) Учитель: lib\teacher_triggers.js находит случаи (смерть, почти-смерть, провал дважды, застряла, итог дня, хозяин) и
+#    склеивает всплески; сторож запускает учителя (TeachModel) на один случай за раз, отчёт — data\teacher\<id>-<тип>.md.
 param(
   [string]$Log,
   [int]$SilenceMin = 10,
   [string]$EngModel = 'opencode/deepseek-v4.1-flash-free',
-  [int]$EngTimeoutMin = 15
+  [int]$EngTimeoutMin = 15,
+  [string]$TeachModel = 'opencode/deepseek-v4.1-flash-free',
+  [int]$TeachTimeoutMin = 20
 )
 $fb   = 'C:\Users\user\flybot'
 $req  = "$fb\brain\skill_requests"
@@ -33,6 +37,10 @@ function BrainProcs {  # opencode-мозги среди потомков наш�
 
 $lastSize = LogSize; $lastGrow = Get-Date
 $eng = $null   # текущий запуск инженера: @{ proc; name; started }
+$tch = $null   # текущий запуск учителя: @{ proc; id; started }
+function Teach([string[]]$a) {   # lib\teacher_triggers.js: ответ — одна строка JSON (ASCII)
+  try { $out = & node "$fb\lib\teacher_triggers.js" @a 2>$null | Select-Object -Last 1; if ($out) { $out | ConvertFrom-Json } } catch { GLog "учитель: очередь не ответила: $($_.Exception.Message)"; $null }
+}
 
 while ($true) {
   Start-Sleep 30
@@ -82,6 +90,31 @@ while ($true) {
       $eng = @{ proc = $p; name = $name; started = Get-Date }
       GLog "инженер: взял заявку $name (pid $($p.Id))"
       break
+    }
+  }
+
+  # --- 3. учитель ---
+  $null = Teach @('scan')
+  if ($tch) {
+    $over = ((Get-Date) - $tch.started).TotalMinutes -ge $TeachTimeoutMin
+    if ($tch.proc.HasExited -or $over) {
+      $how = 'ok'
+      if (-not $tch.proc.HasExited) { taskkill /PID $tch.proc.Id /T /F | Out-Null; $how = 'timeout'; GLog "учитель: $($tch.id) — тайм-аут $TeachTimeoutMin мин" }
+      $r = Teach @('finish', $tch.id, $how)
+      GLog "учитель: $($tch.id) — закончил ($($r.status))"
+      $tch = $null
+    }
+  }
+  if (-not $tch) {
+    $c = Teach @('take')
+    if ($c -and $c.id) {
+      $prompt = "You are the teacher of the Minecraft bot FlyTest. Read brain/TEACHER_PROMPT.md and follow it exactly. Case file: $($c.caseFile)"
+      $tlog = "$fb\data\teacher-$($c.id).log"
+      # у учителя свой конфиг opencode (пишет только учебник, журнал уроков, заявки и отчёты; без /do); проектный не подмешивать
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $TeachModel `"$prompt`" >> `"$tlog`" 2>&1" `
+             -WorkingDirectory $fb -WindowStyle Hidden -PassThru
+      $tch = @{ proc = $p; id = $c.id; started = Get-Date }
+      GLog "учитель: взял случай $($c.id) ($($c.type), pid $($p.Id))"
     }
   }
 }

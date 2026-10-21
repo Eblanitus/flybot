@@ -1,0 +1,88 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/deepseek-v4.1-flash-free",
+  "permission": {
+    "edit": {
+      "*": "deny",
+      "*/brain/lessons.md": "allow",
+      "brain/lessons.md": "allow",
+      "*/brain/lessons.json": "allow",
+      "brain/lessons.json": "allow",
+      "*/brain/core_requests.md": "allow",
+      "brain/core_requests.md": "allow",
+      "*/brain/skill_requests/*": "allow",
+      "brain/skill_requests/*": "allow",
+      "*/data/teacher/*": "allow",
+      "data/teacher/*": "allow"
+    },
+    "bash": {
+      "*": "deny",
+      "curl.exe -s http://127.0.0.1:3199/*": "allow",
+      "curl.exe -s \"http://127.0.0.1:3199/*": "allow",
+      "curl.exe -s http://127.0.0.1:3200/*": "allow",
+      "curl.exe -s \"http://127.0.0.1:3200/*": "allow",
+      "curl -s http://127.0.0.1:3199/*": "allow",
+      "curl -s \"http://127.0.0.1:3199/*": "allow",
+      "curl -s http://127.0.0.1:3200/*": "allow",
+      "curl -s \"http://127.0.0.1:3200/*": "allow",
+      "*/do*": "deny",
+      "*/cmd*": "deny",
+      "*/go*": "deny",
+      "*/run*": "deny",
+      "*/abort*": "deny",
+      "*/stop*": "deny",
+      "*/owner_msg*": "deny",
+      "*/behavior/reload*": "deny",
+      "*/rollback*": "deny",
+      "*/enable*": "deny",
+      "*/disable*": "deny",
+      "*/check*": "deny",
+      "* -d*": "deny",
+      "*--data*": "deny",
+      "* -X*": "deny",
+      "*--request*": "deny",
+      "* -F*": "deny",
+      "*--form*": "deny",
+      "* -T*": "deny",
+      "*--upload*": "deny",
+      "* -o*": "deny",
+      "* -O*": "deny",
+      "*--output*": "deny",
+      "* -K*": "deny",
+      "*--config*": "deny",
+      "*>*": "deny",
+      "*|*": "deny",
+      "*&*": "deny",
+      "*;*": "deny",
+      "*`*": "deny",
+      "*$(*": "deny"
+    },
+    "external_directory": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "task": "deny"
+  },
+  "mcp": {
+    "Roblox_Studio": {
+      "type": "local",
+      "command": [
+        "cmd.exe"
+      ],
+      "enabled": false
+    },
+    "Blender_MCP_9876": {
+      "type": "local",
+      "command": [
+        "uvx"
+      ],
+      "enabled": false
+    },
+    "Blender_MCP_9784": {
+      "type": "local",
+      "command": [
+        "uvx"
+      ],
+      "enabled": false
+    }
+  }
+}

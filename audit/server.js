@@ -1,4 +1,4 @@
-// «Аудит»: локальная страница, где видно, что делает каждая роль мухи (тело, автопилот и рефлексы, мозг, инженер, сторож),
+// «Аудит»: локальная страница, где видно, что делает каждая роль мухи (тело, автопилот и рефлексы, мозг, инженер, учитель, сторож),
 // и можно написать мозгу. Голый Node (http, fs), без npm-зависимостей. Порт 3300, только 127.0.0.1.
 // Файлы мухи НЕ меняет — только читает. Единственная запись — POST /owner_msg в тело (через его HTTP-API).
 // Все запросы к телу и исполнителю идут с заголовком X-Observer: 1 — тело не считает их признаком «мозг жив».
@@ -445,6 +445,56 @@ function engineerDetail(cfg, name) {
   return { ok: true, name, request: reqText, answer: doneText, log, logMtime: t ? t.mtimeMs : null };
 }
 
+// ======================= учитель =======================
+// Только диск: очередь data/teacher_queue.json, отчёты data/teacher/*.md, журнал уроков brain/lessons.json, учебник brain/lessons.md.
+// Тело для этого не нужно — работает и со старым телом.
+const TEACH_TYPE_RU = { death: 'смерть', near: 'почти-смерть', owner: 'сообщение хозяина', stuck: 'застряла', fail: 'провал дважды', day: 'итог дня', migrate: 'разовая: перенос правил' };
+const TEACH_STATUS_RU = { pending: 'ждёт', working: 'разбирает', done: 'разобран', failed: 'не вышло', dropped: 'выброшен (очередь полна)' };
+const REPORT_RE = /^[\w.-]+\.md$/;
+function readText(file, max) { try { return fs.readFileSync(file, 'utf8').slice(0, max || 60000); } catch (e) { return null; } }
+function loadTeacher(cfg) {
+  const qf = path.join(cfg.dataDir, 'teacher_queue.json');
+  let q = null; try { q = JSON.parse(fs.readFileSync(qf, 'utf8')); } catch (e) {}
+  const cases = q && Array.isArray(q.cases) ? q.cases.slice().reverse().slice(0, 60).map(c => ({
+    id: c.id, type: c.type, typeRu: TEACH_TYPE_RU[c.type] || c.type, status: c.status, statusRu: TEACH_STATUS_RU[c.status] || c.status,
+    firstAt: c.firstAt, lastAt: c.lastAt || c.firstAt, startedAt: c.startedAt || null, finishedAt: c.finishedAt || null, result: c.result || null,
+    report: c.report || null, signals: (c.items || []).slice(0, 12).map(i => ({ kind: i.kind, text: i.text, ref: i.ref, by: i.by || null })), more: (c.items || []).length > 12 ? (c.items.length - 12 + (c.more || 0)) : (c.more || 0)
+  })) : [];
+  const rdir = path.join(cfg.dataDir, 'teacher');
+  let names = []; try { names = fs.readdirSync(rdir).filter(n => REPORT_RE.test(n)); } catch (e) {}
+  const reports = names.map(n => {
+    let st = null; try { st = fs.statSync(path.join(rdir, n)); } catch (e) {}
+    const text = readText(path.join(rdir, n), 4000) || '';
+    const title = (text.split(/\r?\n/).find(l => l.trim()) || '').replace(/^#+\s*/, '').slice(0, 200);
+    const verdict = ((/^\s*Вердикт:\s*(.*)$/m.exec(text) || [])[1] || '').slice(0, 200);
+    return { name: n, ts: st ? st.mtimeMs : null, title, verdict };
+  }).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 80);
+  let lessons = null, lessonsError = null;
+  const lj = readText(path.join(cfg.brainDir, 'lessons.json'), 400000);
+  if (lj != null) { try { const o = JSON.parse(lj); lessons = Array.isArray(o) ? o : Array.isArray(o.lessons) ? o.lessons : []; } catch (e) { lessonsError = 'brain/lessons.json не читается: ' + e.message; } }
+  const lmFile = path.join(cfg.brainDir, 'lessons.md');
+  let lmMtime = null; try { lmMtime = fs.statSync(lmFile).mtimeMs; } catch (e) {}
+  const book = readText(lmFile, 30000);
+  const core = readText(path.join(cfg.brainDir, 'core_requests.md'), 30000);
+  return {
+    queue: { exists: !!q, created: q ? q.created : null, pending: cases.filter(c => c.status === 'pending').length, working: (cases.find(c => c.status === 'working') || {}).id || null, suppressed: q ? q.suppressed || 0 : 0, dropped: q ? q.dropped || 0 : 0 },
+    cases, reports,
+    lessons: (lessons || []).map(l => ({ id: l.id, date: l.date, signature: l.signature || {}, verdict: l.verdict, change: l.change, where: l.where, status: l.status, cases: l.cases || [], note: l.note })).reverse(),
+    lessonsError, book, bookMtime: lmMtime, bookLines: book == null ? null : book.split(/\r?\n/).filter(l => l.trim()).length, coreRequests: core
+  };
+}
+function teacherReport(cfg, name) {
+  if (typeof name !== 'string' || !REPORT_RE.test(name) || name !== path.basename(name)) return { ok: false, error: 'плохое имя отчёта' };
+  const text = readText(path.join(cfg.dataDir, 'teacher', name), 60000);
+  if (text == null) return { ok: false, error: 'нет такого отчёта' };
+  // журнал opencode учителя: data/teacher-<id>.log (id — имя отчёта без -<тип>.md)
+  const id = name.replace(/-[a-z]+\.md$/, '');
+  let log = [], logMtime = null;
+  const t = tailLines(path.join(cfg.dataDir, 'teacher-' + id + '.log'), 120 * 1024);
+  if (t) { log = parseNightLog(t.lines).filter(e => e.k !== 'out').slice(-60).reverse(); logMtime = t.mtimeMs; }
+  return { ok: true, name, text, log, logMtime };
+}
+
 // ======================= смерти и дни =======================
 
 function parseDeathLine(l) {
@@ -635,6 +685,8 @@ async function api(cfg, name, q) {
     case 'blackbox_file': return loadBlackboxFile(cfg, q.get('name'));
     case 'service': { const s = loadService(cfg); const r = await loadRunner(cfg); return { now, ...s, runner: r }; }
     case 'chat': { const { events } = loadEvents(cfg); return { now, items: chatFeed(events, 120, q.get('system') === '1') }; }
+    case 'teacher': return { now, ...loadTeacher(cfg) };
+    case 'teacher_report': return teacherReport(cfg, q.get('name'));
   }
   return null;
 }
@@ -691,7 +743,7 @@ function createServer(opts) {
 module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
-  engineerList, engineerDetail, collapsePolls, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, api, taskRu
+  engineerList, engineerDetail, collapsePolls, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, api, taskRu
 };
 
 if (require.main === module) {

@@ -72,13 +72,14 @@
   <section class="pane" id="p-brain"></section>
   <section class="pane" id="p-engineer"></section>
   <section class="pane" id="p-deaths"></section>
+  <section class="pane" id="p-teacher"></section>
   <section class="pane" id="p-service"></section>
   <section class="pane" id="p-chat"></section>
 </main>
 
 <script>
 'use strict';
-const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['service', 'Служебное'], ['chat', 'Чат']];
+const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['service', 'Служебное'], ['chat', 'Чат']];
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pad = n => String(n).padStart(2, '0');
@@ -387,9 +388,69 @@ async function sendChat() {
 }
 
 // ---------- обновление ----------
+// ---------- Учитель ----------
+let openRep = null;
+const TST = { pending: 'warn', working: 'blue', done: 'ok', failed: 'bad', dropped: 'dim' };
+const LST = { 'проверяется': 'warn', 'подтверждён': 'ok', 'не помог': 'bad', 'записано': 'dim' };
+const VERD_RU = { brain: 'урок мозгу', code: 'заявка инженеру', sensor: 'датчик (ядро)', luck: 'не повезло' };
+function renderTeacher(d) {
+  const q = d.queue || {};
+  let h = '<h2>Учитель</h2><div class="box small dim">Учитель (DeepSeek) разбирает смерти, почти-смерти, провалы, застревания, итоги дней и подсказки хозяина. Он не управляет мухой и не пишет код: пишет уроки в учебник мозга и заявки инженеру. Один случай за раз.</div>';
+  if (!q.exists) h += '<div class="box warn">Очереди ещё нет: сторож с учителем не запускался (data/teacher_queue.json).</div>';
+  h += `<div class="grid" style="margin-top:12px">
+    <div class="card"><div class="t">Ждут разбора</div><div class="v">${q.pending || 0}</div></div>
+    <div class="card"><div class="t">Сейчас разбирает</div><div class="v small">${esc(q.working || '—')}</div></div>
+    <div class="card"><div class="t">Уроков в журнале</div><div class="v">${(d.lessons || []).length}</div></div>
+    <div class="card"><div class="t">Пропущено повторов / выброшено</div><div class="v">${q.suppressed || 0} / ${q.dropped || 0}</div></div></div>`;
+  h += '<h2>Очередь случаев</h2>';
+  if (!d.cases.length) h += '<div class="box dim">Случаев нет.</div>';
+  else {
+    h += '<table><tr><th>Случай</th><th>Статус</th><th>Когда</th><th>Сигналы</th></tr>';
+    for (const c of d.cases) {
+      const sig = c.signals.map(s => `<div class="small">${esc(s.text)} <span class="dim">[${esc(s.ref)}${s.by ? ', ' + esc(byRu(s.by)) : ''}]</span></div>`).join('') + (c.more ? `<div class="dim small">и ещё ${c.more}</div>` : '');
+      h += `<tr><td><b>${esc(c.typeRu)}</b><div class="dim small">${esc(c.id)}</div></td><td><span class="tag ${TST[c.status] || ''}">${esc(c.statusRu)}</span>${c.result ? `<div class="dim small">${esc(c.result)}</div>` : ''}</td><td>${tm(c.firstAt)}<div class="dim small">${ago(c.lastAt, d.now)}</div></td><td>${sig}</td></tr>`;
+    }
+    h += '</table>';
+  }
+  h += '<h2>Отчёты <span class="dim small">(data/teacher; нажми — текст и журнал учителя)</span></h2>';
+  if (!d.reports.length) h += '<div class="box dim">Отчётов пока нет.</div>';
+  else {
+    h += '<table><tr><th>Когда</th><th>Что случилось</th><th>Вердикт</th></tr>';
+    for (const r of d.reports) {
+      h += `<tr class="click" data-rep="${esc(r.name)}"><td>${tm(r.ts)}<div class="dim small">${ago(r.ts, d.now)}</div></td><td>${esc(r.title || r.name)}</td><td class="small">${esc(r.verdict)}</td></tr>`;
+      if (openRep === r.name) h += `<tr><td colspan="3"><div id="repDetail" class="detail dim">загружаю…</div></td></tr>`;
+    }
+    h += '</table>';
+  }
+  h += '<h2>Журнал уроков <span class="dim small">(brain/lessons.json)</span></h2>';
+  if (d.lessonsError) h += `<div class="box bad">${esc(d.lessonsError)}</div>`;
+  if (!d.lessons.length) h += '<div class="box dim">Уроков пока нет.</div>';
+  else {
+    h += '<table><tr><th>Урок</th><th>Подпись: причина / обстановка / кто решал</th><th>Что изменено и где</th><th>Статус</th></tr>';
+    for (const l of d.lessons) {
+      const sg = l.signature || {};
+      h += `<tr><td><b>${esc(l.id)}</b><div class="dim small">${esc(l.date || '')}</div><div class="small">${esc(VERD_RU[l.verdict] || l.verdict || '')}</div></td><td class="small">${esc(sg.cause || '—')}<div class="dim">${esc(sg.situation || '')}</div><div>${esc(sg.by ? byRu(sg.by) : '')}</div></td><td class="small">${esc(l.change || '')}<div class="dim">${esc(l.where || '')}</div></td><td><span class="tag ${LST[l.status] || ''}">${esc(l.status || '?')}</span>${l.cases.length ? `<div class="dim small">случаев: ${l.cases.length}</div>` : ''}</td></tr>`;
+    }
+    h += '</table>';
+  }
+  h += `<h2>Учебник мозга <span class="dim small">(brain/lessons.md${d.bookLines != null ? ', строк: ' + d.bookLines : ''}${d.bookMtime ? ', изменён ' + tm(d.bookMtime) : ''})</span></h2>`;
+  h += d.book == null ? '<div class="box dim">Учебника ещё нет.</div>' : `<div class="box"><pre>${esc(d.book)}</pre></div>`;
+  if (d.coreRequests) h += `<h2>Заявки на датчики <span class="dim small">(brain/core_requests.md — делает только хозяин)</span></h2><div class="box"><pre>${esc(d.coreRequests)}</pre></div>`;
+  return h;
+}
+async function loadReport() {
+  if (!openRep) return;
+  const box = $('repDetail'); if (!box) return;
+  const d = await get('/api/teacher_report?name=' + encodeURIComponent(openRep));
+  if (!d.ok) { box.textContent = d.error; return; }
+  const log = (d.log || []).filter(e => e.k === 'text' || e.k === 'err' || e.k === 'tool').slice(0, 40).map(e => `<div class="small ${e.k === 'err' ? 'bad' : e.k === 'tool' ? 'dim' : ''}">${esc(e.text)}</div>`).join('');
+  box.classList.remove('dim');
+  box.innerHTML = `<h2>Отчёт</h2><pre>${esc(d.text)}</pre><h2>Журнал учителя${d.logMtime ? ' <span class="dim small">(' + tm(d.logMtime) + ')</span>' : ''}</h2>${log || '<div class="dim">журнала нет</div>'}`;
+}
+
 const RENDER = {
   body: ['/api/body', renderBody], reflex: ['/api/reflex', renderReflex], brain: ['/api/brain', renderBrain], engineer: ['/api/engineer', renderEngineer],
-  deaths: ['/api/deaths', renderDeaths], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
+  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
 };
 let busy = false;
 async function tick() {
@@ -407,6 +468,7 @@ async function tick() {
       window.scrollTo(0, y);
       if (cur === 'engineer') loadReq();
       if (cur === 'deaths') loadBox();
+      if (cur === 'teacher') loadReport();
     }
   } catch (e) {
     $('lamps').innerHTML = lamp('bad', 'Программа «Аудит» не отвечает: ' + e.message);
@@ -416,6 +478,8 @@ async function tick() {
 document.addEventListener('click', e => {
   const tr = e.target.closest('tr[data-req]');
   if (tr) { openReq = openReq === tr.dataset.req ? null : tr.dataset.req; tick(); }
+  const tr2 = e.target.closest('tr[data-rep]');
+  if (tr2) { openRep = openRep === tr2.dataset.rep ? null : tr2.dataset.rep; tick(); }
   const tb = e.target.closest('tr[data-box]');
   if (tb) { openBox = openBox === tb.dataset.box ? null : tb.dataset.box; tick(); }
 });

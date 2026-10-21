@@ -37,6 +37,7 @@ const { makeDispatcher } = require('./lib/commands');
 const origin = require('./lib/origin'); // кто отдал действие: brain / autopilot / skill:<имя>
 const { BlackBox } = require('./lib/blackbox'); // чёрный ящик: последние ~60 с, запись при смерти и почти-смерти
 const { Ledger } = require('./lib/ledger'); // учёт ресурсов: приход/расход предметов с причиной и источником
+const { lessonsWatch } = require('./lib/lessons_watch'); // учебник мозга brain/lessons.md поменялся -> тихое событие lessons_updated
 const vision = require('./lib/vision');
 const { cellKey } = require('./lib/skills/gather');
 const { ChatLog } = require('./lib/chatlog');
@@ -68,6 +69,8 @@ ctx.blackbox = new BlackBox(ctx);
 ctx.ledger = new Ledger(ctx);
 ctx.chat = new ChatLog(40); // чат/системные строки/экшн-бар — мозг читает их из /snapshot
 const behavior = new BehaviorHost(ctx); // поведение (behavior/): загрузка, проверка, перезагрузка, откат
+const lessons = lessonsWatch(path.join(__dirname, 'brain', 'lessons.md'), (type, data) => ctx.events.push(type, data));
+setInterval(() => { try { lessons.check(); } catch (e) {} }, 20000);
 
 try { if (fs.existsSync(STATS_FILE)) Object.assign(ctx.stats, JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'))); } catch (e) { console.log('[stats] read fail', e.message); }
 delete ctx.stats.lastPos; delete ctx.stats.startTime; delete ctx.stats.timeAlive;
