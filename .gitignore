@@ -1,0 +1,9 @@
+node_modules/
+data/
+*.log
+brain/learned/.history/
+brain/learned/.tmp/
+.hermes-tmp.*
+lib/.hermes-tmp.*
+brain/ready.flag
+

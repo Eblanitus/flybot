@@ -1,0 +1,49 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/deepseek-v4.1-flash-free",
+  "permission": {
+    "edit": {
+      "*": "deny",
+      "*/brain/learned/*": "allow",
+      "brain/learned/*": "allow",
+      "*/brain/notes.md": "allow",
+      "brain/notes.md": "allow",
+      "*/brain/core_bugs.md": "allow",
+      "brain/core_bugs.md": "allow",
+      "*/brain/ready.flag": "allow",
+      "brain/ready.flag": "allow"
+    },
+    "bash": {
+      "*": "deny",
+      "curl *": "allow",
+      "curl.exe *": "allow"
+    },
+    "external_directory": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "task": "deny"
+  },
+  "mcp": {
+    "Roblox_Studio": {
+      "type": "local",
+      "command": [
+        "cmd.exe"
+      ],
+      "enabled": false
+    },
+    "Blender_MCP_9876": {
+      "type": "local",
+      "command": [
+        "uvx"
+      ],
+      "enabled": false
+    },
+    "Blender_MCP_9784": {
+      "type": "local",
+      "command": [
+        "uvx"
+      ],
+      "enabled": false
+    }
+  }
+}

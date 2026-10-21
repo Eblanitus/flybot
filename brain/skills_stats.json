@@ -1,0 +1,72 @@
+{
+  "night_routine": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "starter_kit": {
+    "enabled": true,
+    "runs": 2,
+    "ok": 1,
+    "fail": 1,
+    "consecutiveFails": 1,
+    "lastError": "шаг \"бревна\": навык тела \"collect\" не удался: не нашёл log в радиусе 48 (добыто 0/5); попробуй explore",
+    "lastRun": "2026-10-21T01:18:56.925Z",
+    "lastOk": "2026-10-20T20:18:19.961Z"
+  },
+  "build_fence_line": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_wood": {
+    "enabled": true,
+    "runs": 2,
+    "ok": 0,
+    "fail": 2,
+    "consecutiveFails": 2,
+    "lastError": "брёвен 0/12",
+    "lastRun": "2026-10-21T01:36:54.379Z",
+    "lastOk": null
+  },
+  "climb_stairs": {
+    "enabled": true,
+    "runs": 1,
+    "ok": 1,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": "2026-10-21T02:55:12.347Z",
+    "lastOk": "2026-10-21T02:55:12.347Z"
+  },
+  "night_mine": {
+    "enabled": true,
+    "runs": 4,
+    "ok": 2,
+    "fail": 2,
+    "consecutiveFails": 1,
+    "lastError": "навык вернул ok:false без error",
+    "lastRun": "2026-10-21T03:00:35.664Z",
+    "lastOk": "2026-10-21T02:58:33.183Z"
+  }
+}
