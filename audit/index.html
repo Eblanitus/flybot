@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аудит мухи</title>
+<style>
+  :root {
+    --bg: #12151b; --panel: #1b2029; --panel2: #232a36; --line: #2e3745; --text: #e8ecf2; --dim: #98a3b5;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --blue: #60a5fa; --violet: #c4a1ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: #0d1015; border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: .3px; }
+  .lamps { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; }
+  .lamp { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px 4px 10px; display: flex; gap: 8px; align-items: center; font-size: 15px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: #555; flex: none; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .clock { color: var(--dim); font-size: 14px; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 0; }
+  nav button { background: var(--panel); color: var(--dim); border: 1px solid var(--line); border-radius: 10px 10px 0 0; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  nav button.on { color: var(--text); background: var(--panel2); border-bottom-color: var(--panel2); box-shadow: inset 0 3px 0 var(--blue); }
+  main { padding: 0 16px 40px; }
+  .pane { display: none; background: var(--panel2); border: 1px solid var(--line); border-radius: 0 12px 12px 12px; padding: 16px; min-height: 60vh; }
+  .pane.on { display: block; }
+  h2 { font-size: 19px; margin: 18px 0 8px; } h2:first-child { margin-top: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .card .t { color: var(--dim); font-size: 14px; margin-bottom: 4px; }
+  .card .v { font-size: 26px; font-weight: 700; }
+  .card .s { color: var(--dim); font-size: 15px; margin-top: 2px; word-break: break-word; }
+  .bar { height: 12px; background: #0d1015; border-radius: 6px; overflow: hidden; margin-top: 8px; } .bar i { display: block; height: 100%; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; white-space: pre-wrap; word-break: break-word; }
+  .feed { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; max-height: 62vh; overflow: auto; }
+  .row { display: flex; gap: 12px; padding: 7px 14px; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .row:last-child { border-bottom: 0; }
+  .row .tm { color: var(--dim); font-variant-numeric: tabular-nums; flex: none; width: 92px; font-size: 14px; }
+  .row .who { flex: none; width: 96px; font-weight: 700; font-size: 14px; }
+  .row .tx { flex: 1; word-break: break-word; white-space: pre-wrap; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .dim { color: var(--dim); } .blue { color: var(--blue); } .violet { color: var(--violet); }
+  .tag { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; border: 1px solid currentColor; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-size: 14px; font-weight: 600; }
+  tr.click { cursor: pointer; } tr.click:hover td { background: #202733; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .err { color: var(--bad); padding: 10px 0; }
+  label.chk { margin-right: 18px; color: var(--dim); font-size: 15px; cursor: pointer; }
+  .small { font-size: 14px; }
+  .msg { padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  .msg .meta { font-size: 13px; color: var(--dim); }
+  .msg.owner { background: #1d2a1f; } .msg.brain { background: #1d2540; } .msg.system { opacity: .6; }
+  .compose { display: flex; gap: 10px; margin-top: 12px; }
+  .compose textarea { flex: 1; background: #0d1015; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; resize: vertical; min-height: 56px; }
+  .compose button { background: var(--blue); color: #08111f; border: 0; border-radius: 10px; padding: 0 22px; font: inherit; font-weight: 700; cursor: pointer; }
+  .compose button:disabled { opacity: .5; cursor: default; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 14px/1.4 Consolas, monospace; }
+  .detail { background: #0d1015; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Аудит мухи</h1>
+  <div class="lamps" id="lamps"></div>
+  <div class="clock" id="clock"></div>
+</header>
+<nav id="tabs"></nav>
+<main>
+  <section class="pane" id="p-body"></section>
+  <section class="pane" id="p-reflex"></section>
+  <section class="pane" id="p-brain"></section>
+  <section class="pane" id="p-engineer"></section>
+  <section class="pane" id="p-deaths"></section>
+  <section class="pane" id="p-service"></section>
+  <section class="pane" id="p-chat"></section>
+</main>
+
+<script>
+'use strict';
+const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['service', 'Служебное'], ['chat', 'Чат']];
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const pad = n => String(n).padStart(2, '0');
+
+// время — всегда местное (браузер хозяина)
+function tm(ts) {
+  if (ts == null) return '—';
+  const d = new Date(ts), n = new Date();
+  const hms = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  return d.toDateString() === n.toDateString() ? hms : pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + hms;
+}
+function ago(ts, now) {
+  if (ts == null) return '';
+  let s = Math.max(0, Math.round(((now || Date.now()) - ts) / 1000));
+  if (s < 60) return s + ' с назад';
+  if (s < 3600) return Math.round(s / 60) + ' мин назад';
+  if (s < 86400) return Math.round(s / 3600) + ' ч назад';
+  return Math.round(s / 86400) + ' дн назад';
+}
+const ITEMS = { stick: 'палки', cobblestone: 'булыжник', dirt: 'земля', coal: 'уголь', raw_copper: 'сырая медь', raw_iron: 'сырое железо', copper_ingot: 'медь (слиток)', iron_ingot: 'железо (слиток)',
+  spruce_log: 'ель (бревно)', spruce_planks: 'ель (доски)', oak_log: 'дуб (бревно)', torch: 'факелы', crafting_table: 'верстак', furnace: 'печь', bed: 'кровать', andesite: 'андезит',
+  wooden_sword: 'деревянный меч', wooden_pickaxe: 'деревянная кирка', wooden_axe: 'деревянный топор', stone_sword: 'каменный меч', stone_pickaxe: 'каменная кирка', stone_axe: 'каменный топор',
+  iron_sword: 'железный меч', iron_pickaxe: 'железная кирка', copper_helmet: 'медный шлем', copper_chestplate: 'медная кираса', copper_leggings: 'медные поножи', copper_boots: 'медные ботинки',
+  leather_helmet: 'кожаный шлем', leather_chestplate: 'кожаная кираса', leather_leggings: 'кожаные поножи', leather_boots: 'кожаные ботинки', rotten_flesh: 'гнилая плоть', bread: 'хлеб', cooked_beef: 'жареная говядина' };
+const itemRu = n => ITEMS[n] || n;
+const MOB = { zombie: 'зомби', skeleton: 'скелет', stray: 'зимний скелет', spider: 'паук', creeper: 'крипер', cave_spider: 'пещерный паук', enderman: 'эндермен', witch: 'ведьма', drowned: 'утопленник', husk: 'кадавр', pillager: 'разбойник' };
+const mobRu = n => MOB[n] || n;
+
+// ---------- вкладки ----------
+let cur = (() => { try { return localStorage.getItem('audit.tab') || 'body'; } catch (e) { return 'body'; } })();
+if (!TABS.some(t => t[0] === cur)) cur = 'body';
+function drawTabs() {
+  $('tabs').innerHTML = TABS.map(([id, name]) => `<button data-t="${id}" class="${id === cur ? 'on' : ''}">${name}</button>`).join('');
+  TABS.forEach(([id]) => $('p-' + id).classList.toggle('on', id === cur));
+}
+$('tabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  cur = b.dataset.t; try { localStorage.setItem('audit.tab', cur); } catch (er) {}
+  drawTabs(); tick();
+});
+
+async function get(path) {
+  const r = await fetch(path, { cache: 'no-store' });
+  return r.json();
+}
+
+// ---------- шапка ----------
+function lamp(cls, text) { return `<div class="lamp"><span class="dot ${cls}"></span><span>${esc(text)}</span></div>`; }
+function drawLamps(s) {
+  let h = '';
+  if (!s.body.ok) h += lamp('bad', 'Тело: не отвечает');
+  else if (!s.body.ready) h += lamp('warn', 'Тело: запущено, но не в игре');
+  else h += lamp('ok', `Тело: HP ${Math.round(s.body.hp)}/20, еда ${s.body.food}/20`);
+  h += !s.runner.ok ? lamp('bad', 'Исполнитель: не отвечает') : s.runner.active ? lamp('ok', `Исполнитель: ${s.runner.active.name} (${s.runner.active.sec} с)`) : lamp('ok', 'Исполнитель: свободен');
+  const b = s.brain;
+  if (!b.file) h += lamp('bad', 'Мозг: нет журнала');
+  else h += lamp(b.state === 'ok' ? 'ok' : b.state === 'slow' ? 'warn' : 'bad', `Мозг: журнал обновлялся ${ago(b.mtimeMs, s.now)}`);
+  $('lamps').innerHTML = h;
+  $('clock').textContent = 'обновлено ' + tm(s.now);
+}
+
+// ---------- Тело ----------
+function bar(v, max, color) { const p = Math.max(0, Math.min(100, (v / max) * 100)); return `<div class="bar"><i style="width:${p}%;background:${color}"></i></div>`; }
+function renderBody(d) {
+  if (!d.ok) return `<div class="err">${esc(d.error)}</div>`;
+  const s = d.snap, p = s.position || {};
+  const hpc = s.health >= 14 ? 'var(--ok)' : s.health >= 7 ? 'var(--warn)' : 'var(--bad)';
+  const task = s.task;
+  const armor = (s.armor || []).map(a => itemRu(typeof a === 'string' ? a : a.name)).filter(Boolean);
+  const inv = s.inventory || [];
+  const weapons = inv.filter(i => /_(sword|axe)$/.test(i.name)).map(i => itemRu(i.name));
+  const tools = inv.filter(i => /_(pickaxe|shovel|hoe)$/.test(i.name)).map(i => itemRu(i.name));
+  const en = (s.enemies || []).map(e => `${mobRu(e.name)} — ${e.d} м, ${e.dir || ''}`);
+  const ag = (s.aggressors || []).map(e => typeof e === 'string' ? e : `${e.name || '?'} (бьёт меня)`);
+  const th = (s.threats || []).map(e => typeof e === 'string' ? e : (e.name || e.kind || JSON.stringify(e)));
+  const hz = (s.hazards || []).map(e => typeof e === 'string' ? e : (e.kind || e.name || JSON.stringify(e)));
+  const ap = s.autopilot || {};
+  const t = s.time || {};
+  let h = '<div class="grid">';
+  h += `<div class="card"><div class="t">Здоровье</div><div class="v" style="color:${hpc}">${Math.round(s.health * 10) / 10} / 20</div>${bar(s.health, 20, hpc)}</div>`;
+  h += `<div class="card"><div class="t">Еда</div><div class="v">${s.food} / 20</div>${bar(s.food, 20, 'var(--warn)')}</div>`;
+  h += `<div class="card"><div class="t">Где стоит</div><div class="v">${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}</div><div class="s">${esc(s.biome || '')}${s.lightLevel != null ? ', свет ' + s.lightLevel : ''}</div></div>`;
+  h += `<div class="card"><div class="t">Время в игре</div><div class="v">${esc(t.phase || s.timeOfDay || '')}${t.day ? ', сутки ' + t.day : ''}</div><div class="s">${esc(s.weather || '')}${t.nightIn ? ' · ночь через ' + t.nightIn + ' с' : ''}${t.dayIn ? ' · день через ' + t.dayIn + ' с' : ''}</div></div>`;
+  h += `<div class="card"><div class="t">Сейчас делает</div><div class="v">${task ? esc(task.name) : 'ничего'}</div><div class="s">${task ? esc(task.progress || '') + (task.sec != null ? ' · ' + task.sec + ' с' : '') : ''}</div></div>`;
+  h += `<div class="card"><div class="t">Автопилот</div><div class="v ${ap.on ? 'ok' : 'warn'}">${ap.on ? 'включён' : 'выключен'}</div><div class="s">${ap.active ? 'сам делает: ' + esc(ap.doing) : 'мозг рулит, автопилот ждёт'}${ap.paused && ap.paused.length ? ' · пауза: ' + esc(JSON.stringify(ap.paused)) : ''}</div></div>`;
+  h += `<div class="card"><div class="t">В руке</div><div class="v">${s.heldItem ? esc(itemRu(s.heldItem.name || s.heldItem)) : 'пусто'}</div><div class="s">Оружие в сумке: ${weapons.length ? esc(weapons.join(', ')) : 'нет'}<br>Инструменты: ${tools.length ? esc(tools.join(', ')) : 'нет'}</div></div>`;
+  h += `<div class="card"><div class="t">Броня</div><div class="v ${armor.length ? '' : 'warn'}">${armor.length ? armor.length + ' из 4' : 'нет'}</div><div class="s">${armor.length ? esc(armor.join(', ')) : 'ничего не надето'}</div></div>`;
+  const dangerCls = (en.length || ag.length || th.length || hz.length) ? 'bad' : 'ok';
+  h += `<div class="card"><div class="t">Угрозы рядом</div><div class="v ${dangerCls}">${(en.length || ag.length || th.length || hz.length) ? 'есть' : 'тихо'}</div><div class="s">${[...en, ...ag.map(x => 'бьёт: ' + x), ...th, ...hz.map(x => 'опасность: ' + x)].map(esc).join('<br>') || 'врагов не видно'}</div></div>`;
+  if (s.stats) h += `<div class="card"><div class="t">За всё время</div><div class="v">${s.stats.deaths} смертей</div><div class="s">сейчас жива ${Math.round((s.stats.timeAlive || 0) / 60)} мин · пройдено ${s.stats.distanceTraveled || 0} бл.</div></div>`;
+  h += '</div>';
+  h += '<h2>Что в сумке</h2><div class="box">' + (inv.length ? inv.map(i => `${esc(itemRu(i.name))} × ${i.count}`).join(' · ') : 'пусто') + '</div>';
+  if (s.memory) h += '<h2>Что помнит о мире</h2><div class="box small">' + esc(s.memory) + '</div>';
+  if (s.summary) h += '<h2>Сводка тела (то, что видит мозг)</h2><div class="box small dim">' + esc(s.summary) + '</div>';
+  if (d.recent && d.recent.length) h += '<h2>Последние события</h2>' + feedRows(d.recent);
+  return h;
+}
+
+const WHO_CLS = { 'автопилот': 'violet', 'рефлекс': 'blue', 'угроза': 'warn', 'тело': 'dim' };
+function feedRows(items) {
+  if (!items.length) return '<div class="box dim">Пока пусто.</div>';
+  return '<div class="feed">' + items.map(i => `<div class="row"><span class="tm">${tm(i.ts)}</span><span class="who ${WHO_CLS[i.who] || ''}">${esc(i.who)}</span><span class="tx ${i.level || ''}">${esc(i.text)}</span></div>`).join('') + '</div>';
+}
+
+// ---------- Автопилот и рефлексы ----------
+function renderReflex(d) {
+  const ap = d.autopilot;
+  let h = '<h2>Решения автопилота и рефлексов</h2>';
+  h += '<div class="box small dim">Автопилот — это то, что муха делает сама, пока мозг молчит или думает (ночью прячется, днём работает). Рефлексы — мгновенные реакции на удар, врагов и голод. Новое сверху.</div>';
+  if (ap) h += `<p>Автопилот: <b class="${ap.on ? 'ok' : 'warn'}">${ap.on ? 'включён' : 'выключен'}</b>${ap.active ? ' · сейчас делает: <b>' + esc(ap.doing) + '</b>' : ' · сейчас ничего не делает сам'}</p>`;
+  return h + feedRows(d.items);
+}
+
+// ---------- Мозг ----------
+let showOut = false, showTools = false;
+function renderBrain(d) {
+  const st = d.status || {};
+  let h = '';
+  h += `<h2>Текущая цель <span class="dim small">(блокнот brain/notes.md${d.notesMtime ? ', изменён ' + ago(d.notesMtime, d.now) : ''})</span></h2>`;
+  h += d.goal ? `<div class="box">${esc(d.goal)}</div>` : `<div class="box dim">${esc(d.notesError || 'Цель в блокноте не записана.')}</div>`;
+  if (d.ownerNote) h += `<h2>Указание хозяина в блокноте</h2><div class="box small">${esc(d.ownerNote)}</div>`;
+  h += `<h2>Команды мозга телу <span class="dim small">(новые сверху)</span></h2>`;
+  if (!d.commands.length) h += '<div class="box dim">Команд пока нет.</div>';
+  else h += '<div class="feed">' + d.commands.map(c => `<div class="row"><span class="tm">${tm(c.ts)}</span><span class="who ${c.level}">${esc(c.status)}</span><span class="tx"><b>${esc(c.label)}</b> <span class="dim small">${esc(c.name)} ${esc(c.params)}</span>${c.note ? '<br><span class="warn small">' + esc(c.note) + '</span>' : ''}</span></div>`).join('') + '</div>';
+  h += `<h2>Мысли и действия мозга <span class="dim small">(журнал ${esc(d.logFile || '—')}${st.mtimeMs ? ', последняя запись ' + ago(st.mtimeMs, d.now) : ''})</span></h2>`;
+  h += `<div><label class="chk"><input type="checkbox" id="chkOut" ${showOut ? 'checked' : ''}> показывать ответы тела</label><label class="chk"><input type="checkbox" id="chkTools" ${showTools ? 'checked' : ''}> показывать чтение/запись файлов</label></div>`;
+  const rows = d.thoughts.filter(e => (showOut || e.k !== 'out') && (showTools || e.k !== 'tool')).map(e => {
+    if (e.k === 'start') return `<div class="row"><span class="tm">${tm(e.ts)}</span><span class="who violet">запуск</span><span class="tx violet">мозг запущен заново</span></div>`;
+    if (e.k === 'model') return `<div class="row"><span class="tm"></span><span class="who dim">модель</span><span class="tx dim">${esc(e.text)}</span></div>`;
+    if (e.k === 'text') return `<div class="row"><span class="tm"></span><span class="who blue">думает</span><span class="tx">${esc(e.text)}</span></div>`;
+    if (e.k === 'cmd') {
+      const say = e.say ? `<br><b class="violet">говорит в чат:</b> ${esc(e.say)}` : '';
+      return `<div class="row"><span class="tm"></span><span class="who ok">команда</span><span class="tx"><span class="dim small">${esc(e.target)}:</span> <b>${esc(e.title)}</b>${e.n > 1 ? ' <b class="warn">× ' + e.n + '</b>' : ''} <span class="dim small">${esc(e.args)}</span>${say}</span></div>`;
+    }
+    if (e.k === 'out') return `<div class="row"><span class="tm"></span><span class="who dim">ответ</span><span class="tx dim small">${esc(e.text)}</span></div>`;
+    if (e.k === 'tool') return `<div class="row"><span class="tm"></span><span class="who dim">${e.write ? 'пишет' : 'читает'}</span><span class="tx dim small">${esc(e.text)}</span></div>`;
+    if (e.k === 'err') return `<div class="row"><span class="tm"></span><span class="who bad">ошибка</span><span class="tx bad small">${esc(e.text)}</span></div>`;
+    return '';
+  });
+  h += rows.length ? '<div class="feed" id="thoughts">' + rows.join('') + '</div>' : '<div class="box dim">Журнал пуст.</div>';
+  return h;
+}
+
+// ---------- Инженер ----------
+let openReq = null;
+const STC = { waiting: 'warn', working: 'blue', done: 'ok', notdone: 'bad' };
+function renderEngineer(d) {
+  let h = '<h2>Заявки мозга на новые навыки</h2><div class="box small dim">Инженер (DeepSeek) пишет навыки по заявкам мозга. Нажми на строку — увидишь текст заявки, ответ и журнал инженера.</div>';
+  if (!d.items.length) return h + '<div class="box dim">Заявок нет.</div>';
+  h += '<table><tr><th>Навык</th><th>Статус</th><th>Когда</th><th>О чём</th></tr>';
+  for (const i of d.items) {
+    h += `<tr class="click" data-req="${esc(i.name)}"><td><b>${esc(i.name)}</b></td><td><span class="tag ${STC[i.status]}">${esc(i.statusRu)}</span></td><td>${tm(i.ts)}<div class="dim small">${ago(i.ts, d.now)}</div></td><td class="small">${esc(i.verdict || i.title)}</td></tr>`;
+    if (openReq === i.name) h += `<tr><td colspan="4"><div id="reqDetail" class="detail dim">загружаю…</div></td></tr>`;
+  }
+  return h + '</table>';
+}
+async function loadReq() {
+  if (!openReq) return;
+  const box = $('reqDetail'); if (!box) return;
+  const d = await get('/api/request?name=' + encodeURIComponent(openReq));
+  if (!d.ok) { box.textContent = d.error; return; }
+  const log = (d.log || []).filter(e => e.k === 'text' || e.k === 'err' || e.k === 'tool').slice(0, 40).map(e => `<div class="small ${e.k === 'err' ? 'bad' : e.k === 'tool' ? 'dim' : ''}">${esc(e.text)}</div>`).join('');
+  box.classList.remove('dim');
+  box.innerHTML = `<h2>Заявка</h2><pre>${esc(d.request || '(нет файла заявки)')}</pre><h2>Ответ инженера</h2><pre>${esc(d.answer || '(ответа пока нет)')}</pre><h2>Журнал инженера${d.logMtime ? ' <span class="dim small">(' + tm(d.logMtime) + ')</span>' : ''}</h2>${log || '<div class="dim">журнала нет</div>'}`;
+}
+
+// ---------- Смерти и дни ----------
+function renderDeaths(d) {
+  let h = `<div class="two"><div><h2>Смерти <span class="dim small">(всего в журнале: ${d.deaths.length}, новые сверху)</span></h2>`;
+  h += '<table><tr><th>№</th><th>Когда</th><th>Причина</th><th>Где (x z)</th><th>Высота</th></tr>' + d.deaths.map(x => `<tr><td>${x.n}</td><td>${tm(x.ts)}<div class="dim small">${esc(x.timeOfDay)}</div></td><td>${esc(x.cause)}<div class="dim small">${esc(x.msg)}</div></td><td>${x.x} ${x.z}</td><td>${x.y}</td></tr>`).join('') + '</table></div>';
+  h += '<div><h2>Итоги дней</h2><table><tr><th>День</th><th>Когда записан</th><th>Итог</th></tr>' + d.days.map(x => `<tr><td><b>${x.day}</b></td><td>${tm(x.ts)}</td><td class="small">${esc(x.line)}</td></tr>`).join('') + '</table></div></div>';
+  return h;
+}
+
+// ---------- Служебное ----------
+function renderService(d) {
+  const r = d.runner || {};
+  let h = '<div class="two"><div>';
+  h += '<h2>Сторож</h2>' + (d.guard.length ? '<div class="feed">' + d.guard.map(g => `<div class="row"><span class="tm">${tm(g.ts)}</span><span class="tx small">${esc(g.text)}</span></div>`).join('') + '</div>' : '<div class="box dim">Записей нет.</div>');
+  h += '<h2>Петля: когда запускался мозг</h2>' + (d.starts.length ? '<div class="feed">' + d.starts.map(g => `<div class="row"><span class="tm">${tm(g.ts)}</span><span class="tx small">мозг запущен (${esc(g.file)})</span></div>`).join('') + '</div>' : '<div class="box dim">Запусков не найдено.</div>');
+  h += '<h2>Передача мозга (handover)</h2>' + (d.handover.length ? '<div class="feed">' + d.handover.map(g => `<div class="row"><span class="tm">${tm(g.ts)}</span><span class="tx small">${esc(g.text)}</span></div>`).join('') + '</div>' : '<div class="box dim">Записей нет.</div>');
+  h += '</div><div>';
+  h += '<h2>Исполнитель навыков</h2>';
+  if (!r.ok) h += `<div class="err">${esc(r.error || 'не отвечает')}</div>`;
+  else {
+    const a = r.runner && r.runner.active;
+    h += `<div class="box">${a ? `Сейчас выполняет навык <b>${esc(a.name)}</b> уже ${a.sec} с (запуск №${a.runId})` : 'Свободен, навык не выполняется.'}${r.runner ? '<br><span class="dim small">работает ' + Math.round(r.runner.uptimeSec / 60) + ' мин</span>' : ''}</div>`;
+    h += '<h2>Журнал исполнителя</h2>' + (r.entries.length ? '<div class="feed">' + r.entries.slice(0, 40).map(e => {
+      const cls = e.type === 'run_end' ? (e.ok ? 'ok' : 'bad') : '';
+      let tx = e.type === 'run_start' ? `запуск «${e.name}»` : e.type === 'run_end' ? `${e.ok ? 'готово' : 'провал'} «${e.name}» за ${e.sec} с${e.error ? ': ' + e.error : ''}` : (e.msg || e.type + ' ' + (e.name || ''));
+      return `<div class="row"><span class="tm">${tm(e.ts)}</span><span class="tx small ${cls}">${esc(String(tx).slice(0, 260))}</span></div>`;
+    }).join('') + '</div>' : '<div class="box dim">Пусто.</div>');
+    h += '<h2>Навыки</h2><table><tr><th>Навык</th><th>Состояние</th><th>Запусков (ок/провал)</th></tr>' + (r.skills || []).map(s => `<tr><td>${esc(s.name)}</td><td>${s.enabled ? '<span class="ok">включён</span>' : '<span class="bad">выключен</span><div class="dim small">' + esc(s.reason || '') + '</div>'}</td><td>${s.runs || 0} (${s.ok || 0}/${s.fail || 0})</td></tr>`).join('') + '</table>';
+  }
+  h += '<h2>Хвост runner.out.log</h2><div class="feed"><pre class="small" style="padding:8px 12px">' + esc((d.runnerOut || []).join('\n')) + '</pre></div>';
+  return h + '</div></div>';
+}
+
+// ---------- Чат ----------
+let showSys = false, chatSending = false;
+function chatShell() {
+  $('p-chat').innerHTML = `<h2>Чат с мозгом</h2>
+    <div class="box small dim">Здесь игровой чат (реплики мозга — «Мозг (FlyTest)») и твои сообщения из программы. Сообщение мозгу <b>не попадает в игровой чат</b> — мозг увидит его как событие в своей ленте. Текст, начинающийся с «/», не принимается.</div>
+    <div style="margin:8px 0"><label class="chk"><input type="checkbox" id="chkSys"> показывать системные строки сервера</label></div>
+    <div class="feed" id="chatFeed"></div>
+    <div class="compose"><textarea id="chatText" maxlength="300" placeholder="Написать мозгу… (Enter — отправить, Shift+Enter — новая строка)"></textarea><button id="chatSend">Отправить</button></div>
+    <div id="chatStatus" class="small dim" style="margin-top:6px"></div>`;
+  $('chkSys').onchange = e => { showSys = e.target.checked; tick(); };
+  $('chatSend').onclick = sendChat;
+  $('chatText').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+}
+function renderChat(d) {
+  if (!$('chatFeed')) chatShell();
+  const f = $('chatFeed');
+  const atBottom = f.scrollTop + f.clientHeight >= f.scrollHeight - 30;
+  f.innerHTML = d.items.length ? d.items.map(m => `<div class="msg ${m.role}"><div class="meta">${tm(m.ts)} · <b class="${m.role === 'owner' ? 'ok' : m.role === 'brain' ? 'blue' : ''}">${esc(m.who)}</b></div>${esc(m.text)}</div>`).join('') : '<div class="msg dim">В чате пока ничего нет.</div>';
+  if (atBottom || !f.dataset.init) { f.scrollTop = f.scrollHeight; f.dataset.init = '1'; }
+  $('chkSys').checked = showSys;
+}
+async function sendChat() {
+  const ta = $('chatText'), st = $('chatStatus');
+  const text = ta.value.trim();
+  if (!text || chatSending) return;
+  if (text.startsWith('/')) { st.className = 'small bad'; st.textContent = 'Нельзя: сообщение не должно начинаться с «/».'; return; }
+  chatSending = true; $('chatSend').disabled = true; st.className = 'small dim'; st.textContent = 'отправляю…';
+  try {
+    const r = await fetch('/api/say', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    const j = await r.json();
+    if (j.ok) { ta.value = ''; st.className = 'small ok'; st.textContent = 'Отправлено мозгу. Он увидит сообщение, когда опросит ленту событий.'; }
+    else { st.className = 'small bad'; st.textContent = 'Не отправлено: ' + (j.error || '?'); }
+  } catch (e) { st.className = 'small bad'; st.textContent = 'Не отправлено: ' + e.message; }
+  chatSending = false; $('chatSend').disabled = false; tick();
+}
+
+// ---------- обновление ----------
+const RENDER = {
+  body: ['/api/body', renderBody], reflex: ['/api/reflex', renderReflex], brain: ['/api/brain', renderBrain], engineer: ['/api/engineer', renderEngineer],
+  deaths: ['/api/deaths', renderDeaths], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
+};
+let busy = false;
+async function tick() {
+  if (busy) return; busy = true;
+  try {
+    const s = await get('/api/summary'); drawLamps(s);
+    const [u, fn] = RENDER[cur];
+    const d = await get(typeof u === 'function' ? u() : u);
+    const pane = $('p-' + cur);
+    if (cur === 'chat') fn(d);
+    else {
+      const y = window.scrollY, feeds = [...pane.querySelectorAll('.feed')].map(f => f.scrollTop);
+      pane.innerHTML = fn(d);
+      pane.querySelectorAll('.feed').forEach((f, i) => { if (feeds[i]) f.scrollTop = feeds[i]; });
+      window.scrollTo(0, y);
+      if (cur === 'engineer') loadReq();
+    }
+  } catch (e) {
+    $('lamps').innerHTML = lamp('bad', 'Программа «Аудит» не отвечает: ' + e.message);
+  }
+  busy = false;
+}
+document.addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-req]');
+  if (tr) { openReq = openReq === tr.dataset.req ? null : tr.dataset.req; tick(); }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'chkOut') { showOut = e.target.checked; tick(); }
+  if (e.target.id === 'chkTools') { showTools = e.target.checked; tick(); }
+});
+drawTabs(); tick();
+setInterval(tick, 2500);
+</script>
+</body>
+</html>

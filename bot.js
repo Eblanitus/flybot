@@ -235,7 +235,8 @@ const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, 'http://127.0.0.1'); } catch (e) { return send(res, 400, { ok: false, error: 'bad url' }); }
   const q = url.searchParams;
-  if (url.pathname !== '/health') ctx.lastBrainContact = Date.now(); // мозг (или исполнитель) жив и спрашивает тело
+  // мозг (или исполнитель) жив и спрашивает тело; программа «Аудит» (X-Observer: 1) только смотрит — это не в счёт
+  if (url.pathname !== '/health' && !require('./lib/audit_api').isObserver(req)) ctx.lastBrainContact = Date.now();
   try {
     if (req.method === 'GET') {
       switch (url.pathname) {
@@ -311,6 +312,21 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/owner_msg') {
+      // сообщение хозяина мозгу из программы «Аудит»: событие owner_msg в ленте (мозг видит в /wait, /events); в игровой чат НЕ идёт
+      if (fromBrowser(req)) { req.resume(); return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); }
+      const ct = String(req.headers['content-type'] || '').toLowerCase();
+      if (!ct.startsWith('application/json')) { req.resume(); return send(res, 415, { ok: false, error: 'нужен Content-Type: application/json' }); }
+      let body = ''; let size = 0; let tooBig = false;
+      req.on('data', c => { if (tooBig) return; size += c.length; if (size > MAX_BODY) { tooBig = true; send(res, 413, { ok: false, error: 'тело больше 64КБ' }); req.resume(); } else body += c; });
+      req.on('end', () => {
+        if (tooBig) return;
+        let b; try { b = JSON.parse(body || '{}'); } catch (e) { return send(res, 400, { ok: false, error: 'bad json' }); }
+        const r = require('./lib/audit_api').ownerMsg(ctx, b);
+        send(res, r.ok ? 200 : 400, r);
+      });
+      return;
+    }
     send(res, 404, { ok: false, error: 'not found' });
   } catch (e) {
     send(res, 500, { ok: false, error: String(e && e.message ? e.message : e) });
@@ -327,7 +343,7 @@ process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 server.on('error', (e) => { console.log('[http] error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
 server.listen(CONTROL, '127.0.0.1', () => {
   console.log(`[http] control API on http://127.0.0.1:${CONTROL}`);
-  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants   POST /cmd');
+  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants   POST /cmd /owner_msg');
   try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
   connect();
 });
