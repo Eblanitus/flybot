@@ -1,10 +1,11 @@
 @echo off
 rem Night brain for FlyTest: restarts OpenCode in a loop, keeps body and runner alive.
 rem Stop: close this window (or Ctrl+C, then Y).
-set MODEL=opencode/deepseek-v4.1-flash-free
+set MODEL=opencode/minimax-m3.1-flash-free
 title flybot-night-brain
 cd /d "%~dp0"
 if not exist data mkdir data
+start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0brain_guard.ps1" -Log "%~dp0data\night.log"
 :loop
 curl.exe -s -m 3 http://127.0.0.1:3199/health >nul 2>&1 || start "flybot-body" /min cmd /c "cd /d %~dp0 && node bot.js localhost 25565 FlyTest 3199 >> data\flytest.out.log 2>&1"
 curl.exe -s -m 3 http://127.0.0.1:3200/health >nul 2>&1 || start "flybot-brain-runner" /min cmd /c "cd /d %~dp0brain && node runner.js >> ..\data\runner.out.log 2>&1"

@@ -1,0 +1,16 @@
+# name: fence_post_lamp
+# desc: фонарный столб: булыжное основание, три забора, факел сверху (1x1x5)
+# origin: NW-bottom
+# Хочешь фонарь вместо факела: T = lantern (нужны железные самородки).
+B = cobblestone
+F = spruce_fence
+T = torch
+
+layer 0
+B
+
+layer 1-3
+F
+
+layer 4
+T

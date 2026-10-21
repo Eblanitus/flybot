@@ -1,0 +1,60 @@
+# name: hut_west
+# desc: хижина 7x7 снаружи (5x5 внутри), булыжник, еловые брёвна по углам, дверь на запад, 5 окон, 2 факела, крыша из досок
+# origin: NW-bottom
+# Слой 0 — пол/фундамент (на его высоте стоит y, передаваемый навыку); слои 1-3 — стены, слой 4 — крыша.
+# Дверь рисуется один раз (слой 1); клетка над ней (слой 2) — пробел: верхняя половина двери достраивается сама.
+# Дверь ставится «с улицы», лицом на восток; для другой стороны используй rot (90 = дверь на север, 180 = на восток, 270 = на юг).
+# Стёкла (W) можно заменить в легенде на любой блок, например W = spruce_fence.
+C = cobblestone
+L = spruce_log axis=y
+P = spruce_planks
+D = spruce_door facing=east
+W = glass_pane
+T = wall_torch facing=east
+U = wall_torch facing=west
+. = air
+
+layer 0
+CCCCCCC
+CCCCCCC
+CCCCCCC
+CCCCCCC
+CCCCCCC
+CCCCCCC
+CCCCCCC
+
+layer 1
+LCCCCCL
+C.....C
+C.....C
+D.....C
+C.....C
+C.....C
+LCCCCCL
+
+layer 2
+LCWCWCL
+CT....C
+C.....C
+| .....W|
+C.....C
+C....UC
+LCWCWCL
+
+layer 3
+LCCCCCL
+C.....C
+C.....C
+C.....C
+C.....C
+C.....C
+LCCCCCL
+
+layer 4
+PPPPPPP
+PPPPPPP
+PPPPPPP
+PPPPPPP
+PPPPPPP
+PPPPPPP
+PPPPPPP

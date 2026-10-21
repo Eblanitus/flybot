@@ -1,0 +1,39 @@
+# name: bridge_stone
+# desc: каменный мост 5 (ширина) на 8 (длина): настил из булыжника, еловые брёвна по краям, парапет из булыжника, факелы-фонари поверх парапета
+# origin: NW-bottom
+# В чертеже длина 8 идёт с севера на юг (z), ширина 5 — с запада на восток (x).
+# При rot=90 длина ложится с запада на восток, ширина — с севера на юг.
+P = cobblestone
+B = spruce_log axis=z
+W = cobblestone_wall
+T = torch
+. = air
+
+layer 0
+BPBPP
+BPPPB
+BPPPB
+BPPPB
+BPPPB
+BPPPB
+BPPPB
+BPBPP
+
+layer 1
+W...W
+W...W
+W...W
+W...W
+W...W
+W...W
+W...W
+W...W
+
+layer 2
+T...T
+.....
+T...T
+.....
+T...T
+.....
+T...T

@@ -150,6 +150,8 @@ function connect() {
   reflexes.attach(ctx, session); // один раз на экземпляр бота
   critic.attach(ctx, session); // критик: затупы мозга/тела -> событие advice
   vision.attach(ctx, bot, session); // честное зрение: память увиденного + периодический просмотр
+  try { require('./lib/daylog').attach(ctx, session); require('./lib/owner').attach(ctx, session); } catch (e) { console.log('[daylog/owner] не подключились:', e.message); } // итог дня + приказы хозяина без LLM
+  try { require('./lib/worldmem').attach(ctx, bot, session); } catch (e) { console.log('[worldmem] не подключилась:', e.message); } // постоянная память мира (data/world.json)
 
   let firstSpawn = true;
   bot.on('spawn', () => {
@@ -246,7 +248,9 @@ const server = http.createServer(async (req, res) => {
           const source = await fromBrainOrAutopilot(req, cmd);
           return send(res, 200, await dispatch(cmd, { source, internal: !req.headers['user-agent'] }));
         }
-        case '/snapshot': return send(res, 200, require('./lib/variants').decorate(ctx, require('./lib/experience').decorate(ctx, snapshot(ctx))));
+        case '/snapshot': return send(res, 200, require('./lib/daylog').decorate(ctx, require('./lib/worldmem').decorate(ctx, require('./lib/variants').decorate(ctx, require('./lib/experience').decorate(ctx, snapshot(ctx))))));
+        case '/memory': return send(res, 200, require('./lib/worldmem').handleMemory(ctx, q)); // ?kind=iron_ore&near=x,y,z&limit=5
+        case '/memory/items': return send(res, 200, require('./lib/worldmem').handleItems(ctx, q)); // ?name=cobblestone
         case '/variants': {
           // способы действий: ?list=1 — описание вариантов; иначе статистика (?family=melee)
           const V = require('./lib/variants');
