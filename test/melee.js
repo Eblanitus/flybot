@@ -88,47 +88,47 @@ async function testFight() {
   // 1) цель досягаема с предела (ближний край 2.9): бьём сразу, не подходя
   let { bot, calls } = fakeBot(flat); const ctx = { bot };
   zombie(bot, 3.5, 0.5); dieAfter(bot, 1);
-  let r = await combat.fight(ctx, mkTask(), { sprint: false, timeout: 5 });
+  let r = await combat.fight(ctx, mkTask(), { sprint: false, timeout: 5, style: 'kite' });
   assert.strictEqual(r.kills, 1); assert.strictEqual(r.hits, 1);
   assert(!calls.some(c => c[0] === 'goal' && c[1] === 'set'), 'не подходили к цели в пределах досягаемости');
   assert(calls.some(c => c[0] === 'clear'), 'управление сброшено');
   // 1б) край 3.1 — за пределом: сначала подход (ставим цель пути)
   ({ bot, calls } = fakeBot(flat)); ctx.bot = bot; zombie(bot, 3.7, 0.5); dieAfter(bot, 1);
   const g = bot.pathfinder.setGoal; bot.pathfinder.setGoal = x => { g(x); if (x) bot.entities[10].position = new Vec3(3.4, 66, 0.5); };
-  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 5 });
+  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 5, style: 'kite' });
   assert(calls.findIndex(c => c[0] === 'goal' && c[1] === 'set') < calls.findIndex(c => c[0] === 'attack'), 'за пределом — сперва подход');
   // 2) разбег: до удара включён спринт, после удара управление сброшено
   ({ bot, calls } = fakeBot(flat)); ctx.bot = bot; zombie(bot, 3.1, 0.5); dieAfter(bot, 1);
-  await combat.fight(ctx, mkTask(), { timeout: 5 });
+  await combat.fight(ctx, mkTask(), { timeout: 5, style: 'kite' });
   const iSprint = calls.findIndex(c => c[0] === 'ctl' && c[1] === 'sprint' && c[2] === true), iAtk = calls.findIndex(c => c[0] === 'attack');
   assert(iSprint >= 0 && iSprint < iAtk, 'спринт включён до удара');
   assert(calls.slice(iAtk - 1).some(c => c[0] === 'clear'), 'спринт сброшен');
   // 3) перезарядка: цель вплотную — отходим назад, бьём ровно по заряду, не чаще
   ({ bot, calls } = fakeBot(flat)); ctx.bot = bot; zombie(bot, 1.5, 0.5); dieAfter(bot, 2);
-  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 6 });
+  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 6, style: 'kite' });
   const atk = calls.filter(c => c[0] === 'attack').map(c => c[1]);
   assert.strictEqual(atk.length, 2);
   assert(atk[1] - atk[0] >= 640, 'между ударами не меньше полного заряда: ' + (atk[1] - atk[0]));
   assert(calls.some(c => c[0] === 'ctl' && c[1] === 'back' && c[2] === true), 'при перезарядке отходит назад');
   // 4) обрыв сзади: назад не идём
   const cl = fakeBot((x, y) => (x < 0 ? (y <= 60 ? 'dirt' : 'air') : flat(x, y))); ctx.bot = cl.bot; zombie(cl.bot, 1.5, 0.5); dieAfter(cl.bot, 2);
-  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 6 });
+  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 6, style: 'kite' });
   assert(!cl.calls.some(c => c[0] === 'ctl' && c[1] === 'back' && c[2] === true), 'у обрыва назад не идёт');
   // 5) скелет: дистанцию не держим — вплотную при перезарядке не отходит
   ({ bot, calls } = fakeBot(flat)); ctx.bot = bot; zombie(bot, 1.5, 0.5, { name: 'skeleton' }); dieAfter(bot, 2);
-  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 6 });
+  await combat.fight(ctx, mkTask(), { sprint: false, timeout: 6, style: 'kite' });
   assert(!calls.some(c => c[0] === 'ctl' && c[1] === 'back' && c[2] === true), 'скелет: не отходим');
   // 6) abort: прерванный бой сбрасывает управление и цель пути
   ({ bot, calls } = fakeBot(flat)); ctx.bot = bot; zombie(bot, 30, 0.5);
   const ta = mkTask(); setTimeout(() => ta.abort('stop'), 300);
-  await assert.rejects(combat.fight(ctx, ta, { timeout: 10, radius: 32 }));
+  await assert.rejects(combat.fight(ctx, ta, { timeout: 10, radius: 32, style: 'kite' }));
   assert.deepStrictEqual(calls.slice(-2).map(c => c[0]), ['goal', 'clear']);
 }
 
 async function testDefend() {
   const { bot, calls } = fakeBot(flat); const ctx = { bot };
   zombie(bot, 3.5, 0.5); // край 2.9 — бьём, не двигаясь
-  await combat.defend(ctx, new Task(1, 'defend', {}, 'test'), { duration: 3 });
+  await combat.defend(ctx, new Task(1, 'defend', {}, 'test'), { duration: 3, style: 'kite' });
   assert(calls.filter(c => c[0] === 'attack').length >= 3, 'defend бьёт с предела');
   assert.strictEqual(bot.entity.position.x, 0.5);
   assert.deepStrictEqual(calls[calls.length - 1], ['clear']);

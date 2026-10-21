@@ -48,5 +48,14 @@ async function testTasks() {
   console.log('tasks: OK');
 }
 
-module.exports = { testTasks };
-if (require.main === module) testTasks().then(() => require('./shelter')()).then(() => require('./collect')()).then(() => require('./autopilot')()).then(() => require('./critic')()).then(() => require('./perception')()).then(() => require('./day_routine')()).then(() => require('./defense')()).then(() => require('./melee')()).then(() => require('./basic')()).then(() => require('./project_skills')()).then(() => console.log('all OK'), e => { console.error(e); process.exit(1); });
+// Все test/variants_*.js (тесты семейств вариантов) подхватываются сами; каждый экспортирует async-функцию
+async function runVariantTests() {
+  const fs = require('fs'), path = require('path');
+  for (const f of fs.readdirSync(__dirname).filter(f => /^variants_.+\.js$/.test(f)).sort()) {
+    await require(path.join(__dirname, f))();
+    console.log(f + ': OK');
+  }
+}
+
+module.exports = { testTasks, runVariantTests };
+if (require.main === module) testTasks().then(() => require('./shelter')()).then(() => require('./collect')()).then(() => require('./autopilot')()).then(() => require('./critic')()).then(() => require('./perception')()).then(() => require('./day_routine')()).then(() => require('./defense')()).then(() => require('./melee')()).then(() => require('./basic')()).then(() => require('./core_fixes')()).then(() => require('./project_skills')()).then(() => require('./survival_skills')()).then(() => require('./variants')()).then(runVariantTests).then(() => console.log('all OK'), e => { console.error(e); process.exit(1); });

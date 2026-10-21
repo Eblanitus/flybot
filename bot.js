@@ -12,6 +12,7 @@
 //   GET  /task                  — текущий навык и история
 //   GET  /autopilot[?on=0|1]    — автопилот: состояние / выключить / включить
 //   GET  /critic                — критик: затупы за час, простой, смерти, прогресс, что чинить в теле
+//   GET  /variants[?list=1|family=melee] — способы действий (lib/variants): статистика исходов / описание вариантов
 //   POST /cmd {"action":"...","params":{...}}  (Content-Type: application/json)
 'use strict';
 const fs = require('fs');
@@ -245,7 +246,13 @@ const server = http.createServer(async (req, res) => {
           const source = await fromBrainOrAutopilot(req, cmd);
           return send(res, 200, await dispatch(cmd, { source, internal: !req.headers['user-agent'] }));
         }
-        case '/snapshot': return send(res, 200, require('./lib/experience').decorate(ctx, snapshot(ctx)));
+        case '/snapshot': return send(res, 200, require('./lib/variants').decorate(ctx, require('./lib/experience').decorate(ctx, snapshot(ctx))));
+        case '/variants': {
+          // способы действий: ?list=1 — описание вариантов; иначе статистика (?family=melee)
+          const V = require('./lib/variants');
+          if (q.get('list') === '1' || q.get('list') === 'true') return send(res, 200, { ok: true, ...V.list() });
+          return send(res, 200, { ok: true, ...V.stats(ctx, q.get('family') || null), line: V.line(ctx) });
+        }
         case '/autopilot': {
           // /autopilot?on=0|1 — выключить/включить; без параметров — состояние
           const ap = ctx.autopilot;
@@ -316,6 +323,7 @@ process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 server.on('error', (e) => { console.log('[http] error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
 server.listen(CONTROL, '127.0.0.1', () => {
   console.log(`[http] control API on http://127.0.0.1:${CONTROL}`);
-  console.log('[http] GET /health /snapshot /stats /wait /events /task   POST /cmd');
+  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants   POST /cmd');
+  try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
   connect();
 });
