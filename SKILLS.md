@@ -38,6 +38,36 @@
 | `chest_take` | `item`, `count` | взять из ближайшего сундука |
 | `follow` | `name`? | следовать за игроком до `stop` |
 
+### Универсальные навыки
+Одно действие — один навык; навык ничего не решает за тебя, а честно возвращает итог (или ошибку с причиной). Все идут в фоне, как остальные; цели/воду/ферму ищут только среди увиденного (см. «Зрение»).
+| action | params | что делает → что возвращает |
+|---|---|---|
+| `eat` | `item`?, `count`=1, `desperate`? | съесть еду из инвентаря (без `item` — подходящую, гниль/яды не берёт; при сытости 20 — ошибка «сыт») → `ate`, `food` [было, стало], `saturation`, `full` |
+| `equip_item` | `item` (или `slot`=номер слота инвентаря), `slot`/`dest`: `hand`\|`off-hand`\|`head`\|`torso`\|`legs`\|`feet` | взять предмет в руку/надеть; броня без слота — на своё место → `equipped`, `slot`, `replaced` |
+| `toss` | `item`, `count`=1, `all`? | выбросить предмет → `dropped`, `left` |
+| `drop_junk` | `keep`? (массив имён или `{имя:n}`) | выбросить мусор сверх нормы (гнилое мясо, паучьи глаза, гравий, лишняя земля/камни) → `dropped`, `junkList` |
+| `look_at` | `x`,`y`,`z` или `entity` (id или имя), `exact`? | повернуть голову → `looking`, `at`/`id`, `d`, `dir` |
+| `use_item` | `item`?, цель: `entity` или `x`,`y`,`z` (+`face`: `up`\|`down`\|`north`\|`south`\|`east`\|`west`, `sneak`) или без цели (в воздух), `hold_ms`=0 | правый клик предметом в руке по существу/блоку/воздуху → `used`, `target`, `inventoryChange`, `heldNow` |
+| `activate` | `x`,`y`,`z`, `want`?: `open`\|`close`\|`on`\|`off` | дверь, люк, калитка, рычаг, кнопка: подойти и нажать (если уже в нужном состоянии — не трогает) → `block`, `before`, `after`, `changed` |
+| `pillar_up` | `height`=3, `item`? | столб вверх из блоков под собой (земля/булыжник/камень, доски и брёвна не берёт) → `raised`, `used`, `y`, `at`, `stopped`? |
+| `bridge` | `dir`: `С`\|`Ю`\|`В`\|`З` или `x`,`z`; `max`=10, `item`? | мост вперёд по прямой с подкрадыванием → `placed`, `moved`, `stopped` (причина), `at`, `blocksLeft` |
+| `pickup` | `radius`=8, `max_sec`=15 | подобрать выпавшие предметы вокруг → `picked`, `itemsSeen`, `left` |
+| `light` | `radius`=8, `every`=6, `level`=8, `max`=8, `sky`=false; или `x`,`z` (идти туда и светить по пути) | поставить факелы в тёмных местах → `placed` (список [x,y,z]), `torchesLeft`, `darkSpots`/`reached` |
+| `mark` | `name`=`home`, `x`,`y`,`z`? (по умолчанию где стою), `note`? | запомнить точку в `data/waypoints.json` → `marked`, `at`, `dim`, `replaced`?, `total` |
+| `go_home` | `name`=`home`, `near`=2, `timeout`=120, `sprint`=true | дойти до сохранённой метки → `name`, `at`, `distBefore`, `distNow`, `arrived` |
+| `waypoints` | `remove`? (имя метки) | список меток (ближние первыми) или удаление → `dim`, `waypoints`: [{`name`, `at`, `dim`, `d`, `dir`, `note`?}] |
+| `shoot` | `target` (id или имя; игроков — только агрессоров), `weapon`?: `bow`\|`crossbow`, `shots`=1, `charge_ms` | выстрел из лука/арбалета с упреждением (нужны стрелы и линия до цели) → `weapon`, `target`, `shots`, `arrowsUsed`, `arrowsLeft`, `dist`, `targetStillThere` |
+| `shield` | `ms`=3000 | поднять щит (левая рука) на время → `heldMs`, `hp`, `damageTaken`, `shieldDurability` |
+| `fish` | `casts`=5, `max_sec`=120 | рыбалка удочкой у видимой воды → `casts`, `caught`, `errors` |
+| `bucket` | `action`: `fill`\|`place`; fill: `liquid`=`water`\|`lava`, `x`,`y`,`z`? (источник); place: `item`?, `x`,`y`,`z`? | набрать жидкость в пустое ведро / вылить из полного → `filled`, `from`, `buckets`, `emptyLeft` / `placed`, `at`, `emptyBuckets` |
+| `till` | `x`,`y`,`z` или область `x1`,`z1`,`x2`,`z2` (+`y`, по умолчанию уровень под ногами), `max`=64 | вспахать землю мотыгой → `hoe`, `tilled`, `skipped`, `skippedCount`, `withoutWater`? |
+| `plant` | `seed`: `wheat_seeds`\|`carrot`\|`potato`\|`beetroot_seeds`\|`melon_seeds`\|`pumpkin_seeds`\|`torchflower_seeds`\|`pitcher_pod`; `x`,`y`,`z` или область `x1`,`z1`,`x2`,`z2` или `radius`=8; `max`=64 | посадить на свободные грядки → `seed`, `crop`, `planted`, `left`, `freeBeds`, `failed`? |
+| `harvest` | `crop`: `wheat`\|`carrot`\|`potato`\|`beetroot`, `radius`=8, `replant`=true, `max`=64 | собрать спелые посевы и (по умолчанию) посадить заново → `harvested`, `replanted`, `gained`, `immature`, `ripeSeen` |
+| `breed` | `animal`, `food`?, `radius`=16, `wait_sec`=12 | накормить двух животных, чтобы появился детёныш → `fed` (id), `rejected`, `foodLeft`, `baby` |
+| `shear` | `animal`: `sheep`\|`mooshroom`, `radius`=12, `max`=12 | остричь ножницами, подобрать шерсть → `sheared`, `tried`, `gained` |
+| `villagers` | `radius`=16, `max`=6 | открыть окно каждого жителя и прочитать сделки → `villagers`: [{`id`, `at`, `d`, `trades`: [{`index`, `give`, `get`, `usesLeft`, `disabled`, `canAfford`}]}] |
+| `trade` | `villager` (id из `villagers`), `index`, `times`=1 | совершить сделку → `traded`, `asked`, `gave`, `got` |
+
 ### Самооборона от игроков
 Игроков тело не трогает, кроме **агрессоров**: игрок, ударивший меня, считается агрессором 120 с после последнего удара.
 Рефлекс при ударе игрока: есть меч/топор, HP ≥ 12 и рядом (6 м) нет других врагов — сам запускает `fight` против него
