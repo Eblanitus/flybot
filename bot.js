@@ -10,6 +10,7 @@
 //   GET  /wait?timeout=60       — long-poll: ждать важное событие (навык завершён/провален, опасность, смерть, чат)
 //   GET  /events?since=N        — журнал последних событий
 //   GET  /task                  — текущий навык и история
+//   GET  /autopilot[?on=0|1]    — автопилот: состояние / выключить / включить
 //   POST /cmd {"action":"...","params":{...}}  (Content-Type: application/json)
 'use strict';
 const fs = require('fs');
@@ -90,6 +91,7 @@ function statusChat(text, urgent = false) {
   lastStatusAt = Date.now();
   try { bot.chat(('[тело] ' + text).replace(/^\//, '').slice(0, 200)); } catch (e) {}
 }
+ctx.statusChat = statusChat; // автопилот пишет состояние сам (не чаще раза в минуту)
 function statusFromEvent(type, d) {
   if (type === 'spawn' && d.msg === 'вошёл в мир')
     setTimeout(() => statusChat(`в мире. Смертей всего: ${ctx.stats.deaths || 0}`, true), 4000);
@@ -115,6 +117,16 @@ async function saveStats(force = false) {
 setInterval(() => saveStats(), 10000);
 
 const dispatch = makeDispatcher(ctx);
+
+// Кто прислал команду: пока исполнитель (:3200) выполняет навык, запущенный автопилотом, его запросы (node, без
+// User-Agent) — это автопилот; всё остальное — мозг (curl, или исполнитель с навыком мозга). Команда мозга
+// сначала вытесняет автопилот (прерывает его выученный навык), потом выполняется.
+async function fromBrainOrAutopilot(req, cmd) {
+  const ap = ctx.autopilot;
+  if (ap && !req.headers['user-agent'] && ap.ownsRunner()) return 'autopilot';
+  if (ap) { try { await ap.brainCommand(cmd && (cmd.action || cmd.cmd)); } catch (e) {} }
+  return 'brain';
+}
 
 // ---------- Подключение с переподключением ----------
 let backoff = 2000;
@@ -227,9 +239,17 @@ const server = http.createServer(async (req, res) => {
           if (fromBrowser(req)) return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' });
           const { cmd, error } = queryToCmd(q, 'action');
           if (error) return send(res, 400, { ok: false, error });
-          return send(res, 200, await dispatch(cmd));
+          const source = await fromBrainOrAutopilot(req, cmd);
+          return send(res, 200, await dispatch(cmd, { source }));
         }
         case '/snapshot': return send(res, 200, snapshot(ctx));
+        case '/autopilot': {
+          // /autopilot?on=0|1 — выключить/включить; без параметров — состояние
+          const ap = ctx.autopilot;
+          if (!ap) return send(res, 200, { ok: false, error: 'автопилот ещё не запущен (бот не подключён)' });
+          if (q.has('on')) { if (fromBrowser(req)) return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); return send(res, 200, { ok: true, autopilot: await ap.setOn(!['0', 'false', 'off'].includes(String(q.get('on')).toLowerCase())) }); }
+          return send(res, 200, { ok: true, autopilot: ap.status(), history: ap.history.slice(-10) });
+        }
         case '/stats': return send(res, 200, { ...ctx.stats, ...ctx.statsBrief() });
         case '/task': return send(res, 200, { task: ctx.tasks.info(), history: ctx.tasks.history.slice(-10) });
         case '/chat': {
@@ -270,7 +290,8 @@ const server = http.createServer(async (req, res) => {
         let cmd;
         try { cmd = JSON.parse(body || '{}'); } catch (e) { return send(res, 400, { ok: false, error: 'bad json' }); }
         if (!cmd || typeof cmd !== 'object') return send(res, 400, { ok: false, error: 'bad json' });
-        const result = await dispatch(cmd);
+        const source = await fromBrainOrAutopilot(req, cmd);
+        const result = await dispatch(cmd, { source });
         send(res, 200, result);
       });
       return;
