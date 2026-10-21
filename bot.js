@@ -17,6 +17,7 @@
 //   GET  /blackbox[?limit=N]    — чёрный ящик: файлы смертей и почти-смертей (data/blackbox) с краткой сводкой
 //   GET  /blackbox/file?name=.. — содержимое одного файла чёрного ящика (только из data/blackbox)
 //   GET  /ledger                — учёт ресурсов: приход/расход предметов по причинам, дням и источникам
+//   GET  /showcase              — витрина навыков со статистикой (формат — SHOWCASE.md), кэш 1 мин; /showcase/code?name=.. — исходник навыка
 //   POST /behavior/reload       — перечитать behavior/ без перезапуска тела (сломанная версия не включится)
 //   POST /cmd {"action":"...","params":{...}}  (Content-Type: application/json)
 'use strict';
@@ -42,6 +43,7 @@ const vision = require('./lib/vision');
 const { cellKey } = require('./lib/skills/gather');
 const { ChatLog } = require('./lib/chatlog');
 const critic = require('./lib/critic');
+const showcaseLib = require('./lib/showcase'); // витрина навыков (этап H): только чтение
 
 const HOST = process.argv[2] || process.env.MC_HOST || 'localhost';
 const PORT = parseInt(process.argv[3] || process.env.MC_PORT || '25565', 10);
@@ -137,6 +139,7 @@ async function saveStats(force = false) {
 setInterval(() => saveStats(), 10000);
 
 const dispatch = makeDispatcher(ctx);
+const showcase = showcaseLib.create({ root: __dirname, dataDir: DATA_DIR, bot: () => (ctx.bot && ctx.bot.username) || USER, version: 'FlyBot 0.1' });
 
 // Кто прислал команду: пока исполнитель (:3200) выполняет навык, запущенный автопилотом, его запросы (node, без
 // User-Agent) — это автопилот; всё остальное — мозг (curl, или исполнитель с навыком мозга: тогда в команде src: "skill:<имя>").
@@ -259,7 +262,7 @@ const server = http.createServer(async (req, res) => {
   try { url = new URL(req.url, 'http://127.0.0.1'); } catch (e) { return send(res, 400, { ok: false, error: 'bad url' }); }
   const q = url.searchParams;
   // мозг (или исполнитель) жив и спрашивает тело; программа «Аудит» (X-Observer: 1) только смотрит — это не в счёт
-  if (url.pathname !== '/health' && !require('./lib/audit_api').isObserver(req)) ctx.lastBrainContact = Date.now();
+  if (url.pathname !== '/health' && !url.pathname.startsWith('/showcase') && !require('./lib/audit_api').isObserver(req)) ctx.lastBrainContact = Date.now();
   try {
     if (req.method === 'GET') {
       switch (url.pathname) {
@@ -293,6 +296,8 @@ const server = http.createServer(async (req, res) => {
         case '/blackbox': return send(res, 200, ctx.blackbox.list(parseInt(q.get('limit') || '100', 10) || 100)); // чёрный ящик: список файлов смертей и почти-смертей
         case '/blackbox/file': { const r = ctx.blackbox.readFile(q.get('name')); return send(res, r.ok ? 200 : (r.status || 400), r.ok ? r.data : { ok: false, error: r.error }); }
         case '/ledger': return send(res, 200, ctx.ledger.summary()); // учёт ресурсов (только чтение)
+        case '/showcase': return send(res, 200, showcase.get()); // витрина навыков для соседей и аудита (только чтение)
+        case '/showcase/code': { const r = showcase.code(q.get('name'), q.get('kind') || undefined); return send(res, r.status, r.ok ? { ok: true, name: r.name, kind: r.kind, ...(r.family ? { family: r.family } : {}), file: r.file, size: r.size, code: r.code } : { ok: false, error: r.error }); }
         case '/critic': return send(res, 200, ctx.critic ? ctx.critic.summary() : { ok: false, error: 'критик ещё не запущен (бот не подключён)' });
         case '/stats': return send(res, 200, { ...ctx.stats, ...ctx.statsBrief() });
         case '/task': return send(res, 200, { task: ctx.tasks.info(), history: ctx.tasks.history.slice(-10) });
@@ -381,7 +386,7 @@ process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 server.on('error', (e) => { console.log('[http] error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
 server.listen(CONTROL, '127.0.0.1', () => {
   console.log(`[http] control API on http://127.0.0.1:${CONTROL}`);
-  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior /blackbox /ledger   POST /cmd /owner_msg /behavior/reload');
+  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior /blackbox /ledger /showcase   POST /cmd /owner_msg /behavior/reload');
   try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
   behavior.init().catch(e => console.log('[behavior] init:', e && e.message)); // проверка behavior/ и включение (к боту подключится, когда он будет)
   connect();

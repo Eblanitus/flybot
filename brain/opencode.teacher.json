@@ -25,6 +25,12 @@
       "curl -s \"http://127.0.0.1:3199/*": "allow",
       "curl -s http://127.0.0.1:3200/*": "allow",
       "curl -s \"http://127.0.0.1:3200/*": "allow",
+      "curl.exe -s http://127.0.0.1:3099/showcase": "allow",
+      "curl.exe -s http://127.0.0.1:3099/showcase/code?name=*": "allow",
+      "curl.exe -s \"http://127.0.0.1:3099/showcase/code?name=*": "allow",
+      "curl -s http://127.0.0.1:3099/showcase": "allow",
+      "curl -s http://127.0.0.1:3099/showcase/code?name=*": "allow",
+      "curl -s \"http://127.0.0.1:3099/showcase/code?name=*": "allow",
       "*/do*": "deny",
       "*/cmd*": "deny",
       "*/go*": "deny",
@@ -55,7 +61,8 @@
       "*&*": "deny",
       "*;*": "deny",
       "*`*": "deny",
-      "*$(*": "deny"
+      "*$(*": "deny",
+      "*..*": "deny"
     },
     "external_directory": "deny",
     "webfetch": "deny",

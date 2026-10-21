@@ -73,13 +73,14 @@
   <section class="pane" id="p-engineer"></section>
   <section class="pane" id="p-deaths"></section>
   <section class="pane" id="p-teacher"></section>
+  <section class="pane" id="p-showcase"></section>
   <section class="pane" id="p-service"></section>
   <section class="pane" id="p-chat"></section>
 </main>
 
 <script>
 'use strict';
-const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['service', 'Служебное'], ['chat', 'Чат']];
+const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['showcase', 'Витрина'], ['service', 'Служебное'], ['chat', 'Чат']];
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pad = n => String(n).padStart(2, '0');
@@ -448,9 +449,39 @@ async function loadReport() {
   box.innerHTML = `<h2>Отчёт</h2><pre>${esc(d.text)}</pre><h2>Журнал учителя${d.logMtime ? ' <span class="dim small">(' + tm(d.logMtime) + ')</span>' : ''}</h2>${log || '<div class="dim">журнала нет</div>'}`;
 }
 
+// ---------- Витрина навыков ----------
+const SC_KIND_RU = { body: 'тело', learned: 'выученный', behavior: 'поведение', variant: 'вариант' };
+const fin = x => typeof x === 'number' && isFinite(x) ? x : null;
+const clipS = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+function showcaseTable(title, r) {
+  let h = '<h2>' + esc(title) + '</h2>';
+  if (!r || !r.ok) return h + '<div class="box warn">' + esc((r && r.error) || 'нет данных') + '</div>';
+  const d = r.data || {};
+  const rows = (Array.isArray(d.skills) ? d.skills : []).filter(s => s && typeof s === 'object' && s.name).slice(0, 400).map(s => {
+    const st = s.stats && typeof s.stats === 'object' ? s.stats : {};
+    return { s, runs: fin(st.runs), ok: fin(st.ok), fail: fin(st.fail), err: Array.isArray(st.lastErrors) && st.lastErrors.length ? st.lastErrors[st.lastErrors.length - 1] : null };
+  });
+  rows.sort((a, b) => (b.runs == null ? -1 : b.runs) - (a.runs == null ? -1 : a.runs) || String(a.s.name).localeCompare(String(b.s.name)));
+  h += '<div class="dim small" style="margin-bottom:8px">' + esc((d.bot || '?') + (d.version ? ' · ' + d.version : '') + ' · навыков: ' + rows.length) + (d.updated ? ' · собрано ' + tm(Date.parse(d.updated)) : '') + (r.from ? ' · источник: ' + esc(r.from) : '') + '</div>';
+  if (r.note) h += '<div class="box warn small" style="margin-bottom:8px">' + esc(r.note) + '</div>';
+  h += '<table><tr><th>Навык</th><th>Запусков</th><th>Успех</th><th>Последняя ошибка</th></tr>';
+  for (const x of rows) {
+    const p = x.runs ? Math.round(x.ok / x.runs * 100) : null;
+    const cls = p == null ? 'dim' : x.runs < 10 ? 'dim' : p >= 70 ? 'ok' : p >= 40 ? 'warn' : 'bad';
+    h += '<tr><td><b>' + esc(clipS(x.s.name, 60)) + '</b> <span class="tag dim small">' + esc(SC_KIND_RU[x.s.kind] || x.s.kind || '?') + '</span>' + (x.s.enabled === false ? ' <span class="tag bad small">выкл</span>' : '') +
+      (x.s.about ? '<div class="dim small">' + esc(clipS(x.s.about, 140)) + '</div>' : '') + '</td><td>' + (x.runs == null ? '—' : x.runs) + '</td><td class="' + cls + '">' + (p == null ? '—' : p + '% <span class="small">(' + x.ok + '/' + x.runs + ')</span>') + '</td><td class="small dim">' + esc(clipS(x.err || '', 110)) + '</td></tr>';
+  }
+  return h + '</table>';
+}
+function renderShowcase(d) {
+  let h = '<h2>Витрина навыков</h2><div class="box small dim">Две таблицы по одному формату (SHOWCASE.md): наши навыки и навыки соседа (Ассасин, :3099) со статистикой. Прочерк — такой статистики нет, зелёный/жёлтый/красный цвет — только когда запусков 10 и больше. Учитель сравнивает их при итоге дня и заказывает инженеру переделать лучшее под нашу муху.</div>';
+  h += '<div class="two" style="margin-top:12px"><div>' + showcaseTable('Наши навыки', d.ours) + '</div><div>' + showcaseTable('Навыки соседа', d.neighbor) + '</div></div>';
+  return h;
+}
+
 const RENDER = {
   body: ['/api/body', renderBody], reflex: ['/api/reflex', renderReflex], brain: ['/api/brain', renderBrain], engineer: ['/api/engineer', renderEngineer],
-  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
+  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], showcase: ['/api/showcase', renderShowcase], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
 };
 let busy = false;
 async function tick() {

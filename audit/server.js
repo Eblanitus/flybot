@@ -10,6 +10,7 @@ const http = require('http');
 const { checkOwnerText } = require('../lib/audit_api');
 const bbFiles = require('../lib/blackbox_files'); // файлы чёрного ящика (без зависимостей): запасной путь, когда тело не отвечает
 const ledgerSummary = require('../lib/ledger_summary');
+const showcaseLib = require('../lib/showcase'); // витрина навыков (без зависимостей): запасной путь, когда тело старое или не отвечает
 
 const ROOT = path.join(__dirname, '..');
 const DEFAULTS = {
@@ -18,6 +19,8 @@ const DEFAULTS = {
   brainDir: path.join(ROOT, 'brain'),
   bodyUrl: process.env.AUDIT_BODY_URL || 'http://127.0.0.1:3199',
   runnerUrl: process.env.AUDIT_RUNNER_URL || 'http://127.0.0.1:3200',
+  neighborUrl: process.env.AUDIT_NEIGHBOR_URL || 'http://127.0.0.1:3099', // Ассасин (бот Хермеса): его витрина навыков
+  root: ROOT,
   page: path.join(__dirname, 'index.html')
 };
 
@@ -613,6 +616,27 @@ async function loadBlackboxFile(cfg, name) {
   return d.ok ? { ok: true, data: d.data } : { ok: false, error: d.error };
 }
 
+// Витрина навыков: наша — у тела (GET /showcase), а если тело старое (404) или молчит — собираем из файлов теми же функциями;
+// соседа — только у него самого. Нет ответа или нет эндпоинта — сосед просто «не отвечает», ничего не выдумываем.
+async function loadShowcase(cfg) {
+  const okShowcase = r => r.ok && r.status === 200 && r.json && Array.isArray(r.json.skills);
+  const ours = await remoteCached('showcase:' + cfg.bodyUrl + '|' + cfg.dataDir, 30000, async () => {
+    const r = await httpJson(cfg.bodyUrl, 'GET', '/showcase', null, 4000);
+    if (okShowcase(r)) return { ok: true, from: 'тело', data: r.json };
+    const note = r.ok && r.status === 404 ? 'тело ещё не перезапущено — витрины в нём нет, таблица собрана из файлов' : 'тело не отвечает (' + (r.error || r.status) + ') — таблица собрана из файлов';
+    try { return { ok: true, from: 'диск', note, data: showcaseLib.build({ root: cfg.root || ROOT, dataDir: cfg.dataDir, brainDir: cfg.brainDir, bot: 'FlyBot_01', version: 'FlyBot 0.1' }) }; }
+    catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  });
+  const neighbor = await remoteCached('showcase-n:' + cfg.neighborUrl, 30000, async () => {
+    const r = await httpJson(cfg.neighborUrl, 'GET', '/showcase', null, 3000);
+    if (okShowcase(r)) return { ok: true, data: r.json };
+    if (r.ok && r.status === 404) return { ok: false, error: 'у соседа нет витрины (/showcase вернул 404)' };
+    if (r.ok) return { ok: false, error: r.json ? 'у соседа витрина в другом виде' : 'сосед ответил не так (' + (r.error || r.status) + ')' };
+    return { ok: false, error: 'сосед не отвечает (' + (r.error || '?') + ')' };
+  });
+  return { ours, neighbor };
+}
+
 async function loadBody(cfg) {
   return remoteCached('body:' + cfg.bodyUrl, 2000, async () => {
     const r = await httpJson(cfg.bodyUrl, 'GET', '/snapshot', null, 4000);
@@ -686,6 +710,7 @@ async function api(cfg, name, q) {
     case 'blackbox_file': return loadBlackboxFile(cfg, q.get('name'));
     case 'service': { const s = loadService(cfg); const r = await loadRunner(cfg); return { now, ...s, runner: r }; }
     case 'chat': { const { events } = loadEvents(cfg); return { now, items: chatFeed(events, 120, q.get('system') === '1') }; }
+    case 'showcase': return { now, ...(await loadShowcase(cfg)) };
     case 'teacher': return { now, ...loadTeacher(cfg) };
     case 'teacher_report': return teacherReport(cfg, q.get('name'));
   }
@@ -744,7 +769,7 @@ function createServer(opts) {
 module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
-  engineerList, engineerDetail, collapsePolls, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, api, taskRu
+  engineerList, engineerDetail, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, api, taskRu
 };
 
 if (require.main === module) {
