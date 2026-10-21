@@ -49,4 +49,4 @@ async function testTasks() {
 }
 
 module.exports = { testTasks };
-if (require.main === module) testTasks().then(() => require('./shelter')()).then(() => require('./collect')()).then(() => require('./autopilot')()).then(() => require('./critic')()).then(() => require('./perception')()).then(() => require('./day_routine')()).then(() => require('./defense')()).then(() => require('./basic')()).then(() => console.log('all OK'), e => { console.error(e); process.exit(1); });
+if (require.main === module) testTasks().then(() => require('./shelter')()).then(() => require('./collect')()).then(() => require('./autopilot')()).then(() => require('./critic')()).then(() => require('./perception')()).then(() => require('./day_routine')()).then(() => require('./defense')()).then(() => require('./melee')()).then(() => require('./basic')()).then(() => console.log('all OK'), e => { console.error(e); process.exit(1); });
