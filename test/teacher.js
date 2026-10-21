@@ -62,6 +62,11 @@ function testQueue() {
   now += 30000; T.scan(cfg); assert(T.take(cfg).none, 'ждём тишины');
   now += 70000; T.scan(cfg);
   r = T.take(cfg); assert.strictEqual(r.type, 'death');
+  // лимит запросов модели: случай обратно в очередь без штрафа; release — после перезапуска сторожа
+  assert.strictEqual(T.finish(cfg, r.id, 'limit').status, 'pending', 'limit — обратно в очередь');
+  assert.strictEqual(T.take(cfg).id, r.id, 'тот же случай снова');
+  assert.deepStrictEqual(T.release(cfg).released, [r.id]);
+  r = T.take(cfg); assert.strictEqual(r.type, 'death', 'после release снова берётся');
   const mat = JSON.parse(fs.readFileSync(path.join(D.dataDir, 'teacher_cases', r.id + '.json'), 'utf8'));
   assert(mat.eventsTail.length >= 3 && /^data\/teacher\/.+-death\.md$/.test(mat.report));
   // учитель пишет отчёт -> разобран; провал collect уходит в паузу

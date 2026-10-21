@@ -11,16 +11,38 @@ param(
   [string]$EngModel = 'opencode/deepseek-v4.1-flash-free',
   [int]$EngTimeoutMin = 15,
   [string]$TeachModel = 'opencode/mimo-v2.6-flash-free',
-  [int]$TeachTimeoutMin = 20
+  [int]$TeachTimeoutMin = 20,
+  [int]$LoopPid = 0   # перезапуск сторожа вручную: pid окна night.cmd (иначе петля — родительский процесс)
 )
 $fb   = 'C:\Users\user\flybot'
 $req  = "$fb\brain\skill_requests"
 $glog = "$fb\data\guard.log"
+$oclog = "$env:USERPROFILE\.local\share\opencode\log\opencode.log"
+$Backoff = 2, 5, 10, 30   # пауза после лимита запросов (429), мин: каждый следующий подряд — дольше
 function GLog($t) { Add-Content $glog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $t" -Encoding UTF8 }
 
-$loopPid = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId
-GLog "сторож запущен: петля $loopPid, журнал $Log, тишина $SilenceMin мин, инженер $EngModel"
+$loopPid = if ($LoopPid) { $LoopPid } else { (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId }
+GLog "сторож запущен: петля $loopPid, журнал $Log, тишина $SilenceMin мин, инженер $EngModel, учитель $TeachModel"
 New-Item -ItemType Directory -Force $req | Out-Null
+
+# Учитель и инженер прошлого сторожа (если его перезапустили) остались без хозяина — убрать, их случаи вернутся в очередь.
+foreach ($o in @(Get-CimInstance Win32_Process | ? { $_.Name -in 'cmd.exe', 'opencode.exe' -and $_.CommandLine -match 'You are the (teacher|engineer) of the Minecraft bot' })) {
+  taskkill /PID $o.ProcessId /T /F 2>$null | Out-Null
+  GLog "сирота от прошлого сторожа убран (pid $($o.ProcessId))"
+}
+
+# opencode на 429 «Rate limit exceeded» не повторяет запрос и молча висит до тайм-аута.
+# Признак: последняя запись этой модели в журнале opencode — такой отказ после старта, и новых запросов нет 45 с.
+function LimitStuck([string]$model, [datetime]$since) {
+  $m = [regex]::Escape(($model -split '/')[-1])
+  try { $fs = [IO.File]::Open($oclog, 'Open', 'Read', 'ReadWrite') } catch { return $false }
+  try { $n = [int][Math]::Min($fs.Length, 400KB); [void]$fs.Seek(-$n, 'End'); $buf = New-Object byte[] $n; [void]$fs.Read($buf, 0, $n) } finally { $fs.Close() }
+  $last = [Text.Encoding]::UTF8.GetString($buf) -split "`n" | ? { $_ -match "modelID=$m " } | Select-Object -Last 1
+  if (-not $last -or $last -notmatch 'Rate limit exceeded' -or $last -notmatch 'timestamp=(\S+)') { return $false }
+  $t = [DateTime]::Parse($Matches[1]).ToUniversalTime()
+  ($t -ge $since.ToUniversalTime()) -and (([DateTime]::UtcNow - $t).TotalSeconds -ge 45)
+}
+function LimitPause([int]$hits) { $Backoff[[Math]::Min($hits, $Backoff.Count - 1)] }
 
 function LogSize {   # настоящий размер: у открытого на запись файла дата/размер в каталоге отстают
   try { $fs = [IO.File]::Open($Log, 'Open', 'Read', 'ReadWrite'); try { $fs.Length } finally { $fs.Close() } } catch { -1 }
@@ -38,9 +60,11 @@ function BrainProcs {  # opencode-мозги среди потомков наш�
 $lastSize = LogSize; $lastGrow = Get-Date
 $eng = $null   # текущий запуск инженера: @{ proc; name; started }
 $tch = $null   # текущий запуск учителя: @{ proc; id; started }
+$engWait = $tchWait = Get-Date; $engHits = $tchHits = 0   # пауза после лимита и сколько лимитов подряд
 function Teach([string[]]$a) {   # lib\teacher_triggers.js: ответ — одна строка JSON (ASCII)
   try { $out = & node "$fb\lib\teacher_triggers.js" @a 2>$null | Select-Object -Last 1; if ($out) { $out | ConvertFrom-Json } } catch { GLog "учитель: очередь не ответила: $($_.Exception.Message)"; $null }
 }
+$r = Teach @('release'); if ($r -and @($r.released).Count) { GLog "учитель: вернул в очередь $(@($r.released) -join ', ') (от прошлого сторожа)" }
 
 while ($true) {
   Start-Sleep 30
@@ -61,6 +85,13 @@ while ($true) {
   }
 
   # --- 2. инженер ---
+  if ($eng -and -not $eng.proc.HasExited -and (LimitStuck $EngModel $eng.started)) {
+    taskkill /PID $eng.proc.Id /T /F | Out-Null
+    Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue   # заявка без ответа — возьмётся снова
+    $min = LimitPause $engHits; $engHits++; $engWait = (Get-Date).AddMinutes($min)
+    GLog "инженер: $($eng.name) — лимит запросов модели, повтор через $min мин"
+    $eng = $null
+  }
   if ($eng) {
     $done = "$req\$($eng.name).done.md"
     $over = ((Get-Date) - $eng.started).TotalMinutes -ge $EngTimeoutMin
@@ -71,10 +102,10 @@ while ($true) {
       }
       Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue
       GLog "инженер: $($eng.name) — закончил"
-      $eng = $null
+      $eng = $null; $engHits = 0
     }
   }
-  if (-not $eng) {
+  if (-not $eng -and (Get-Date) -ge $engWait) {
     foreach ($f in Get-ChildItem "$req\*.md" -ErrorAction SilentlyContinue | ? { $_.Name -notmatch '\.done\.md$' } | Sort-Object LastWriteTime) {
       $name = $f.BaseName
       if ($name -notmatch '^[a-z0-9_]+$') { continue }
@@ -95,6 +126,13 @@ while ($true) {
 
   # --- 3. учитель ---
   $null = Teach @('scan')
+  if ($tch -and -not $tch.proc.HasExited -and (LimitStuck $TeachModel $tch.started)) {
+    taskkill /PID $tch.proc.Id /T /F | Out-Null
+    $null = Teach @('finish', $tch.id, 'limit')   # случай обратно в очередь, без штрафа
+    $min = LimitPause $tchHits; $tchHits++; $tchWait = (Get-Date).AddMinutes($min)
+    GLog "учитель: $($tch.id) — лимит запросов модели, случай в очереди, повтор через $min мин"
+    $tch = $null
+  }
   if ($tch) {
     $over = ((Get-Date) - $tch.started).TotalMinutes -ge $TeachTimeoutMin
     if ($tch.proc.HasExited -or $over) {
@@ -102,10 +140,10 @@ while ($true) {
       if (-not $tch.proc.HasExited) { taskkill /PID $tch.proc.Id /T /F | Out-Null; $how = 'timeout'; GLog "учитель: $($tch.id) — тайм-аут $TeachTimeoutMin мин" }
       $r = Teach @('finish', $tch.id, $how)
       GLog "учитель: $($tch.id) — закончил ($($r.status))"
-      $tch = $null
+      $tch = $null; $tchHits = 0
     }
   }
-  if (-not $tch) {
+  if (-not $tch -and (Get-Date) -ge $tchWait) {
     $c = Teach @('take')
     if ($c -and $c.id) {
       $prompt = "You are the teacher of the Minecraft bot FlyBot_01. Read brain/TEACHER_PROMPT.md and follow it exactly. Case file: $($c.caseFile)"
