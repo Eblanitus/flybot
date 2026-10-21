@@ -333,6 +333,45 @@ async function testServer(dir) {
   } finally { dead.close(); if (dead.closeAllConnections) dead.closeAllConnections(); }
 }
 
+// Чёрный ящик и учёт в аудите: со старым телом (404) — «тело ещё не перезапущено» и файлы с диска; с новым — данные тела; плохие имена файлов отклоняются
+async function testBlackboxAudit(dir) {
+  const data = path.join(dir, 'bbdata'); fs.mkdirSync(path.join(data, 'blackbox'), { recursive: true });
+  const rec = { v: 1, kind: 'death', savedAt: '2026-10-21T12:00:00.000Z', summary: { cause: 'drowned', message: 'муха drowned', pos: [1, 60, 2], lastTask: { name: 'collect', by: 'skill:miner' }, worst: { kind: 'air', ttdSec: 2 }, mobs: [] },
+    lost: { items: { dirt: 3 }, total: 3 }, frames: [{ t: 1, why: 'тик', hp: 20, air: { under: true, sec: 4 }, worst: { kind: 'air', ttdSec: 14 }, task: { name: 'collect', by: 'skill:miner' }, mobs: [] }] };
+  fs.writeFileSync(path.join(data, 'blackbox', 'death-20261021-120000.json'), JSON.stringify(rec));
+  fs.writeFileSync(path.join(data, 'blackbox', 'notes.txt'), 'чужой файл');
+  fs.writeFileSync(path.join(data, 'ledger.json'), JSON.stringify({ v: 1, since: '2026-10-21T10:00:00.000Z', days: { 5: { cobblestone: { in: { mined: { 'skill:miner': 4 } }, out: { placed: { brain: 1 } } } } } }));
+  const mk = (handler) => { const s = http.createServer((req, res) => { res.setHeader('Content-Type', 'application/json'); if (!handler(req, res)) { res.statusCode = 404; res.end('{"ok":false,"error":"not found"}'); } }); return s; };
+  const old = mk(() => false); const oport = await listen(old);
+  const fresh = mk((req, res) => {
+    if (req.url.startsWith('/blackbox/file')) { res.end(JSON.stringify(rec)); return true; }
+    if (req.url.startsWith('/blackbox')) { res.end(JSON.stringify({ ok: true, total: 1, items: [{ name: 'death-20261021-120000.json', kind: 'death', cause: 'из тела' }] })); return true; }
+    if (req.url === '/ledger') { res.end(JSON.stringify({ ok: true, totals: { in: 9, out: 0, unknownIn: 0, unknownOut: 0 }, items: [], byDay: [], byReason: { in: {}, out: {} }, bySource: {} })); return true; }
+    return false;
+  });
+  const fport = await listen(fresh);
+  const a1 = A.createServer({ port: 0, dataDir: data, brainDir: path.join(dir, 'brain'), bodyUrl: 'http://127.0.0.1:' + oport, runnerUrl: 'http://127.0.0.1:1' });
+  const a2 = A.createServer({ port: 0, dataDir: data, brainDir: path.join(dir, 'brain'), bodyUrl: 'http://127.0.0.1:' + fport, runnerUrl: 'http://127.0.0.1:1' });
+  const p1 = await listen(a1), p2 = await listen(a2);
+  try {
+    let r = await request(p1, 'GET', '/api/deaths'); assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.json.blackbox.from, 'диск'); assert.strictEqual(r.json.blackbox.notRestarted, true); assert(/ещё не перезапущено/.test(r.json.blackbox.note));
+    assert.strictEqual(r.json.blackbox.items.length, 1, 'чужой notes.txt в список не попал'); assert.strictEqual(r.json.blackbox.items[0].by, 'skill:miner'); assert.strictEqual(r.json.blackbox.items[0].cause, 'drowned');
+    assert.strictEqual(r.json.ledger.from, 'диск'); assert(/ещё не перезапущено/.test(r.json.ledger.note)); assert.strictEqual(r.json.ledger.ledger.totals.in, 4);
+    assert.strictEqual(r.json.ledger.ledger.bySource['skill:miner'].in, 4);
+    r = await request(p1, 'GET', '/api/blackbox_file?name=death-20261021-120000.json'); assert.strictEqual(r.json.ok, true); assert.strictEqual(r.json.data.frames.length, 1);
+    for (const bad of ['../ledger.json', 'notes.txt', '..%2f..%2fstats.json', '', 'death-/../x.json'])
+      assert.strictEqual((await request(p1, 'GET', '/api/blackbox_file?name=' + bad)).json.ok, false, 'отказ: ' + bad);
+    r = await request(p2, 'GET', '/api/deaths');
+    assert.strictEqual(r.json.blackbox.from, 'тело'); assert.strictEqual(r.json.blackbox.items[0].cause, 'из тела'); assert.strictEqual(r.json.ledger.from, 'тело'); assert.strictEqual(r.json.ledger.ledger.totals.in, 9);
+    r = await request(p2, 'GET', '/api/blackbox_file?name=death-20261021-120000.json'); assert.strictEqual(r.json.ok, true);
+  } finally { for (const s of [a1, a2, old, fresh]) { s.close(); if (s.closeAllConnections) s.closeAllConnections(); } }
+  // команды наблюдателю тело не принимает, новые GET на месте (bot.js читаем как текст)
+  const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+  assert(/case '\/blackbox':/.test(src) && /case '\/blackbox\/file':/.test(src) && /case '\/ledger':/.test(src), 'bot.js: GET /blackbox, /blackbox/file, /ledger');
+  assert((src.match(/isObserver\(req\)\) return send\(res, 403/g) || []).length >= 2, 'bot.js: наблюдатель не отдаёт команды (/do и POST /cmd)');
+}
+
 module.exports = async function testAudit() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-test-'));
   try {
@@ -344,6 +383,7 @@ module.exports = async function testAudit() {
     testFiles(dir);
     testObserverAndOwnerMsg();
     await testServer(dir);
+    await testBlackboxAudit(dir);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   console.log('audit: OK');
 };

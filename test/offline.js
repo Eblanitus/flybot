@@ -43,6 +43,10 @@ async function testTasks() {
   r = await run('seq', 10, { wait: true, noQueue: true }); assert(!r.ok);
   await tm.stop(); await sleep(50);
   r = await run('seqlong', 600, { wait: true, noQueue: true }); assert(r.ok && !r.running && r.result.name === 'seqlong');
+  // кто отдал действие: by по умолчанию = source, навык исполнителя пишется в события
+  assert.strictEqual(events.find(e => e.type === 'task_started' && e.name === 'fast').by, 'brain');
+  r = await run('viaskill', 20, { wait: true, by: 'skill:miner' }); assert(r.ok);
+  assert(events.find(e => e.type === 'task_done' && e.name === 'viaskill' && e.by === 'skill:miner' && e.source === 'brain'), 'by в task_done');
   // старые простые команды
   assert.strictEqual((await tm.body(async () => ({ ok: true }))).ok, true);
   console.log('tasks: OK');
@@ -58,4 +62,4 @@ async function runVariantTests() {
 }
 
 module.exports = { testTasks, runVariantTests };
-if (require.main === module) testTasks().then(() => require('./shelter')()).then(() => require('./core_fixes')()).then(() => require('./collect')()).then(() => require('./autopilot')()).then(() => require('./critic')()).then(() => require('./perception')()).then(() => require('./day_routine')()).then(() => require('./defense')()).then(() => require('./melee')()).then(() => require('./basic')()).then(() => require('./project_skills')()).then(() => require('./worldmem')()).then(() => require('./survival_skills')()).then(() => require('./variants')()).then(runVariantTests).then(() => require('./owner')()).then(() => require('./daylog')()).then(() => require('./audit')()).then(() => require('./behavior')()).then(() => console.log('all OK'), e => { console.error(e); process.exit(1); });
+if (require.main === module) testTasks().then(() => require('./shelter')()).then(() => require('./core_fixes')()).then(() => require('./collect')()).then(() => require('./autopilot')()).then(() => require('./critic')()).then(() => require('./perception')()).then(() => require('./day_routine')()).then(() => require('./defense')()).then(() => require('./melee')()).then(() => require('./basic')()).then(() => require('./project_skills')()).then(() => require('./worldmem')()).then(() => require('./survival_skills')()).then(() => require('./variants')()).then(runVariantTests).then(() => require('./owner')()).then(() => require('./daylog')()).then(() => require('./blackbox')()).then(() => require('./ledger')()).then(() => require('./audit')()).then(() => require('./behavior')()).then(() => console.log('all OK'), e => { console.error(e); process.exit(1); });

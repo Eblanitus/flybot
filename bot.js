@@ -14,6 +14,9 @@
 //   GET  /critic                — критик: затупы за час, простой, смерти, прогресс, что чинить в теле
 //   GET  /variants[?list=1|family=melee] — способы действий (lib/variants): статистика исходов / описание вариантов
 //   GET  /behavior              — поведение (behavior/): активная версия, рабочие версии, история откатов
+//   GET  /blackbox[?limit=N]    — чёрный ящик: файлы смертей и почти-смертей (data/blackbox) с краткой сводкой
+//   GET  /blackbox/file?name=.. — содержимое одного файла чёрного ящика (только из data/blackbox)
+//   GET  /ledger                — учёт ресурсов: приход/расход предметов по причинам, дням и источникам
 //   POST /behavior/reload       — перечитать behavior/ без перезапуска тела (сломанная версия не включится)
 //   POST /cmd {"action":"...","params":{...}}  (Content-Type: application/json)
 'use strict';
@@ -31,6 +34,9 @@ const { BehaviorHost } = require('./lib/behavior_host');
 const referee = require('./lib/referee');
 const { snapshot, eyes } = require('./lib/perception');
 const { makeDispatcher } = require('./lib/commands');
+const origin = require('./lib/origin'); // кто отдал действие: brain / autopilot / skill:<имя>
+const { BlackBox } = require('./lib/blackbox'); // чёрный ящик: последние ~60 с, запись при смерти и почти-смерти
+const { Ledger } = require('./lib/ledger'); // учёт ресурсов: приход/расход предметов с причиной и источником
 const vision = require('./lib/vision');
 const { cellKey } = require('./lib/skills/gather');
 const { ChatLog } = require('./lib/chatlog');
@@ -58,6 +64,8 @@ const ctx = {
   movements: null, sprintMovements: null
 };
 ctx.tasks = new TaskManager(ctx);
+ctx.blackbox = new BlackBox(ctx);
+ctx.ledger = new Ledger(ctx);
 ctx.chat = new ChatLog(40); // чат/системные строки/экшн-бар — мозг читает их из /snapshot
 const behavior = new BehaviorHost(ctx); // поведение (behavior/): загрузка, проверка, перезагрузка, откат
 
@@ -86,6 +94,8 @@ ctx.events.push = (type, data) => {
   const ev = origPush(type, data);
   fs.promises.appendFile(EVENTS_LOG, JSON.stringify(ev) + '\n').catch(() => {});
   try { statusFromEvent(type, data || {}); } catch (e) {}
+  try { ctx.blackbox.onEvent(type, data || {}); } catch (e) {}
+  try { ctx.ledger.onEvent(type, data || {}); } catch (e) {}
   return ev;
 };
 
@@ -126,13 +136,15 @@ setInterval(() => saveStats(), 10000);
 const dispatch = makeDispatcher(ctx);
 
 // Кто прислал команду: пока исполнитель (:3200) выполняет навык, запущенный автопилотом, его запросы (node, без
-// User-Agent) — это автопилот; всё остальное — мозг (curl, или исполнитель с навыком мозга). Команда мозга
-// сначала вытесняет автопилот (прерывает его выученный навык), потом выполняется.
-async function fromBrainOrAutopilot(req, cmd) {
+// User-Agent) — это автопилот; всё остальное — мозг (curl, или исполнитель с навыком мозга: тогда в команде src: "skill:<имя>").
+// Команда мозга сначала вытесняет автопилот (прерывает его выученный навык), потом выполняется.
+// -> { source: 'brain'|'autopilot', by: 'brain'|'autopilot'|'skill:<имя>' }
+async function fromBrainOrAutopilot(req, cmd, srcParam) {
   const ap = ctx.autopilot;
-  if (ap && !req.headers['user-agent'] && ap.ownsRunner()) return 'autopilot';
-  if (ap) { try { await ap.brainCommand(cmd && (cmd.action || cmd.cmd)); } catch (e) {} }
-  return 'brain';
+  const internal = !req.headers['user-agent'];
+  const o = origin.resolve({ internal, autopilotOwnsRunner: !!(ap && ap.ownsRunner()), src: (cmd && cmd.src) || srcParam || req.headers['x-source'] });
+  if (o.source === 'brain' && ap) { try { await ap.brainCommand(cmd && (cmd.action || cmd.cmd)); } catch (e) {} }
+  return o;
 }
 
 // ---------- Подключение с переподключением ----------
@@ -155,6 +167,8 @@ function connect() {
   behavior.attachSession(session); // рефлексы и автопилот (behavior/) — через хост
   critic.attach(ctx, session); // критик: затупы мозга/тела -> событие advice
   vision.attach(ctx, bot, session); // честное зрение: память увиденного + периодический просмотр
+  ctx.blackbox.attach(session); // чёрный ящик: кадры раз в секунду и на важных событиях
+  ctx.ledger.attach(session); // учёт ресурсов: приход/расход предметов
   try { require('./lib/daylog').attach(ctx, session); require('./lib/owner').attach(ctx, session); } catch (e) { console.log('[daylog/owner] не подключились:', e.message); } // итог дня + приказы хозяина без LLM
   try { require('./lib/worldmem').attach(ctx, bot, session); } catch (e) { console.log('[worldmem] не подключилась:', e.message); } // постоянная память мира (data/world.json)
 
@@ -230,7 +244,7 @@ function queryToCmd(q, nameKey) {
   if (!name) return { error: `нет ${nameKey}: пример /do?action=collect&block=log&count=8&wait=1` };
   const params = {};
   for (const [k, v] of q) {
-    if (k === nameKey || k === 'wait') continue;
+    if (k === nameKey || k === 'wait' || k === 'src') continue;
     try { params[k] = JSON.parse(v); } catch (e) { params[k] = v; }
   }
   const w = q.get('wait');
@@ -250,10 +264,11 @@ const server = http.createServer(async (req, res) => {
         case '/do': {
           // быстрая команда без JSON-файла: /do?action=collect&block=log&count=8&wait=1
           if (fromBrowser(req)) return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' });
+          if (require('./lib/audit_api').isObserver(req)) return send(res, 403, { ok: false, error: 'наблюдатель (X-Observer) команды не отдаёт' });
           const { cmd, error } = queryToCmd(q, 'action');
           if (error) return send(res, 400, { ok: false, error });
-          const source = await fromBrainOrAutopilot(req, cmd);
-          return send(res, 200, await dispatch(cmd, { source, internal: !req.headers['user-agent'] }));
+          const o = await fromBrainOrAutopilot(req, cmd, q.get('src'));
+          return send(res, 200, await dispatch(cmd, { source: o.source, by: o.by, internal: !req.headers['user-agent'] }));
         }
         case '/snapshot': return send(res, 200, require('./lib/danger').decorate(ctx, require('./lib/daylog').decorate(ctx, require('./lib/worldmem').decorate(ctx, require('./lib/variants').decorate(ctx, require('./lib/experience').decorate(ctx, snapshot(ctx)))))));
         case '/memory': return send(res, 200, require('./lib/worldmem').handleMemory(ctx, q)); // ?kind=iron_ore&near=x,y,z&limit=5
@@ -272,6 +287,9 @@ const server = http.createServer(async (req, res) => {
           return send(res, 200, { ok: true, autopilot: ap.status(), history: ap.history.slice(-10) });
         }
         case '/behavior': return send(res, 200, { ok: true, ...behavior.status() }); // для программы аудита
+        case '/blackbox': return send(res, 200, ctx.blackbox.list(parseInt(q.get('limit') || '100', 10) || 100)); // чёрный ящик: список файлов смертей и почти-смертей
+        case '/blackbox/file': { const r = ctx.blackbox.readFile(q.get('name')); return send(res, r.ok ? 200 : (r.status || 400), r.ok ? r.data : { ok: false, error: r.error }); }
+        case '/ledger': return send(res, 200, ctx.ledger.summary()); // учёт ресурсов (только чтение)
         case '/critic': return send(res, 200, ctx.critic ? ctx.critic.summary() : { ok: false, error: 'критик ещё не запущен (бот не подключён)' });
         case '/stats': return send(res, 200, { ...ctx.stats, ...ctx.statsBrief() });
         case '/task': return send(res, 200, { task: ctx.tasks.info(), history: ctx.tasks.history.slice(-10) });
@@ -313,8 +331,9 @@ const server = http.createServer(async (req, res) => {
         let cmd;
         try { cmd = JSON.parse(body || '{}'); } catch (e) { return send(res, 400, { ok: false, error: 'bad json' }); }
         if (!cmd || typeof cmd !== 'object') return send(res, 400, { ok: false, error: 'bad json' });
-        const source = await fromBrainOrAutopilot(req, cmd);
-        const result = await dispatch(cmd, { source, internal: !req.headers['user-agent'] });
+        if (require('./lib/audit_api').isObserver(req)) return send(res, 403, { ok: false, error: 'наблюдатель (X-Observer) команды не отдаёт' });
+        const o = await fromBrainOrAutopilot(req, cmd);
+        const result = await dispatch(cmd, { source: o.source, by: o.by, internal: !req.headers['user-agent'] });
         send(res, 200, result);
       });
       return;
@@ -353,13 +372,13 @@ server.headersTimeout = 60000;
 
 process.on('unhandledRejection', (e) => { console.log('[warn] unhandledRejection:', e && e.message ? e.message : e); });
 process.on('uncaughtException', (e) => { console.log('[warn] uncaughtException:', e && e.stack ? e.stack : e); });
-const shutdown = async () => { await saveStats(true); process.exit(0); };
+const shutdown = async () => { await saveStats(true); try { ctx.ledger.flush(); } catch (e) {} process.exit(0); };
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 
 server.on('error', (e) => { console.log('[http] error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
 server.listen(CONTROL, '127.0.0.1', () => {
   console.log(`[http] control API on http://127.0.0.1:${CONTROL}`);
-  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior   POST /cmd /owner_msg /behavior/reload');
+  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior /blackbox /ledger   POST /cmd /owner_msg /behavior/reload');
   try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
   behavior.init().catch(e => console.log('[behavior] init:', e && e.message)); // проверка behavior/ и включение (к боту подключится, когда он будет)
   connect();

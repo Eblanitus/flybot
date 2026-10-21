@@ -246,10 +246,83 @@ async function loadReq() {
 }
 
 // ---------- Смерти и дни ----------
+let openBox = null;
+const boxCache = {}; // имя файла -> содержимое (страница перерисовывается каждые 2,5 с — не качаем файл заново)
+const KIND_RU = { death: 'смерть', near: 'почти-смерть' };
+const THREAT_RU = { air: 'воздух', fire: 'огонь', lava: 'лава', hunger: 'голод', fall: 'падение', damage: 'урон', void: 'пустота' };
+const byRu = b => b == null ? '—' : b.startsWith('skill:') ? 'навык ' + b.slice(6) : ({ brain: 'мозг', autopilot: 'автопилот', reflex: 'рефлекс', owner: 'хозяин' }[b] || b);
+const worstRu = w => w ? `${THREAT_RU[w.kind] || w.kind}: ${w.ttdSec} с` : '—';
+function renderBlackbox(b) {
+  if (!b) return '';
+  let h = `<h2>Чёрный ящик <span class="dim small">(кадры за последнюю минуту перед смертью и почти-смертью; данные: ${esc(b.from)}${b.total != null ? ', файлов: ' + b.total : ''})</span></h2>`;
+  if (b.note) h += `<div class="box small ${b.notRestarted ? 'warn' : 'dim'}">${esc(b.note)}</div>`;
+  if (!b.items.length) return h + '<div class="box dim">Записей пока нет.</div>';
+  h += '<table><tr><th>Когда</th><th>Что</th><th>Причина</th><th>Последняя задача — кто отдал</th><th>Кадров</th></tr>';
+  for (const i of b.items) {
+    const t = i.lastTask ? `${esc(i.lastTask.name)} — <b>${esc(byRu(i.by))}</b>` : '<span class="dim">задачи не было</span>';
+    h += `<tr class="click" data-box="${esc(i.name)}"><td>${tm(i.ts)}</td><td><span class="tag ${i.kind === 'death' ? 'bad' : 'warn'}">${esc(KIND_RU[i.kind] || i.kind)}</span></td>`
+      + `<td>${esc(i.cause || '—')}${i.minHp != null ? `<div class="dim small">самое низкое HP: ${i.minHp}</div>` : ''}${i.message ? `<div class="dim small">${esc(i.message)}</div>` : ''}</td><td class="small">${t}</td><td>${i.frames}</td></tr>`;
+    if (openBox === i.name) h += `<tr><td colspan="5"><div id="boxDetail" class="detail dim">загружаю…</div></td></tr>`;
+  }
+  return h + '</table>';
+}
+function renderBoxFrames(rec) {
+  const s = rec.summary || {}, frames = rec.frames || [];
+  let h = `<h2>${esc(KIND_RU[rec.kind] || rec.kind)}: ${esc(s.cause || '—')}</h2>`;
+  const lines = [];
+  if (s.message) lines.push(esc(s.message));
+  if (s.pos) lines.push('где: ' + s.pos.join(' '));
+  if (s.lastDamage) lines.push(`последний урон: ${esc(s.lastDamage.cause)} (${s.lastDamage.agoSec} с до кадра)`);
+  if (rec.kind === 'near') lines.push(`серий: ${s.series || 1}, самое низкое HP: ${s.minHp}, худшее до смерти: ${esc(worstRu(s.worst))}, поводы: ${esc((s.why || []).join('; '))}`);
+  if (rec.lost) lines.push('потерянный инвентарь: ' + (Object.entries(rec.lost.items).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => `${esc(itemRu(k))} ×${v}`).join(', ') || 'ничего') + (rec.lost.armor && rec.lost.armor.length ? '; броня: ' + rec.lost.armor.map(esc).join(', ') : ''));
+  h += lines.map(l => `<div class="small">${l}</div>`).join('');
+  const last = frames.length ? frames[frames.length - 1].t : 0, shown = frames.slice(-120).reverse();
+  h += `<h2>Кадры <span class="dim small">(новые сверху${frames.length > shown.length ? ', показаны последние ' + shown.length + ' из ' + frames.length : ''})</span></h2>`;
+  h += '<table><tr><th>Время</th><th>HP</th><th>Воздух</th><th>Худшее до смерти</th><th>Задача</th><th>Кто отдал</th><th>Мобы рядом</th></tr>';
+  for (const f of shown) {
+    const air = f.air ? (f.air.under ? `<span class="warn">под водой ${f.air.sec} с</span>` : 'в норме') : '—';
+    const mobs = (f.mobs || []).slice(0, 4).map(m => `${esc(mobRu(m.name))} ${m.d} м ${esc(m.dir)}`).join(', ') || '—';
+    const hurt = f.hurt ? `<div class="dim small">урон: ${esc(f.hurt.cause)}, ${f.hurt.agoSec} с назад</div>` : '';
+    h += `<tr><td>${tm(f.t)}<div class="dim small">${Math.round((f.t - last) / 1000)} с${f.why && f.why !== 'тик' ? ' · ' + esc(f.why) : ''}</div></td><td class="${f.hp <= 4 ? 'bad' : ''}">${f.hp == null ? '—' : f.hp}</td><td class="small">${air}</td>`
+      + `<td class="small ${f.worst && f.worst.ttdSec <= 3 ? 'bad' : ''}">${esc(worstRu(f.worst))}</td><td class="small">${f.task ? esc(f.task.name) : '<span class="dim">нет</span>'}</td><td class="small">${f.task ? esc(byRu(f.task.by)) : '—'}</td><td class="small">${mobs}${hurt}</td></tr>`;
+  }
+  return h + '</table>';
+}
+async function loadBox() {
+  if (!openBox) return;
+  const box = $('boxDetail'); if (!box) return;
+  const name = openBox;
+  if (!boxCache[name]) {
+    const d = await get('/api/blackbox_file?name=' + encodeURIComponent(name));
+    if (openBox !== name) return;
+    if (!d.ok) { const b2 = $('boxDetail'); if (b2) b2.textContent = d.error || 'не прочиталось'; return; }
+    boxCache[name] = d.data;
+  }
+  const b3 = $('boxDetail'); if (!b3) return;
+  b3.classList.remove('dim'); b3.innerHTML = renderBoxFrames(boxCache[name]);
+}
+function renderLedger(w) {
+  let h = '<h2>Учёт ресурсов <span class="dim small">(что пришло и ушло, по изменениям инвентаря; «неизвестно» — причину установить не удалось)</span></h2>';
+  if (w.note) h += `<div class="box small ${w.notRestarted ? 'warn' : 'dim'}">${esc(w.note)}</div>`;
+  const L = w.ledger;
+  if (!L) return h + '<div class="box dim">Данных учёта пока нет.</div>';
+  const lab = k => (L.labels && L.labels[k]) || k;
+  const t = L.totals;
+  h += `<div class="box small">Пришло всего: <b>${t.in}</b> (неизвестно: ${t.unknownIn}), ушло всего: <b>${t.out}</b> (неизвестно: ${t.unknownOut}). Ведётся с ${tm(Date.parse(L.since))}. Данные: ${esc(w.from)}.</div>`;
+  const rs = m => Object.entries(m || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(lab(k))} ${v}`).join(', ') || '—';
+  h += '<div class="two"><div><h2>По предметам</h2><table><tr><th>Предмет</th><th>Пришло</th><th>Ушло</th><th>Итог</th></tr>'
+    + L.items.slice(0, 40).map(i => `<tr><td><b>${esc(itemRu(i.item))}</b></td><td>${i.in}<div class="dim small">${rs(i.inBy)}</div></td><td>${i.out}<div class="dim small">${rs(i.outBy)}</div></td><td class="${i.net < 0 ? 'bad' : 'ok'}">${i.net > 0 ? '+' : ''}${i.net}</td></tr>`).join('') + '</table></div>';
+  h += '<div><h2>По тому, кто отдал действие</h2><table><tr><th>Источник</th><th>Пришло</th><th>Ушло</th></tr>'
+    + Object.entries(L.bySource).sort((a, b) => (b[1].in + b[1].out) - (a[1].in + a[1].out)).map(([k, v]) => `<tr><td>${esc(byRu(k))}</td><td>${v.in}</td><td>${v.out}</td></tr>`).join('') + '</table>';
+  h += '<h2>По игровым дням</h2><table><tr><th>День</th><th>Пришло</th><th>Ушло</th><th>Неизвестно</th><th>Главное</th></tr>'
+    + L.byDay.slice().reverse().slice(0, 30).map(d => `<tr><td><b>${esc(d.day === 'older' ? 'раньше' : d.day)}</b></td><td>${d.in}</td><td>${d.out}</td><td>${d.unknown}</td><td class="small">${d.top.slice(0, 4).map(x => `${esc(itemRu(x.item))} +${x.in}/−${x.out}`).join(', ')}</td></tr>`).join('') + '</table></div></div>';
+  return h;
+}
 function renderDeaths(d) {
   let h = `<div class="two"><div><h2>Смерти <span class="dim small">(всего в журнале: ${d.deaths.length}, новые сверху)</span></h2>`;
   h += '<table><tr><th>№</th><th>Когда</th><th>Причина</th><th>Где (x z)</th><th>Высота</th></tr>' + d.deaths.map(x => `<tr><td>${x.n}</td><td>${tm(x.ts)}<div class="dim small">${esc(x.timeOfDay)}</div></td><td>${esc(x.cause)}<div class="dim small">${esc(x.msg)}</div></td><td>${x.x} ${x.z}</td><td>${x.y}</td></tr>`).join('') + '</table></div>';
   h += '<div><h2>Итоги дней</h2><table><tr><th>День</th><th>Когда записан</th><th>Итог</th></tr>' + d.days.map(x => `<tr><td><b>${x.day}</b></td><td>${tm(x.ts)}</td><td class="small">${esc(x.line)}</td></tr>`).join('') + '</table></div></div>';
+  h += renderBlackbox(d.blackbox) + renderLedger(d.ledger || {});
   return h;
 }
 
@@ -333,6 +406,7 @@ async function tick() {
       pane.querySelectorAll('.feed').forEach((f, i) => { if (feeds[i]) f.scrollTop = feeds[i]; });
       window.scrollTo(0, y);
       if (cur === 'engineer') loadReq();
+      if (cur === 'deaths') loadBox();
     }
   } catch (e) {
     $('lamps').innerHTML = lamp('bad', 'Программа «Аудит» не отвечает: ' + e.message);
@@ -342,6 +416,8 @@ async function tick() {
 document.addEventListener('click', e => {
   const tr = e.target.closest('tr[data-req]');
   if (tr) { openReq = openReq === tr.dataset.req ? null : tr.dataset.req; tick(); }
+  const tb = e.target.closest('tr[data-box]');
+  if (tb) { openBox = openBox === tb.dataset.box ? null : tb.dataset.box; tick(); }
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'chkOut') { showOut = e.target.checked; tick(); }

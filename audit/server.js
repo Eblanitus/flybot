@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { checkOwnerText } = require('../lib/audit_api');
+const bbFiles = require('../lib/blackbox_files'); // файлы чёрного ящика (без зависимостей): запасной путь, когда тело не отвечает
+const ledgerSummary = require('../lib/ledger_summary');
 
 const ROOT = path.join(__dirname, '..');
 const DEFAULTS = {
@@ -526,6 +528,40 @@ async function remoteCached(key, ttlMs, fn) {
   return pending;
 }
 
+// Чёрный ящик и учёт — сначала у тела (GET /blackbox, /ledger), иначе с диска. 404 от тела = оно ещё не перезапущено после обновления.
+const NOT_RESTARTED = 'тело ещё не перезапущено — чёрного ящика и учёта в нём пока нет';
+function bodyNote(r) {
+  if (r.ok && r.status === 404) return { note: NOT_RESTARTED, notRestarted: true };
+  if (r.ok) return { note: 'тело ответило ' + r.status };
+  return { note: 'тело не отвечает (' + r.error + ')' };
+}
+async function loadBlackbox(cfg) {
+  return remoteCached('bb:' + cfg.bodyUrl + '|' + cfg.dataDir, 5000, async () => {
+    const r = await httpJson(cfg.bodyUrl, 'GET', '/blackbox?limit=100', null, 3000);
+    if (r.ok && r.status === 200 && r.json && Array.isArray(r.json.items)) return { from: 'тело', total: r.json.total, items: r.json.items };
+    const disk = bbFiles.list(path.join(cfg.dataDir, 'blackbox'), 100);
+    return { from: 'диск', ...bodyNote(r), total: disk.total, items: disk.items };
+  });
+}
+async function loadLedger(cfg) {
+  return remoteCached('ledger:' + cfg.bodyUrl + '|' + cfg.dataDir, 5000, async () => {
+    const r = await httpJson(cfg.bodyUrl, 'GET', '/ledger', null, 3000);
+    if (r.ok && r.status === 200 && r.json && r.json.totals) return { from: 'тело', ledger: r.json };
+    let o = null; try { o = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'ledger.json'), 'utf8')); } catch (e) {}
+    const base = { from: 'диск', ...bodyNote(r) };
+    if (!o || !o.days) return { ...base, ledger: null };
+    return { ...base, ledger: { ok: true, since: o.since || null, updated: o.savedAt || null, labels: ledgerSummary.REASONS, ...ledgerSummary.summarize(o.days), inventory: null } };
+  });
+}
+// Один файл ящика: у тела, а если оно не отвечает — с диска (имя проверяется до запроса)
+async function loadBlackboxFile(cfg, name) {
+  if (typeof name !== 'string' || !bbFiles.FILE_RE.test(name)) return { ok: false, error: 'плохое имя файла' };
+  const r = await httpJson(cfg.bodyUrl, 'GET', '/blackbox/file?name=' + encodeURIComponent(name), null, 5000);
+  if (r.ok && r.status === 200 && r.json && r.json.frames) return { ok: true, data: r.json };
+  const d = bbFiles.readFile(path.join(cfg.dataDir, 'blackbox'), name);
+  return d.ok ? { ok: true, data: d.data } : { ok: false, error: d.error };
+}
+
 async function loadBody(cfg) {
   return remoteCached('body:' + cfg.bodyUrl, 2000, async () => {
     const r = await httpJson(cfg.bodyUrl, 'GET', '/snapshot', null, 4000);
@@ -595,7 +631,8 @@ async function api(cfg, name, q) {
     }
     case 'engineer': return { now, items: engineerList(cfg).map(i => ({ ...i, statusRu: STATUS_RU[i.status] })) };
     case 'request': return engineerDetail(cfg, q.get('name'));
-    case 'deaths': return { now, ...loadDeaths(cfg) };
+    case 'deaths': return { now, ...loadDeaths(cfg), blackbox: await loadBlackbox(cfg), ledger: await loadLedger(cfg) };
+    case 'blackbox_file': return loadBlackboxFile(cfg, q.get('name'));
     case 'service': { const s = loadService(cfg); const r = await loadRunner(cfg); return { now, ...s, runner: r }; }
     case 'chat': { const { events } = loadEvents(cfg); return { now, items: chatFeed(events, 120, q.get('system') === '1') }; }
   }
@@ -654,7 +691,7 @@ function createServer(opts) {
 module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
-  engineerList, engineerDetail, collapsePolls, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, api, taskRu
+  engineerList, engineerDetail, collapsePolls, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, api, taskRu
 };
 
 if (require.main === module) {

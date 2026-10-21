@@ -59,13 +59,15 @@ function loadSkillModule(file, name) {
 }
 
 // ---------- API для навыка (поверх HTTP тела) ----------
-function makeApi(ctx, depth) {
+function makeApi(ctx, depth, skillName) {
   const url = ctx.bodyUrl;
   const sleepMs = ms => new Promise(r => setTimeout(r, Math.max(0, Number(ms) || 0)));
 
   async function bodyCall(action, params, extra) {
     let r;
-    try { r = await bodyapi.post(url, '/cmd', { action, params: params || {}, ...extra }); }
+    // src — кто отдал действие: тело пишет его в чёрный ящик и учёт ресурсов (верит только запросам исполнителя)
+    const src = skillName ? { src: 'skill:' + skillName } : {};
+    try { r = await bodyapi.post(url, '/cmd', { action, params: params || {}, ...extra, ...src }); }
     catch (e) { throw new Error(`cmd(${action}): ${e.message}`); }
     return r;
   }
@@ -125,7 +127,7 @@ function makeApi(ctx, depth) {
       }
       api.log(`→ skill ${name}`);
       try {
-        let res = await mod.run(makeApi(ctx, depth + 1), params && typeof params === 'object' ? params : {});
+        let res = await mod.run(makeApi(ctx, depth + 1, name), params && typeof params === 'object' ? params : {});
         if (res === undefined) res = { ok: true };
         const ok = !(res && typeof res === 'object' && res.ok === false);
         send({ type: 'nested', name, ok, error: ok ? null : String(res.error || 'ok:false') });
@@ -179,7 +181,7 @@ async function main(msg) {
     try { mod = loadSkillModule(file, name); }
     catch (e) { return send({ type: 'result', ok: false, error: fmtError(e) }); }
     try {
-      let res = await mod.run(makeApi(ctx, 0), msg.params && typeof msg.params === 'object' ? msg.params : {});
+      let res = await mod.run(makeApi(ctx, 0, name), msg.params && typeof msg.params === 'object' ? msg.params : {});
       if (res === undefined || res === null) res = { ok: true };
       if (typeof res !== 'object' || Array.isArray(res)) res = { ok: true, result: res };
       if (res.ok === false) return send({ type: 'result', ok: false, error: String(res.error || 'навык вернул ok:false без error'), value: res });
