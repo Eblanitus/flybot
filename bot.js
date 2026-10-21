@@ -11,6 +11,7 @@
 //   GET  /events?since=N        — журнал последних событий
 //   GET  /task                  — текущий навык и история
 //   GET  /autopilot[?on=0|1]    — автопилот: состояние / выключить / включить
+//   GET  /critic                — критик: затупы за час, простой, смерти, прогресс, что чинить в теле
 //   POST /cmd {"action":"...","params":{...}}  (Content-Type: application/json)
 'use strict';
 const fs = require('fs');
@@ -29,6 +30,7 @@ const { makeDispatcher } = require('./lib/commands');
 const vision = require('./lib/vision');
 const { cellKey } = require('./lib/skills/gather');
 const { ChatLog } = require('./lib/chatlog');
+const critic = require('./lib/critic');
 
 const HOST = process.argv[2] || process.env.MC_HOST || 'localhost';
 const PORT = parseInt(process.argv[3] || process.env.MC_PORT || '25565', 10);
@@ -46,7 +48,7 @@ const ctx = {
   events: new EventHub(200),
   stats: { deaths: 0, damageTaken: 0, blocksMined: 0, blocksPlaced: 0, distanceTraveled: 0, longestLifeSec: 0 },
   statsDirty: false,
-  processStart: Date.now(), aliveSince: null, lastPos: null,
+  dataDir: DATA_DIR, processStart: Date.now(), aliveSince: null, lastPos: null,
   lastDamage: null, combatUntil: 0, manualControl: false,
   visited: new Set(),
   movements: null, sprintMovements: null
@@ -145,6 +147,7 @@ function connect() {
   ctx.bot = bot; ctx.ready = false;
   bot.loadPlugin(pathfinder);
   reflexes.attach(ctx, session); // один раз на экземпляр бота
+  critic.attach(ctx, session); // критик: затупы мозга/тела -> событие advice
   vision.attach(ctx, bot, session); // честное зрение: память увиденного + периодический просмотр
 
   let firstSpawn = true;
@@ -242,7 +245,7 @@ const server = http.createServer(async (req, res) => {
           const source = await fromBrainOrAutopilot(req, cmd);
           return send(res, 200, await dispatch(cmd, { source, internal: !req.headers['user-agent'] }));
         }
-        case '/snapshot': return send(res, 200, snapshot(ctx));
+        case '/snapshot': return send(res, 200, require('./lib/experience').decorate(ctx, snapshot(ctx)));
         case '/autopilot': {
           // /autopilot?on=0|1 — выключить/включить; без параметров — состояние
           const ap = ctx.autopilot;
@@ -250,6 +253,7 @@ const server = http.createServer(async (req, res) => {
           if (q.has('on')) { if (fromBrowser(req)) return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); return send(res, 200, { ok: true, autopilot: await ap.setOn(!['0', 'false', 'off'].includes(String(q.get('on')).toLowerCase())) }); }
           return send(res, 200, { ok: true, autopilot: ap.status(), history: ap.history.slice(-10) });
         }
+        case '/critic': return send(res, 200, ctx.critic ? ctx.critic.summary() : { ok: false, error: 'критик ещё не запущен (бот не подключён)' });
         case '/stats': return send(res, 200, { ...ctx.stats, ...ctx.statsBrief() });
         case '/task': return send(res, 200, { task: ctx.tasks.info(), history: ctx.tasks.history.slice(-10) });
         case '/chat': {

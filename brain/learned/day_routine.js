@@ -1,9 +1,9 @@
 // day_routine — дневное развитие без мозга (5–10 мин): дерево → деревянная кирка → булыжник → каменные кирка и меч →
-// печь → уголь → железо → плавка → железные кирка/меч/броня; еда — охота и жарка, если есть нечего.
-// Уголь и железо — только увиденные (честное зрение); не видно — одна вылазка explore и снова.
+// печь → уголь → железо → плавка → железные кирка/меч/броня; пока железа нет — медь: плавка → медные кирка и броня (железо потом заменит); еда — охота и жарка, если есть нечего.
+// Уголь, железо и медь — только увиденные (честное зрение); не видно — одна вылазка explore и снова.
 // Выходит сам: скоро ночь, мало HP, max_sec, или делать больше нечего. Уже готовое пропускает.
-const PICK_ANY = /^(wooden|stone|golden|iron|diamond|netherite)_pickaxe$/;
-const PICK_STONE = /^(stone|iron|diamond|netherite)_pickaxe$/;
+const PICK_ANY = /^(wooden|stone|golden|copper|iron|diamond|netherite)_pickaxe$/;
+const PICK_STONE = /^(stone|copper|iron|diamond|netherite)_pickaxe$/;
 const AXE_ANY = /_axe$/;
 const SWORD_STONE = /^(stone|iron|diamond|netherite)_sword$/;
 const PICK_IRON = /^(iron|diamond|netherite)_pickaxe$/;
@@ -13,10 +13,14 @@ const FOOD_OK = /^(cooked_|bread$|baked_potato$|carrot$|apple$|golden_carrot$|me
 // железная броня: [предмет, слитков, слот брони — чем ещё может быть занят]
 const ARMOR = [['iron_chestplate', 8, /_chestplate$/], ['iron_helmet', 5, /_helmet$/], ['iron_leggings', 7, /_leggings$/], ['iron_boots', 4, /_boots$/]];
 const BETTER_ARMOR = /^(iron|diamond|netherite)_/;
+// медь (пока нет железа): кирка 3 слитка + броня, дёшево вперёд; медное или лучше уже есть — пропуск
+const PICK_COPPER = /^(copper|iron|diamond|netherite)_pickaxe$/;
+const COPPER_ARMOR = [['copper_boots', 4, /_boots$/], ['copper_helmet', 5, /_helmet$/], ['copper_leggings', 7, /_leggings$/], ['copper_chestplate', 8, /_chestplate$/]];
+const COPPER_OR_BETTER = /^(copper|iron|diamond|netherite)_/;
 
 module.exports = {
   name: 'day_routine',
-  description: 'Днём без мозга 5–10 мин: дерево → деревянная кирка → булыжник ×20 → каменные кирка/меч → печь → уголь и железо (только видимые, иначе explore) → плавка → железные кирка/меч/броня; если голоден и нечего есть — охота и жарка. Пропускает готовое. Сам выходит: скоро ночь (night_soon), HP<8, max_sec или делать нечего.',
+  description: 'Днём без мозга 5–10 мин: дерево → деревянная кирка → булыжник ×20 → каменные кирка/меч → печь → уголь, железо и медь (только видимые, иначе explore) → плавка → железные кирка/меч/броня (пока железа нет — медные кирка и броня); если голоден и нечего есть — охота и жарка. Пропускает готовое. Сам выходит: скоро ночь (night_soon), HP<8, max_sec или делать нечего.',
   params: {
     max_sec: 'потолок по времени, по умолчанию 600',
     stone: 'сколько булыжника держать, по умолчанию 20'
@@ -109,10 +113,14 @@ module.exports = {
       const ingots = m.iron_ingot || 0, rawIron = m.raw_iron || 0;
       const ironShort = Math.max(0, ingotsNeed - ingots - rawIron);
 
+      // медь, пока нет железной кирки: что ещё не сделано и сколько слитков нужно
+      const cuWant = has(m, PICK_IRON) ? [] : copperWant(m, snap.armor);
+      const cuNeed = cuWant.reduce((s, [, n]) => s + n, 0);
+
       // 4. уголь (видимый) — на плавку
       const coal = (m.coal || 0) + (m.charcoal || 0);
       const visible = k => !!(snap.eyes && snap.eyes.blocks && snap.eyes.blocks[k]);
-      if (has(m, PICK_ANY) && coal < 8 && (ironShort > 0 || rawIron > 0 || coal < 4) && visible('coal_ore')) {
+      if (has(m, PICK_ANY) && coal < 8 && (ironShort > 0 || rawIron > 0 || cuNeed > 0 || coal < 4) && visible('coal_ore')) {
         if (await step('уголь', 'collect', { block: 'coal', count: 8 - coal })) progress = true;
       }
       // 5. железо (видимое; нужна каменная кирка)
@@ -137,7 +145,26 @@ module.exports = {
         if ((m.iron_ingot || 0) < n) continue;
         if (await step(item, 'craft', { item })) progress = true;
       }
-      if (did.some(d => /^iron_/.test(d))) { try { await api.cmd('equip_best', { for: 'fight' }); } catch (e) {} }
+      // 8. медь — только пока нет железной кирки; железо приоритетнее (видимое железо при каменной кирке берём вместо меди)
+      m = await refresh();
+      if (!has(m, PICK_IRON)) {
+        const cu = copperWant(m, snap.armor), need = cu.reduce((s, [, n]) => s + n, 0);
+        const short = Math.max(0, need - (m.copper_ingot || 0) - (m.raw_copper || 0));
+        if (short > 0 && visible('copper_ore') && !(has(m, PICK_STONE) && visible('iron_ore') && ironShort > 0)) {
+          if (await step('медь', 'collect', { block: 'copper', count: Math.min(short, 8) })) progress = true;
+          m = await refresh();
+        }
+        const toSmelt = Math.min(m.raw_copper || 0, Math.max(0, need - (m.copper_ingot || 0)));
+        if (toSmelt > 0 && has(m, /^(coal|charcoal)$|_planks$|_log$/)) {
+          if (await step('плавка меди', 'smelt', { item: 'copper_ingot', count: toSmelt })) progress = true;
+          m = await refresh();
+        }
+        for (const [item, n] of cu) {
+          if ((m.copper_ingot || 0) < n) continue;
+          if (await step(item, 'craft', { item })) { progress = true; m = await refresh(); }
+        }
+      }
+      if (did.some(d => /^(iron|copper)_/.test(d))) { try { await api.cmd('equip_best', { for: 'fight' }); } catch (e) {} }
       if ((r = stopReason())) return finish(r);
 
       m = await refresh();
@@ -153,6 +180,15 @@ module.exports = {
     return finish('исчерпан лимит проходов');
   }
 };
+
+// недостающее медное: [предмет, слитков] — кирка, потом броня от дешёвого к дорогому; железная/медная замена уже есть — пропуск
+function copperWant(m, worn) {
+  const have = [...(worn || []), ...Object.keys(m)];
+  const out = [];
+  if (!Object.keys(m).some(n => PICK_COPPER.test(n) && m[n] > 0)) out.push(['copper_pickaxe', 3]);
+  for (const [item, n, slot] of COPPER_ARMOR) if (!have.some(x => slot.test(x) && COPPER_OR_BETTER.test(x))) out.push([item, n]);
+  return out;
+}
 
 function invMap(inv) {
   const m = {};
