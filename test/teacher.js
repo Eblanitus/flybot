@@ -205,7 +205,7 @@ async function testAudit(D) {
 async function testConfigs() {
   const root = path.join(__dirname, '..');
   const tc = JSON.parse(fs.readFileSync(path.join(root, 'brain', 'opencode.teacher.json'), 'utf8'));
-  assert.strictEqual(tc.model, 'opencode/mimo-v2.6-flash-free');
+  assert(!('model' in tc), 'модель учителя — в data/models.json, сторож передаёт её флагом -m; в конфиге она не задаётся');
   const allowEdit = Object.keys(tc.permission.edit).filter(k => tc.permission.edit[k] === 'allow');
   for (const k of allowEdit) assert(/(brain\/lessons\.md|brain\/lessons\.json|brain\/core_requests\.md|brain\/skill_requests\/\*|data\/teacher\/\*)$/.test(k), 'учителю лишнее: ' + k);
   assert.strictEqual(tc.permission.edit['*'], 'deny'); assert.strictEqual(tc.permission.webfetch, 'deny'); assert.strictEqual(tc.permission.bash['*'], 'deny');

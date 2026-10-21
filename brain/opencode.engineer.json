@@ -1,6 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "opencode/minimax-m3.1-flash-free",
   "permission": {
     "edit": {
       "*": "deny",

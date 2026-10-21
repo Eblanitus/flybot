@@ -1,12 +1,14 @@
 // «Аудит»: локальная страница, где видно, что делает каждая роль мухи (тело, автопилот и рефлексы, мозг, инженер, учитель, сторож),
 // и можно написать мозгу. Голый Node (http, fs), без npm-зависимостей. Порт 3300, только 127.0.0.1.
-// Файлы мухи НЕ меняет — только читает. Единственная запись — POST /owner_msg в тело (через его HTTP-API).
+// Файлы мухи только читает. Две записи: POST /owner_msg в тело (через его HTTP-API) и вкладка «Модели» — файл data/models.json (модель мозга, учителя, инженера).
 // Все запросы к телу и исполнителю идут с заголовком X-Observer: 1 — тело не считает их признаком «мозг жив».
 // Запуск: node audit/server.js   (или audit.cmd в корне проекта)
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { execFile } = require('child_process');
+const modelsCfg = require('../models_config'); // data/models.json: какая модель у какой роли (его же читают night.cmd и brain_guard.ps1)
 const { checkOwnerText } = require('../lib/audit_api');
 const bbFiles = require('../lib/blackbox_files'); // файлы чёрного ящика (без зависимостей): запасной путь, когда тело не отвечает
 const ledgerSummary = require('../lib/ledger_summary');
@@ -671,6 +673,121 @@ async function loadRunner(cfg) {
   });
 }
 
+// ======================= модели ролей (data/models.json) =======================
+// Единственное, что аудит ПИШЕТ в файлы мухи. Читают файл night.cmd (мозг), brain_guard.ps1 (учитель, инженер) — при каждом запуске роли.
+
+const ROLE_INFO = {
+  brain: { label: 'Мозг', when: 'со следующей сессии мозга (сессия кончается сама или её перезапускают; сразу — restart_brain.cmd)' },
+  teacher: { label: 'Учитель', when: 'со следующего случая учителя' },
+  engineer: { label: 'Инженер', when: 'со следующей заявки инженера' }
+};
+const FREE_TTL = 6 * 3600 * 1000;
+
+// Вывод `opencode models opencode --verbose`: строка «провайдер/модель», дальше JSON с ценой. Бесплатная = цена входа и выхода нулевая.
+function parseVerboseModels(text) {
+  const parts = String(text || '').split(/^([A-Za-z0-9_.-]+\/\S+)[ \t]*\r?$/m);
+  const out = [];
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    let j; try { j = JSON.parse(parts[i + 1]); } catch (e) { continue; }
+    if (!j || typeof j !== 'object' || !j.cost) continue;
+    if (j.status && j.status !== 'active') continue;
+    if (j.cost.input === 0 && j.cost.output === 0 && modelsCfg.validModelId(parts[i])) out.push(parts[i]);
+  }
+  return out;
+}
+// запасной разбор простого списка `opencode models`: только провайдер opencode и суффикс -free
+function parsePlainFree(text) {
+  return String(text || '').split(/\r?\n/).map(s => s.trim()).filter(s => /^opencode\/.+-free$/.test(s) && modelsCfg.validModelId(s));
+}
+
+function runShell(cmd, timeoutMs) {
+  return new Promise(resolve => {
+    try {
+      execFile(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', cmd], { timeout: timeoutMs, windowsHide: true, maxBuffer: 30 * 1024 * 1024, encoding: 'utf8' },
+        (err, stdout) => resolve(err && !stdout ? { ok: false, error: err.killed ? 'не ответила за ' + Math.round(timeoutMs / 1000) + ' с' : String(err.message || err).split('\n')[0] } : { ok: true, text: stdout }));
+    } catch (e) { resolve({ ok: false, error: String(e && e.message || e) }); }
+  });
+}
+
+const freeMem = new Map();
+async function loadFreeModels(cfg, force) {
+  const key = cfg.dataDir;
+  const m = freeMem.get(key);
+  if (!force && m && Date.now() - m.at < m.ttl) return m.value;
+  const cacheFile = path.join(cfg.dataDir, 'models_free.json');
+  let value, ttl = FREE_TTL;
+  const live = cfg.listFreeModels ? await cfg.listFreeModels() : await (async () => {
+    let r = await runShell('opencode models opencode --verbose', 30000);
+    let list = r.ok ? parseVerboseModels(r.text) : [];
+    if (!list.length) {
+      const r2 = await runShell('opencode models opencode', 30000);
+      if (r2.ok) list = parsePlainFree(r2.text);
+      if (!list.length) return { ok: false, error: r.ok && r2.ok ? 'в ответе opencode нет бесплатных моделей' : (r.error || r2.error) };
+    }
+    return { ok: true, list };
+  })();
+  if (live && live.ok && Array.isArray(live.list) && live.list.length) {
+    const list = [...new Set(live.list)].sort();
+    value = { list, from: 'opencode', at: Date.now(), error: null };
+    try { fs.mkdirSync(cfg.dataDir, { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ at: value.at, list })); } catch (e) {}
+  } else {
+    ttl = 60000; // не дёргать opencode каждые 2,5 с, если он не отвечает
+    let disk = null; try { disk = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (e) {}
+    const list = disk && Array.isArray(disk.list) ? disk.list.filter(modelsCfg.validModelId) : [];
+    value = { list, from: list.length ? 'кэш на диске' : 'нет', at: list.length ? disk.at : null, error: (live && live.error) || 'opencode models не ответил' };
+  }
+  freeMem.set(key, { at: Date.now(), ttl, value });
+  return value;
+}
+
+// Какие модели у запущенных сейчас opencode — по командным строкам процессов («opencode run --auto -m <модель> "You are the <роль> of the Minecraft bot…»)
+function parseOpencodeProcs(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const mm = /^(\d+)\t(.*)$/.exec(line); if (!mm) continue;
+    const role = /You are the (brain|teacher|engineer) of the Minecraft bot/.exec(mm[2]);
+    const model = /\s(?:-m|--model)[\s=]+"?([^\s"]+)/.exec(mm[2]);
+    if (role && model) out.push({ pid: +mm[1], role: role[1], model: model[1] });
+  }
+  return out;
+}
+async function loadRunningModels(cfg) {
+  if (cfg.runningModels) return cfg.runningModels();
+  if (process.platform !== 'win32') return null;
+  return remoteCached('running-models', 8000, () => new Promise(resolve => {
+    const script = "Get-CimInstance Win32_Process -Filter \"Name='opencode.exe'\" | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }";
+    try {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 10000, windowsHide: true, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' },
+        (err, stdout) => resolve(err ? null : parseOpencodeProcs(stdout)));
+    } catch (e) { resolve(null); }
+  }));
+}
+
+// Сторож, запущенный до этого обновления, файл моделей не читает: его последняя строка «сторож запущен» без упоминания models.json
+function guardReadsModels(cfg) {
+  const g = tailLines(path.join(cfg.dataDir, 'guard.log'), 100 * 1024);
+  if (!g) return null;
+  for (let i = g.lines.length - 1; i >= 0; i--) if (/сторож запущен/.test(g.lines[i])) return /models\.json/.test(g.lines[i]);
+  return null;
+}
+
+async function apiModels(cfg, q) {
+  const cur = modelsCfg.read(cfg.dataDir);
+  const [free, running] = await Promise.all([loadFreeModels(cfg, q && q.get('refresh') === '1'), loadRunningModels(cfg)]);
+  const roles = modelsCfg.ROLES.map(r => ({
+    role: r, label: ROLE_INFO[r].label, when: ROLE_INFO[r].when,
+    model: cur.models[r], source: cur.source[r], default: modelsCfg.DEFAULTS[r],
+    running: running ? running.filter(p => p.role === r).map(p => ({ pid: p.pid, model: p.model })) : null
+  }));
+  return { now: Date.now(), roles, free, guardReadsModels: guardReadsModels(cfg), file: path.join(cfg.dataDir, modelsCfg.FILE_NAME) };
+}
+function saveModels(cfg, body) {
+  const patch = {};
+  for (const r of modelsCfg.ROLES) if (body && Object.prototype.hasOwnProperty.call(body, r)) patch[r] = body[r];
+  for (const k of Object.keys(body || {})) if (!modelsCfg.ROLES.includes(k)) return { ok: false, error: 'неизвестная роль: ' + String(k).slice(0, 40) };
+  return modelsCfg.save(patch, cfg.dataDir);
+}
+
 // ======================= сборка ответов API =======================
 
 function brainStatus(cfg) {
@@ -713,6 +830,7 @@ async function api(cfg, name, q) {
     case 'showcase': return { now, ...(await loadShowcase(cfg)) };
     case 'teacher': return { now, ...loadTeacher(cfg) };
     case 'teacher_report': return teacherReport(cfg, q.get('name'));
+    case 'models': return apiModels(cfg, q);
   }
   return null;
 }
@@ -732,6 +850,22 @@ function createServer(opts) {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         let html; try { html = fs.readFileSync(cfg.page); } catch (e) { return sendJson(res, 500, { ok: false, error: 'нет audit/index.html' }); }
         res.statusCode = 200; res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.setHeader('Cache-Control', 'no-store'); return res.end(html);
+      }
+      if (req.method === 'GET' && url.pathname === '/models') return sendJson(res, 200, await apiModels(cfg, url.searchParams));
+      if (req.method === 'POST' && (url.pathname === '/api/models' || url.pathname === '/models')) {
+        const origin = req.headers.origin;
+        if (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) { req.resume(); return sendJson(res, 403, { ok: false, error: 'чужой сайт' }); }
+        if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) { req.resume(); return sendJson(res, 415, { ok: false, error: 'нужен Content-Type: application/json' }); }
+        let s = ''; let big = false;
+        req.on('data', c => { if (big) return; s += c; if (s.length > 4000) { big = true; req.resume(); sendJson(res, 413, { ok: false, error: 'слишком большой запрос' }); } });
+        req.on('end', () => {
+          if (big) return;
+          let b; try { b = JSON.parse(s || '{}'); } catch (e) { return sendJson(res, 400, { ok: false, error: 'bad json' }); }
+          if (!b || typeof b !== 'object' || Array.isArray(b)) return sendJson(res, 400, { ok: false, error: 'нужен объект {роль: модель}' });
+          const r = saveModels(cfg, b);
+          return sendJson(res, r.ok ? 200 : 400, r);
+        });
+        return;
       }
       if (req.method === 'GET' && url.pathname.startsWith('/api/')) {
         const r = await api(cfg, url.pathname.slice(5), url.searchParams);
@@ -769,6 +903,7 @@ function createServer(opts) {
 module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
+  parseVerboseModels, parsePlainFree, parseOpencodeProcs, loadFreeModels, apiModels, saveModels,
   engineerList, engineerDetail, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, api, taskRu
 };
 
@@ -778,7 +913,7 @@ if (require.main === module) {
     if (e.code === 'EADDRINUSE') { console.log('[аудит] порт 3300 уже занят — наверное, программа уже запущена: http://127.0.0.1:3300'); process.exit(0); }
     console.log('[аудит] ошибка:', e.message); process.exit(1);
   });
-  server.listen(server.cfg.port, '127.0.0.1', () => console.log('[аудит] http://127.0.0.1:' + server.cfg.port + '  (только чтение; Ctrl+C — выход)'));
+  server.listen(server.cfg.port, '127.0.0.1', () => console.log('[аудит] http://127.0.0.1:' + server.cfg.port + '  (Ctrl+C — выход)'));
   process.on('unhandledRejection', e => console.log('[аудит] warn:', e && e.message ? e.message : e));
   process.on('uncaughtException', e => console.log('[аудит] warn:', e && e.stack ? e.stack : e));
 }

@@ -56,6 +56,10 @@
   .compose button { background: var(--blue); color: #08111f; border: 0; border-radius: 10px; padding: 0 22px; font: inherit; font-weight: 700; cursor: pointer; }
   .compose button:disabled { opacity: .5; cursor: default; }
   pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 14px/1.4 Consolas, monospace; }
+  .card .mdv { font-size: 18px; word-break: break-all; }
+  .mdctl { display: block; width: 100%; background: #0d1015; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; margin: 4px 0 10px; }
+  .btn { background: var(--blue); color: #08111f; border: 0; border-radius: 10px; padding: 8px 20px; font: inherit; font-weight: 700; cursor: pointer; }
+  .btn:disabled { opacity: .5; cursor: default; }
   .detail { background: #0d1015; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 10px 0; }
 </style>
 </head>
@@ -74,13 +78,14 @@
   <section class="pane" id="p-deaths"></section>
   <section class="pane" id="p-teacher"></section>
   <section class="pane" id="p-showcase"></section>
+  <section class="pane" id="p-models"></section>
   <section class="pane" id="p-service"></section>
   <section class="pane" id="p-chat"></section>
 </main>
 
 <script>
 'use strict';
-const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['showcase', 'Витрина'], ['service', 'Служебное'], ['chat', 'Чат']];
+const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['showcase', 'Витрина'], ['models', 'Модели'], ['service', 'Служебное'], ['chat', 'Чат']];
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pad = n => String(n).padStart(2, '0');
@@ -388,6 +393,87 @@ async function sendChat() {
   chatSending = false; $('chatSend').disabled = false; tick();
 }
 
+// ---------- Модели ----------
+const MD_ROLES = ['brain', 'teacher', 'engineer'];
+function modelsShell(d) {
+  const cards = d.roles.map(r => `<div class="card" data-role="${r.role}">
+      <div class="t">${esc(r.label)}</div>
+      <div class="v mdv" id="md-cur-${r.role}"></div>
+      <div class="s" id="md-run-${r.role}"></div>
+      <label class="small dim" for="md-sel-${r.role}">Выбрать из бесплатных моделей opencode</label>
+      <select class="mdctl" id="md-sel-${r.role}"></select>
+      <label class="small dim" for="md-man-${r.role}">…или вписать id вручную (провайдер/модель)</label>
+      <input class="mdctl" id="md-man-${r.role}" type="text" maxlength="120" spellcheck="false" placeholder="например opencode/minimax-m3.1-flash-free">
+      <button class="btn" id="md-save-${r.role}">Сохранить</button>
+      <div class="small" id="md-st-${r.role}" style="margin-top:6px"></div>
+      <div class="s">Применится ${esc(r.when)}.</div>
+    </div>`).join('');
+  $('p-models').innerHTML = `<h2>Модели ролей</h2>
+    <div class="box small dim">Здесь выбирается, на какой модели работает каждая роль. Выбор записывается в файл <b>${esc(d.file)}</b> и берётся при следующем запуске роли — править файлы руками не нужно. В списке только бесплатные модели opencode.</div>
+    <div id="mdGuard"></div>
+    <div class="grid" style="margin-top:12px">${cards}</div>
+    <div style="margin-top:12px"><button class="btn" id="mdRefresh">Обновить список моделей</button> <span class="small dim" id="mdFree"></span></div>`;
+  for (const r of MD_ROLES) {
+    $('md-sel-' + r).onchange = e => { e.target.dataset.touched = '1'; };
+    $('md-save-' + r).onclick = () => saveModel(r);
+    $('md-man-' + r).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveModel(r); } });
+  }
+  $('mdRefresh').onclick = async () => {
+    $('mdFree').textContent = 'спрашиваю opencode…';
+    try { const d2 = await get('/api/models?refresh=1'); renderModels(d2); } catch (e) { $('mdFree').textContent = 'не вышло: ' + e.message; }
+  };
+}
+function renderModels(d) {
+  if (!$('md-sel-brain')) modelsShell(d);
+  $('mdGuard').innerHTML = d.guardReadsModels === false
+    ? '<div class="box small warn" style="margin-top:12px">Сторож (brain_guard.ps1) запущен до этого обновления и файл моделей не читает: смена модели учителя и инженера подействует только после его перезапуска (restart_brain.cmd или закрыть teach.cmd и запустить заново).</div>' : '';
+  for (const r of d.roles) {
+    const id = r.role;
+    $('md-cur-' + id).textContent = r.model;
+    const src = r.source === 'файл' ? 'сохранено в файле' : 'файла нет — значение по умолчанию';
+    let run = `<div>${esc(src)}</div>`;
+    if (r.running) {
+      if (!r.running.length) run += '<div>Сейчас не запущено.</div>';
+      else {
+        const models = [...new Set(r.running.map(p => p.model))];
+        const diff = models.some(m => m !== r.model);
+        run += `<div class="${diff ? 'warn' : 'ok'}">Работает сейчас на: <b>${esc(models.join(', '))}</b>${diff ? ' — это не сохранённая модель, сменится при следующем запуске' : ''}</div>`;
+      }
+    }
+    $('md-run-' + id).innerHTML = run;
+    const sel = $('md-sel-' + id);
+    const key = JSON.stringify([d.free.list, r.model]);
+    if (sel.dataset.key !== key) {
+      const keep = sel.dataset.touched ? sel.value : r.model;
+      const list = d.free.list.includes(r.model) ? d.free.list : [r.model, ...d.free.list];
+      sel.innerHTML = list.map(m => `<option value="${esc(m)}">${esc(m)}${m === r.model && !d.free.list.includes(m) ? ' (сейчас; нет в списке бесплатных)' : ''}</option>`).join('');
+      sel.value = list.includes(keep) ? keep : r.model;
+      sel.dataset.key = key;
+    }
+  }
+  const f = d.free;
+  $('mdFree').className = 'small ' + (f.from === 'opencode' ? 'dim' : 'warn');
+  $('mdFree').textContent = f.from === 'opencode' ? `Список: ${f.list.length} бесплатных, получен от opencode ${tm(f.at)}.`
+    : f.from === 'кэш на диске' ? `Список из кэша на диске (${tm(f.at)}): opencode не ответил (${f.error}).`
+    : `Списка нет: ${f.error}. Впиши id вручную.`;
+}
+async function saveModel(role) {
+  const st = $('md-st-' + role), btn = $('md-save-' + role);
+  const man = $('md-man-' + role).value.trim();
+  const model = man || $('md-sel-' + role).value;
+  if (!model) { st.className = 'small bad'; st.textContent = 'Модель не выбрана.'; return; }
+  btn.disabled = true; st.className = 'small dim'; st.textContent = 'сохраняю…';
+  try {
+    const r = await fetch('/api/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [role]: model }) });
+    const j = await r.json();
+    if (j.ok) {
+      st.className = 'small ok'; st.textContent = 'Сохранено: ' + j.models[role];
+      $('md-man-' + role).value = ''; delete $('md-sel-' + role).dataset.touched;
+    } else { st.className = 'small bad'; st.textContent = 'Не сохранено: ' + (j.error || '?'); }
+  } catch (e) { st.className = 'small bad'; st.textContent = 'Не сохранено: ' + e.message; }
+  btn.disabled = false; tick();
+}
+
 // ---------- обновление ----------
 // ---------- Учитель ----------
 let openRep = null;
@@ -481,7 +567,7 @@ function renderShowcase(d) {
 
 const RENDER = {
   body: ['/api/body', renderBody], reflex: ['/api/reflex', renderReflex], brain: ['/api/brain', renderBrain], engineer: ['/api/engineer', renderEngineer],
-  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], showcase: ['/api/showcase', renderShowcase], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
+  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], showcase: ['/api/showcase', renderShowcase], models: ['/api/models', renderModels], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
 };
 let busy = false;
 async function tick() {
@@ -491,7 +577,7 @@ async function tick() {
     const [u, fn] = RENDER[cur];
     const d = await get(typeof u === 'function' ? u() : u);
     const pane = $('p-' + cur);
-    if (cur === 'chat') fn(d);
+    if (cur === 'chat' || cur === 'models') fn(d); // у этих вкладок есть поля ввода — не перерисовываем целиком
     else {
       const y = window.scrollY, feeds = [...pane.querySelectorAll('.feed')].map(f => f.scrollTop);
       pane.innerHTML = fn(d);

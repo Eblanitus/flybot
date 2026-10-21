@@ -372,6 +372,124 @@ async function testBlackboxAudit(dir) {
   assert((src.match(/isObserver\(req\)\) return send\(res, 403/g) || []).length >= 2, 'bot.js: наблюдатель не отдаёт команды (/do и POST /cmd)');
 }
 
+// Модели ролей: data/models.json (models_config.js), список бесплатных, вкладка «Модели» в аудите, чтение файла сторожем и night.cmd
+function testModelsConfig(dir) {
+  const M = require('../models_config');
+  const d = path.join(dir, 'mcfg');
+  // файла нет — значения по умолчанию
+  let r = M.read(d);
+  assert.deepStrictEqual(r.models, M.DEFAULTS); assert.deepStrictEqual(Object.values(r.source), ['по умолчанию', 'по умолчанию', 'по умолчанию']);
+  // допустимые id и мусор (id попадает в командную строку cmd — никаких пробелов, кавычек, & | % ^)
+  for (const ok of ['opencode/minimax-m3.1-flash-free', 'opencode/big-pickle', 'openrouter/cohere/north-mini-code:free', 'a/b']) assert(M.validModelId(ok), ok);
+  for (const bad of ['', 'minimax', 'opencode/', '/x', 'opencode/a b', 'opencode/a"b', 'opencode/a&calc', 'opencode/a|b', 'opencode/%PATH%', 'opencode/a^b', 'opencode/a;b', 'opencode/../x', '../x/y', 'opencode/a\nb', null, 5, {}, 'o/' + 'x'.repeat(130)])
+    assert(!M.validModelId(bad), 'мусор принят: ' + String(bad).slice(0, 30));
+  // сохранение: частично, остальные роли остаются
+  r = M.save({ teacher: 'opencode/glm-5.3-flash-free' }, d);
+  assert.strictEqual(r.ok, true); assert.strictEqual(r.models.teacher, 'opencode/glm-5.3-flash-free'); assert.strictEqual(r.models.brain, M.DEFAULTS.brain);
+  assert.strictEqual(M.get('teacher', d), 'opencode/glm-5.3-flash-free'); assert.strictEqual(M.read(d).source.teacher, 'файл');
+  assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(M.filePath(d), 'utf8'))), ['brain', 'teacher', 'engineer'], 'файл пишется целиком');
+  assert.deepStrictEqual(fs.readdirSync(d), ['models.json'], 'временных файлов не осталось');
+  // отказы ничего не меняют
+  const before = fs.readFileSync(M.filePath(d), 'utf8');
+  for (const bad of [{ teacher: '' }, { teacher: '  ' }, { teacher: 'no-slash' }, { boss: 'opencode/x' }, { teacher: 'opencode/x y' }, {}, null, [], { teacher: 'opencode/ok-free', engineer: 'bad id' }])
+    assert.strictEqual(M.save(bad, d).ok, false, 'отказ: ' + JSON.stringify(bad));
+  assert.strictEqual(fs.readFileSync(M.filePath(d), 'utf8'), before);
+  // файл с BOM (правили PowerShell-ом) читается; битый JSON и плохой id в файле — значения по умолчанию, а не падение
+  fs.writeFileSync(M.filePath(d), '\ufeff{"brain":"opencode/aa-free","teacher":"плохо x","engineer":5}');
+  r = M.read(d); assert.strictEqual(r.models.brain, 'opencode/aa-free'); assert.strictEqual(r.models.teacher, M.DEFAULTS.teacher); assert.strictEqual(r.models.engineer, M.DEFAULTS.engineer);
+  fs.writeFileSync(M.filePath(d), '{оборвано'); assert.deepStrictEqual(M.read(d).models, M.DEFAULTS);
+  assert.throws(() => M.get('boss', d));
+  // командная строка, как зовут night.cmd и сторож: одна строка с id
+  const cli = path.join(__dirname, '..', 'models_config.js');
+  const out = require('child_process').execFileSync(process.execPath, [cli, 'get', 'brain'], { encoding: 'utf8' }).trim();
+  assert(M.validModelId(out), 'node models_config.js get brain: ' + out);
+  assert.throws(() => require('child_process').execFileSync(process.execPath, [cli, 'get', 'boss'], { stdio: 'pipe' }));
+}
+
+function testModelsParsing() {
+  const sample = 'opencode/beam-free\n{\n  "id": "beam-free",\n  "status": "active",\n  "cost": {\n    "input": 0,\n    "output": 0\n  }\n}\nopencode/gpt-5.5\n{\n  "id": "gpt-5.5",\n  "status": "active",\n  "cost": { "input": 5, "output": 30 }\n}\nopencode/big-pickle\n{\n  "id": "big-pickle", "status": "active",\n  "cost": { "input": 0, "output": 0 }\n}\nopencode/old-free\n{ "status": "deprecated", "cost": { "input": 0, "output": 0 } }\nopencode/broken\n{ нет\n';
+  assert.deepStrictEqual(A.parseVerboseModels(sample), ['opencode/beam-free', 'opencode/big-pickle']);
+  assert.deepStrictEqual(A.parseVerboseModels(''), []); assert.deepStrictEqual(A.parseVerboseModels('мусор'), []);
+  assert.deepStrictEqual(A.parsePlainFree('opencode/a-free\r\nopencode/gpt-5\nopenrouter/x:free\nopencode/b-free\n'), ['opencode/a-free', 'opencode/b-free']);
+  const ps = '7484\t"C:\\npm\\opencode.exe"    run --auto -m opencode/minimax-m3.1-flash-free "You are the brain of the Minecraft bot FlyBot_01. Read brain/BRAIN_PROMPT.md"\r\n'
+    + '44548\t"C:\\npm\\opencode.exe" run --auto -m opencode/glm-5.3-flash-free "You are the teacher of the Minecraft bot FlyBot_01. Read x"\r\n99\topencode.exe serve\r\n';
+  assert.deepStrictEqual(A.parseOpencodeProcs(ps), [{ pid: 7484, role: 'brain', model: 'opencode/minimax-m3.1-flash-free' }, { pid: 44548, role: 'teacher', model: 'opencode/glm-5.3-flash-free' }]);
+  assert.deepStrictEqual(A.parseOpencodeProcs(''), []);
+}
+
+async function testModelsServer(dir) {
+  const M = require('../models_config');
+  const data = path.join(dir, 'mdata'); fs.mkdirSync(data, { recursive: true });
+  let listCalls = 0, listResult = { ok: true, list: ['opencode/b-free', 'opencode/a-free', 'opencode/a-free'] }, running = [{ pid: 5, role: 'teacher', model: 'opencode/a-free' }];
+  const srv = A.createServer({ port: 0, dataDir: data, brainDir: path.join(dir, 'brain'), bodyUrl: 'http://127.0.0.1:1', runnerUrl: 'http://127.0.0.1:1',
+    listFreeModels: async () => { listCalls++; return listResult; }, runningModels: async () => running });
+  const port = await listen(srv);
+  try {
+    assert.strictEqual(srv.address().address, '127.0.0.1', 'аудит слушает только localhost');
+    let r = await request(port, 'GET', '/api/models'); assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(r.json.free.list, ['opencode/a-free', 'opencode/b-free']); assert.strictEqual(r.json.free.from, 'opencode');
+    assert.deepStrictEqual(r.json.roles.map(x => x.role), ['brain', 'teacher', 'engineer']);
+    assert.strictEqual(r.json.roles[1].model, M.DEFAULTS.teacher); assert.strictEqual(r.json.roles[1].source, 'по умолчанию');
+    assert.deepStrictEqual(r.json.roles[1].running, [{ pid: 5, model: 'opencode/a-free' }]); assert.deepStrictEqual(r.json.roles[0].running, []);
+    assert(r.json.roles.every(x => x.when && x.label));
+    assert.strictEqual(r.json.guardReadsModels, null, 'нет guard.log — не знаем');
+    await request(port, 'GET', '/api/models'); assert.strictEqual(listCalls, 1, 'список закэширован, opencode не дёргается на каждый запрос');
+    assert(fs.existsSync(path.join(data, 'models_free.json')), 'кэш списка на диске');
+    r = await request(port, 'GET', '/models'); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.roles.length, 3);
+    // сохранение
+    r = await request(port, 'POST', '/api/models', { teacher: ' opencode/b-free ' }); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.ok, true);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(data, 'models.json'), 'utf8')).teacher, 'opencode/b-free');
+    r = await request(port, 'GET', '/api/models'); assert.strictEqual(r.json.roles[1].model, 'opencode/b-free'); assert.strictEqual(r.json.roles[1].source, 'файл');
+    r = await request(port, 'POST', '/models', { engineer: 'opencode/a-free', brain: 'opencode/b-free' }); assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(M.read(data).models, { brain: 'opencode/b-free', teacher: 'opencode/b-free', engineer: 'opencode/a-free' });
+    // отказы: роль неизвестна, пусто, не похоже на id, чужой сайт, не JSON, большой запрос
+    const saved = fs.readFileSync(path.join(data, 'models.json'), 'utf8');
+    for (const bad of [{ boss: 'opencode/x' }, { teacher: '' }, { teacher: 'просто слово' }, { teacher: 'opencode/x"; calc' }, {}, [], { teacher: 5 }, { teacher: 'opencode/ok-free', zzz: 'opencode/x' }]) {
+      r = await request(port, 'POST', '/api/models', bad); assert.strictEqual(r.status, 400, JSON.stringify(bad)); assert.strictEqual(r.json.ok, false); assert(r.json.error);
+    }
+    r = await request(port, 'POST', '/api/models', 'не json'); assert.strictEqual(r.status, 400);
+    r = await request(port, 'POST', '/api/models', { teacher: 'opencode/x-free' }, { Origin: 'http://evil.example' }); assert.strictEqual(r.status, 403);
+    r = await request(port, 'POST', '/api/models', '{"teacher":"opencode/x-free"}', { 'Content-Type': 'text/plain' }); assert.strictEqual(r.status, 415);
+    r = await request(port, 'POST', '/api/models', { teacher: 'opencode/' + 'x'.repeat(5000) }); assert.strictEqual(r.status, 413);
+    r = await request(port, 'POST', '/api/models', { teacher: 'opencode/ok-free' }, { Host: 'evil.example' }); assert.strictEqual(r.status, 403, 'DNS-rebinding');
+    assert.strictEqual(fs.readFileSync(path.join(data, 'models.json'), 'utf8'), saved, 'после отказов файл не тронут');
+    // сторож: старый (без упоминания models.json) и новый
+    fs.writeFileSync(path.join(data, 'guard.log'), '\ufeff[2026-10-22 08:00:00] сторож запущен: петля 1, инженер x, учитель y\r\n[2026-10-22 08:01:00] учитель: взял случай 1\r\n');
+    assert.strictEqual((await request(port, 'GET', '/api/models')).json.guardReadsModels, false);
+    fs.appendFileSync(path.join(data, 'guard.log'), '[2026-10-22 09:00:00] сторож запущен: петля 2, инженер x, учитель y (модели берутся из data\\models.json при каждом запуске роли)\r\n');
+    assert.strictEqual((await request(port, 'GET', '/api/models')).json.guardReadsModels, true);
+    // opencode не отвечает: список из кэша на диске; потом — без списка, но страница жива
+    listResult = { ok: false, error: 'opencode не найден' }; running = null;
+    r = await request(port, 'GET', '/api/models?refresh=1'); assert.strictEqual(r.json.free.from, 'кэш на диске'); assert.deepStrictEqual(r.json.free.list, ['opencode/a-free', 'opencode/b-free']); assert(/не найден/.test(r.json.free.error));
+    assert.strictEqual(r.json.roles[0].running, null, 'не знаем, что запущено — не выдумываем');
+    fs.rmSync(path.join(data, 'models_free.json'));
+    r = await request(port, 'GET', '/api/models?refresh=1'); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.free.from, 'нет'); assert.deepStrictEqual(r.json.free.list, []);
+    assert.strictEqual(r.json.roles[1].model, 'opencode/b-free', 'текущие значения показываются и без списка');
+  } finally { srv.close(); if (srv.closeAllConnections) srv.closeAllConnections(); }
+}
+
+// сторож, night.cmd, teach.cmd и конфиги opencode читаются как текст: источник модели один
+function testModelsWiring() {
+  const root = path.join(__dirname, '..');
+  const rd = f => fs.readFileSync(path.join(root, f), 'utf8');
+  const guard = rd('brain_guard.ps1');
+  assert(!/\[string\]\$(EngModel|TeachModel)/.test(guard), 'у сторожа нет параметров -EngModel/-TeachModel');
+  assert(/RoleModel 'teacher'/.test(guard) && /RoleModel 'engineer'/.test(guard), 'модель берётся при каждом запуске роли');
+  assert(/models_config\.js/.test(guard));
+  assert(/-m \$teachModel/.test(guard) && /-m \$engModel/.test(guard), 'модель передаётся в opencode флагом -m');
+  assert(!/\$(EngModel|TeachModel)\b/.test(guard.replace(/\$engModel|\$teachModel/g, '')), 'старых переменных не осталось');
+  const night = rd('night.cmd'), teach = rd('teach.cmd');
+  assert(/models_config\.js" get brain/.test(night), 'night.cmd читает модель мозга');
+  assert(night.indexOf('models_config.js') > night.indexOf(':loop'), 'и делает это внутри петли — перед каждой сессией');
+  assert(/-m %MODEL%/.test(night));
+  assert(!/minimax|EngModel|TeachModel/.test(teach), 'teach.cmd не навязывает модели');
+  for (const f of ['opencode.json', 'brain/opencode.teacher.json', 'brain/opencode.engineer.json']) assert(!('model' in JSON.parse(rd(f))), f + ': модель не задана в конфиге, чтобы не спорить с data/models.json');
+  const html = rd('audit/index.html');
+  assert(/\['models', 'Модели'\]/.test(html) && /id="p-models"/.test(html) && /models: \['\/api\/models', renderModels\]/.test(html), 'вкладка «Модели» подключена');
+  assert(/function saveModel/.test(html) && /method: 'POST'/.test(html));
+  assert(/server\.listen\(server\.cfg\.port, '127\.0\.0\.1'/.test(rd('audit/server.js')), 'аудит слушает только 127.0.0.1');
+}
+
 module.exports = async function testAudit() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-test-'));
   try {
@@ -384,6 +502,10 @@ module.exports = async function testAudit() {
     testObserverAndOwnerMsg();
     await testServer(dir);
     await testBlackboxAudit(dir);
+    testModelsConfig(dir);
+    testModelsParsing();
+    await testModelsServer(dir);
+    testModelsWiring();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   console.log('audit: OK');
 };

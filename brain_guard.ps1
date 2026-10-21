@@ -4,13 +4,13 @@
 # 2) Инженер: мозг кладёт заявку brain\skill_requests\<имя>.md — сторож запускает отдельную модель (EngModel),
 #    она пишет brain\learned\<имя>.js, проверяет через :3200/check и отвечает в <имя>.done.md.
 # 3) Учитель: lib\teacher_triggers.js находит случаи (смерть, почти-смерть, провал дважды, застряла, итог дня, хозяин) и
-#    склеивает всплески; сторож запускает учителя (TeachModel) на один случай за раз, отчёт — data\teacher\<id>-<тип>.md.
+#    склеивает всплески; сторож запускает учителя на один случай за раз, отчёт — data\teacher\<id>-<тип>.md.
+# Модели учителя и инженера берутся из data\models.json (вкладка «Модели» в аудите) ПРИ КАЖДОМ запуске — через models_config.js.
+# Параметров вроде -EngModel/-TeachModel больше нет: источник один.
 param(
   [string]$Log,
   [int]$SilenceMin = 10,
-  [string]$EngModel = 'opencode/deepseek-v4.1-flash-free',
   [int]$EngTimeoutMin = 15,
-  [string]$TeachModel = 'opencode/mimo-v2.6-flash-free',
   [int]$TeachTimeoutMin = 20,
   [int]$LoopPid = 0   # перезапуск сторожа вручную: pid окна night.cmd (иначе петля — родительский процесс)
 )
@@ -21,8 +21,21 @@ $oclog = "$env:USERPROFILE\.local\share\opencode\log\opencode.log"
 $Backoff = 2, 5, 10, 30   # пауза после лимита запросов (429), мин: каждый следующий подряд — дольше
 function GLog($t) { Add-Content $glog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $t" -Encoding UTF8 }
 
+# Модель роли ('teacher' | 'engineer') из data\models.json — читается заново при каждом запуске роли.
+# Если node не ответил или вернул не id модели — последнее известное значение, а при самом первом сбое — запасное.
+$ModelFallback = @{ teacher = 'opencode/mimo-v2.6-flash-free'; engineer = 'opencode/deepseek-v4.1-flash-free' }
+$ModelLast = @{}
+function RoleModel([string]$role) {
+  $m = $null
+  try { $m = (& node "$fb\models_config.js" get $role 2>$null | Select-Object -First 1) } catch {}
+  if ($m -and ([string]$m).Trim() -match '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._:@+-]*)+$') { $ModelLast[$role] = ([string]$m).Trim() }
+  elseif (-not $ModelLast[$role]) { GLog "модель $role`: models_config.js не ответил, беру запасную"; $ModelLast[$role] = $ModelFallback[$role] }
+  else { GLog "модель $role`: models_config.js не ответил, оставляю прежнюю ($($ModelLast[$role]))" }
+  $ModelLast[$role]
+}
+
 $loopPid = if ($LoopPid) { $LoopPid } else { (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId }
-GLog "сторож запущен: петля $loopPid, журнал $Log, тишина $SilenceMin мин, инженер $EngModel, учитель $TeachModel"
+GLog "сторож запущен: петля $loopPid, журнал $Log, тишина $SilenceMin мин, инженер $(RoleModel 'engineer'), учитель $(RoleModel 'teacher') (модели берутся из data\models.json при каждом запуске роли)"
 New-Item -ItemType Directory -Force $req | Out-Null
 
 # Учитель и инженер прошлого сторожа (если его перезапустили) остались без хозяина — убрать, их случаи вернутся в очередь.
@@ -85,7 +98,7 @@ while ($true) {
   }
 
   # --- 2. инженер ---
-  if ($eng -and -not $eng.proc.HasExited -and (LimitStuck $EngModel $eng.started)) {
+  if ($eng -and -not $eng.proc.HasExited -and (LimitStuck $eng.model $eng.started)) {
     taskkill /PID $eng.proc.Id /T /F | Out-Null
     Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue   # заявка без ответа — возьмётся снова
     $min = LimitPause $engHits; $engHits++; $engWait = (Get-Date).AddMinutes($min)
@@ -113,20 +126,21 @@ while ($true) {
       if ((Test-Path $done) -and (Get-Item $done).LastWriteTime -ge $f.LastWriteTime) { continue }   # уже отвечено, заявку не меняли
       if ((Test-Path $lock) -and ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes -lt ($EngTimeoutMin + 5)) { continue }  # берёт другой сторож
       Set-Content $lock (Get-Date -Format s)
+      $engModel = RoleModel 'engineer'   # заново для каждой заявки: смена в аудите подхватывается со следующей
       $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
       $elog = "$fb\data\engineer-$name.log"
       # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет); проектный opencode.json не подмешивать
-      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $EngModel `"$prompt`" >> `"$elog`" 2>&1" `
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" >> `"$elog`" 2>&1" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
-      $eng = @{ proc = $p; name = $name; started = Get-Date }
-      GLog "инженер: взял заявку $name (pid $($p.Id))"
+      $eng = @{ proc = $p; name = $name; started = Get-Date; model = $engModel }
+      GLog "инженер: взял заявку $name (pid $($p.Id), модель $engModel)"
       break
     }
   }
 
   # --- 3. учитель ---
   $null = Teach @('scan')
-  if ($tch -and -not $tch.proc.HasExited -and (LimitStuck $TeachModel $tch.started)) {
+  if ($tch -and -not $tch.proc.HasExited -and (LimitStuck $tch.model $tch.started)) {
     taskkill /PID $tch.proc.Id /T /F | Out-Null
     $null = Teach @('finish', $tch.id, 'limit')   # случай обратно в очередь, без штрафа
     $min = LimitPause $tchHits; $tchHits++; $tchWait = (Get-Date).AddMinutes($min)
@@ -146,13 +160,14 @@ while ($true) {
   if (-not $tch -and (Get-Date) -ge $tchWait) {
     $c = Teach @('take')
     if ($c -and $c.id) {
+      $teachModel = RoleModel 'teacher'   # заново для каждого случая: смена в аудите подхватывается со следующего
       $prompt = "You are the teacher of the Minecraft bot FlyBot_01. Read brain/TEACHER_PROMPT.md and follow it exactly. Case file: $($c.caseFile)"
       $tlog = "$fb\data\teacher-$($c.id).log"
       # у учителя свой конфиг opencode (пишет только учебник, журнал уроков, заявки и отчёты; без /do); проектный не подмешивать
-      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $TeachModel `"$prompt`" >> `"$tlog`" 2>&1" `
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $teachModel `"$prompt`" >> `"$tlog`" 2>&1" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
-      $tch = @{ proc = $p; id = $c.id; started = Get-Date }
-      GLog "учитель: взял случай $($c.id) ($($c.type), pid $($p.Id))"
+      $tch = @{ proc = $p; id = $c.id; started = Get-Date; model = $teachModel }
+      GLog "учитель: взял случай $($c.id) ($($c.type), pid $($p.Id), модель $teachModel)"
     }
   }
 }
