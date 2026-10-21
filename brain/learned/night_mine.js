@@ -13,7 +13,7 @@ const DIRS = {
 const ORDER = ['north', 'east', 'south', 'west'];
 
 const SOFT = new Set(['dirt', 'grass_block', 'coarse_dirt', 'podzol', 'mycelium', 'rooted_dirt', 'dirt_path', 'gravel', 'sand', 'red_sand', 'clay', 'snow_block', 'mud']);
-const STONE = new Set(['stone', 'cobblestone', 'deepslate', 'cobbled_deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'calcite', 'netherrack', 'sandstone', 'red_sandstone', 'terracotta', 'basalt', 'smooth_basalt', 'blackstone']);
+const STONE = new Set(['stone', 'cobblestone', 'deepslate', 'cobbled_deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'calcite', 'netherrack', 'sandstone', 'red_sandstone', 'terracotta', 'basalt', 'smooth_basalt', 'blackstone', 'dripstone_block', 'packed_mud']);
 const UNSTABLE = new Set(['gravel', 'sand', 'red_sand']);
 const AIRS = new Set(['air', 'cave_air', 'void_air']);
 const FLUIDS = new Set(['water', 'lava', 'bubble_column']);
@@ -28,6 +28,15 @@ function oreTier(name) {
   if (/^(coal|nether_gold|nether_quartz)_ore$/.test(n)) return 0;
   if (/^(copper|iron|lapis)_ore$/.test(n)) return 1;
   return 2; // золото, красный камень, алмаз, изумруд и т.п.
+}
+
+// как назвать открытую клетку в причине отказа
+function openLabel(n) {
+  if (AIRS.has(n)) return 'воздух';
+  if (n === 'water' || n === 'bubble_column') return 'вода';
+  if (n === 'lava') return 'лава';
+  if (n === 'snow') return 'снежный слой (поверхность)';
+  return n;
 }
 
 // тип клетки по имени блока; tier: уровень кирки, -1 = нет кирки
@@ -71,7 +80,7 @@ function evalDir(g, bx, by, bz, d, tier) {
     for (const hy of [0, 1]) {
       const n = g(cx, by + hy, cz);
       const kd = kind(n, tier);
-      if (kd === 'open') return bad(`впереди на ${k} м пустота/жидкость (${n})`);
+      if (kd === 'open') return bad(`впереди на ${k} м ${openLabel(n)} (пустота/жидкость/поверхность)`);
       if (k <= 2 && kd !== 'unknown' && !diggable(kd, tier)) {
         const hard = tier < 0 && (kd === 'stone' || kd === 'ore' || kd === 'oreHigh');
         return bad(`впереди на ${k} м ${n}: ${hard ? 'без кирки не взять' : 'не копаем'}`, hard);
@@ -88,7 +97,7 @@ function evalDir(g, bx, by, bz, d, tier) {
       for (const hy of [0, 1]) for (const s of [1, -1]) around.push([cx + px * s, by + hy, cz + pz * s, 'стена']);
       for (const [x, y, z, what] of around) {
         const n = g(x, y, z);
-        if (kind(n, tier) === 'open') return bad(`рядом с туннелем (${what} ${n}) — пещера/вода/воздух`);
+        if (kind(n, tier) === 'open') return bad(`рядом с туннелем (${what}: ${openLabel(n)}) — пещера/вода/поверхность`);
         if (what === 'потолок' && UNSTABLE.has(n)) return bad('над туннелем гравий/песок — обвалится');
       }
     }
@@ -136,7 +145,9 @@ module.exports = {
       } catch (e) { /* не страшно */ }
       const ok = okOverride !== undefined ? okOverride : mined > 0;
       api.log(`night_mine: ${ok ? 'ок' : 'нет'}, выкопано ${mined}, причина: ${reason}`);
-      return { ok, mined, gained, reason, notes };
+      const out = { ok, mined, gained, reason, notes };
+      if (!ok) out.error = 'night_mine: ' + reason; // раньше ok:false шёл без error — раннер писал «вернул ok:false без error»
+      return out;
     };
     const emergency = async why => {
       api.log('аварийно: ' + why + ' -> shelter');
@@ -146,7 +157,7 @@ module.exports = {
 
     if (untilDay) {
       const phase = snap.eyes && snap.eyes.time && snap.eyes.time.phase;
-      if (phase === 'день' || phase === 'рассвет') return { ok: false, mined: 0, gained: {}, reason: 'сейчас ' + phase + ', а не ночь — навык для ночи' };
+      if (phase === 'день' || phase === 'рассвет') { const why = 'сейчас ' + phase + ', а не ночь — навык для ночи (until:"blocks" копает и днём)'; return { ok: false, mined: 0, gained: {}, reason: why, error: 'night_mine: ' + why }; }
     }
 
     // --- кирка ---
@@ -179,7 +190,7 @@ module.exports = {
     const tunnel = new Set(); // воздушные клетки, которые мы сами выкопали (и где стоим)
     const blocked = new Set(); // `${x,y,z}|dir` — отказы на этом месте
     let dirName = Object.prototype.hasOwnProperty.call(DIRS, params.dir) ? params.dir : null;
-    let steps = 0, fails = 0, sealedBehind = 0;
+    let steps = 0, fails = 0, sealedBehind = 0, sunk = 0;
     let first = true;
     const maxIter = maxBlocks * 3 + 30;
 
@@ -229,11 +240,27 @@ module.exports = {
         let best = null;
         for (const n of ORDER) if (evals[n].ok && (!best || evals[n].score > evals[best].score)) best = n;
         if (!best) {
+          // потолок тонкий (над туннелем поверхность/воздух), а под ногами копаемая порода — углубиться на 1 вниз и посмотреть заново
+          if (sunk < 2 && ORDER.some(n => /потолок/.test(evals[n].reason || ''))) {
+            const kb = kind(g(bx, by - 1, bz), tier), kb2 = kind(g(bx, by - 2, bz), tier);
+            const sideOpen = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([ox, oz]) => kind(g(bx + ox, by - 1, bz + oz), tier) === 'open');
+            if (diggable(kb, tier) && kb2 !== 'open' && kb2 !== 'unknown' && !sideOpen) {
+              try {
+                await api.cmd('dig_at', { x: bx, y: by - 1, z: bz });
+                sunk++; notes.push('потолок тонкий — углубилась на 1 вниз');
+                api.log('потолок тонкий — копаю на 1 вниз и смотрю заново');
+                await api.sleep(700);
+                continue;
+              } catch (e) { api.log('углубиться не вышло: ' + e.message); }
+            }
+          }
           const reasons = ORDER.map(n => `${DIRS[n].ru}: ${evals[n].reason}`).join('; ');
           if (tier < 0 && ORDER.some(n => evals[n].hard)) {
             return finish('без кирки вокруг только камень (' + reasons + ')', mined > 0);
           }
-          return finish('нет безопасного направления: ' + reasons, mined > 0);
+          const allOpen = ORDER.every(n => /пустота|пещера|воздух|вода|лава|поверхность|снежный/.test(evals[n].reason || ''));
+          const hint = allOpen && mined === 0 ? ' [вокруг воздух/поверхность: туннель 1×2 копается только в сплошной породе — сначала спустись на 3+ блока под поверхность (mine_stairs) или выйди из пещеры]' : '';
+          return finish('нет безопасного направления: ' + reasons + hint, mined > 0);
         }
         dirName = best;
         api.log(`копаю на ${DIRS[dirName].ru}, оценка ${evals[best].score}`);
