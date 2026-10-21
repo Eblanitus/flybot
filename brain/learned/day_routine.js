@@ -4,6 +4,7 @@
 // Выходит сам: скоро ночь, мало HP, max_sec, или делать больше нечего. Уже готовое пропускает.
 const PICK_ANY = /^(wooden|stone|golden|iron|diamond|netherite)_pickaxe$/;
 const PICK_STONE = /^(stone|iron|diamond|netherite)_pickaxe$/;
+const AXE_ANY = /_axe$/;
 const SWORD_STONE = /^(stone|iron|diamond|netherite)_sword$/;
 const PICK_IRON = /^(iron|diamond|netherite)_pickaxe$/;
 const SWORD_IRON = /^(iron|diamond|netherite)_sword$/;
@@ -89,6 +90,8 @@ module.exports = {
       if (needPick && await step('каменная кирка', 'craft', { item: 'stone_pickaxe' })) progress = true;
       if (needSword && await step('каменный меч', 'craft', { item: 'stone_sword' })) progress = true;
       m = await refresh();
+      if (!has(m, AXE_ANY) && sum(m, /^(cobblestone|cobbled_deepslate|blackstone)$/) >= 3 && await step('каменный топор', 'craft', { item: 'stone_axe' })) progress = true;
+      m = await refresh();
       if (!m.furnace && sum(m, /^(cobblestone|cobbled_deepslate)$/) >= 8 && await step('печь', 'craft', { item: 'furnace' })) progress = true;
       if ((r = stopReason())) return finish(r);
       m = await refresh();
@@ -126,6 +129,9 @@ module.exports = {
         m = await refresh();
       }
       // 7. железные кирка, меч, броня — пока хватает слитков
+      // железный топор — самый низкий приоритет: только после брони, из лишних слитков
+      const spare = (m.iron_ingot || 0) + (m.raw_iron || 0) - ingotsNeed;
+      if (!has(m, /^(iron|diamond|netherite)_axe$/) && wantIron.length === 0 && spare >= 3) wantIron.push(['iron_axe', 3]);
       for (const [item, n] of wantIron) {
         m = await refresh();
         if ((m.iron_ingot || 0) < n) continue;

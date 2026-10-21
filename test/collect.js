@@ -46,5 +46,20 @@ module.exports = async () => {
   const w2 = mkWorld((x, y) => y <= 62); w.bot = w2.bot;
   w2.bot.entity.position = new Vec3(0.5, 66, 0.5);
   await assert.rejects(gather.collect({ bot: w2.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(2, 'collect', {}, 'brain'), { block: 'stone', count: 5 }), e => { console.log('lava ->', e.message); return /копал|копать|лава|lava/.test(e.message); });
+  // брёвна: топора нет, ничего не скрафтить (нет досок/верстака) -> collect не падает, axe = «нет: …»; есть топор -> had
+  const w3 = mkWorld((x, y) => false);
+  const logId = reg.blocksByName.oak_log.id;
+  w3.bot.recipesAll = () => []; w3.bot.pathfinder = {};
+  const oldFind = vision.find;
+  vision.find = () => [new Vec3(3, 66, 3)];
+  w3.bot.blockAt = p => ({ name: 'oak_log', type: logId, position: p, boundingBox: 'block' });
+  w3.bot.dig = async b => { w3.inv.set('oak_log', (w3.inv.get('oak_log') || 0) + 1); };
+  const r3 = await gather.collect({ bot: w3.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(3, 'collect', {}, 'brain'), { block: 'oak_log', count: 4 });
+  assert(/^нет:/.test(r3.axe), 'axe ' + r3.axe);
+  w3.inv.set('iron_axe', 1);
+  const r4 = await gather.collect({ bot: w3.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(4, 'collect', {}, 'brain'), { block: 'oak_log', count: 4 });
+  assert.strictEqual(r4.axe, 'had iron_axe');
+  vision.find = oldFind;
+  console.log('collect log axe OK', r3.axe, '|', r4.axe);
 };
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });
