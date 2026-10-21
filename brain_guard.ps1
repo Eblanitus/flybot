@@ -10,7 +10,7 @@ param(
   [int]$SilenceMin = 10,
   [string]$EngModel = 'opencode/deepseek-v4.1-flash-free',
   [int]$EngTimeoutMin = 15,
-  [string]$TeachModel = 'opencode/deepseek-v4.1-flash-free',
+  [string]$TeachModel = 'opencode/mimo-v2.6-flash-free',
   [int]$TeachTimeoutMin = 20
 )
 $fb   = 'C:\Users\user\flybot'
