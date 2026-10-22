@@ -54,7 +54,7 @@ function LimitStuck([string]$model, [datetime]$since) {
   try { $fs = [IO.File]::Open($oclog, 'Open', 'Read', 'ReadWrite') } catch { return $false }
   try { $n = [int][Math]::Min($fs.Length, 400KB); [void]$fs.Seek(-$n, 'End'); $buf = New-Object byte[] $n; [void]$fs.Read($buf, 0, $n) } finally { $fs.Close() }
   $last = [Text.Encoding]::UTF8.GetString($buf) -split "`n" | ? { $_ -match "modelID=$m " } | Select-Object -Last 1
-  if (-not $last -or $last -notmatch 'Rate limit exceeded' -or $last -notmatch 'timestamp=(\S+)') { return $false }
+  if (-not $last -or $last -notmatch 'Rate limit exceeded|Free usage limit reached' -or $last -notmatch 'timestamp=(\S+)') { return $false }
   $t = [DateTime]::Parse($Matches[1]).ToUniversalTime()
   ($t -ge $since.ToUniversalTime()) -and (([DateTime]::UtcNow - $t).TotalSeconds -ge 45)
 }
@@ -152,7 +152,7 @@ while ($true) {
       $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly (section about core edits). Core task file: $($c.taskFile)"
       $elog = "$fb\data\engineer-core-$($c.id).log"
       # свой конфиг: правка ядра разрешена (кроме судьи lib\referee.js), node и npm test для проверки; проектный не подмешивать
-      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.core.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" >> `"$elog`" 2>&1" `
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.core.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" 2>&1 | node `"$fb\tools\tstamp.js`" >> `"$elog`"" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
       $eng = @{ proc = $p; name = $c.id; core = $true; started = Get-Date; model = $engModel; log = $elog }
       GLog "ядро: инженер взял разрешённый запрос $($c.id) (pid $($p.Id), модель $engModel)"
@@ -170,7 +170,7 @@ while ($true) {
       $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
       $elog = "$fb\data\engineer-$name.log"
       # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет); проектный opencode.json не подмешивать
-      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" >> `"$elog`" 2>&1" `
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" 2>&1 | node `"$fb\tools\tstamp.js`" >> `"$elog`"" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
       $eng = @{ proc = $p; name = $name; started = Get-Date; model = $engModel; log = $elog }
       GLog "инженер: взял заявку $name (pid $($p.Id), модель $engModel)"
@@ -204,7 +204,7 @@ while ($true) {
       $prompt = "You are the teacher of the Minecraft bot FlyBot_01. Read brain/TEACHER_PROMPT.md and follow it exactly. Case file: $($c.caseFile)"
       $tlog = "$fb\data\teacher-$($c.id).log"
       # у учителя свой конфиг opencode (пишет только учебник, журнал уроков, заявки и отчёты; без /do); проектный не подмешивать
-      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $teachModel `"$prompt`" >> `"$tlog`" 2>&1" `
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $teachModel `"$prompt`" 2>&1 | node `"$fb\tools\tstamp.js`" >> `"$tlog`"" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
       $tch = @{ proc = $p; id = $c.id; started = Get-Date; model = $teachModel; log = $tlog }
       GLog "учитель: взял случай $($c.id) ($($c.type), pid $($p.Id), модель $teachModel)"

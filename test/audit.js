@@ -501,6 +501,115 @@ function testModelsWiring() {
   assert(/server\.listen\(server\.cfg\.port, '127\.0\.0\.1'/.test(rd('audit/server.js')), 'аудит слушает только 127.0.0.1');
 }
 
+// Консоль ролей: разбор журналов opencode, время (точное и примерное), куски, сеансы сторожа, ошибки модели
+async function testRoles(dir) {
+  const R = require('../audit/roles');
+  // 1) виды строк, ответы, дифф с пустой строкой внутри, метки времени
+  const L = arr => { let off = 0; return arr.map(raw => { const o = { off, raw }; off += Buffer.byteLength(raw) + 1; return o; }); };
+  const es = R.parseRoleLines(L([
+    '> build · opencode/glm-5.3-flash-free',
+    '[10:00:01] Смотрю, что с мухой.',
+    '$ curl -s http://127.0.0.1:3199/snapshot',
+    '{"ok":true,"health":20}',
+    '',
+    '→ Read brain/notes.md',
+    '← Edit brain/notes.md',
+    '@@ -1,2 +1,2 @@',
+    '-старое',
+    '',
+    '+новое',
+    '',
+    '✗ bash failed',
+    '',
+    'Error: нельзя',
+    '',
+    ESC + '[31mкрасный текст' + ESC + '[0m'
+  ]));
+  const ks = es.map(e => e.k);
+  assert.deepStrictEqual(ks, ['model', 'think', 'cmd', 'read', 'write', 'fail', 'err', 'think'], ks.join(','));
+  assert.strictEqual(es[2].tag, 'тело · snapshot'); assert.deepStrictEqual(es[2].body, ['{"ok":true,"health":20}']);
+  assert.deepStrictEqual(es[4].body, ['@@ -1,2 +1,2 @@', '-старое', '+новое'], 'дифф с пустой строкой — одна правка');
+  assert.strictEqual(es[7].text, 'красный текст', 'ANSI убраны');
+  // 2) время: метка — точно (назад от anchor), без метки — примерно внутри попытки
+  const anchor = new Date(2026, 9, 22, 10, 5, 0).getTime();
+  const S = new Date(2026, 9, 22, 9, 59, 0).getTime();
+  R.assignTimes(es, { anchor, runs: [{ off: 0, end: 1000, S, E: anchor }] });
+  assert.strictEqual(es[1].ts, new Date(2026, 9, 22, 10, 0, 1).getTime()); assert(!es[1].approx);
+  assert(es[2].approx && es[2].ts >= S && es[2].ts <= anchor, 'без метки — примерно, в пределах сеанса');
+  // 3) сеансы сторожа
+  const ses = R.parseGuardSessions([
+    '[2026-10-22 09:59:00] учитель: взял случай 20261022-1 (death, pid 11, модель opencode/m1)',
+    '[2026-10-22 10:04:00] учитель: 20261022-1 — закончил (done)',
+    '[2026-10-22 10:05:00] инженер: взял заявку chest (pid 12, модель opencode/m2)'
+  ]);
+  assert.strictEqual(ses.length, 2, JSON.stringify(ses));
+  assert.strictEqual(ses[0].role, 'teacher'); assert.strictEqual(ses[0].log, 'teacher-20261022-1.log'); assert(ses[0].E > ses[0].S);
+  assert.strictEqual(ses[1].role, 'engineer'); assert.strictEqual(ses[1].E, null); assert.strictEqual(ses[1].model, 'opencode/m2');
+  // 4) ошибки модели из журнала opencode — к роли, чья модель в этот момент работала
+  const ocText = [
+    'timestamp=2026-10-22T07:06:00.000Z level=ERROR run=a message="stream error" modelID=m2 small=false error.error="AI_APICallError: Free usage limit reached. Subscribe"',
+    'timestamp=2026-10-22T07:06:01.000Z level=ERROR run=a message="stream error" modelID=nano small=true error.error="AI_APICallError: Insufficient funds"',
+    'timestamp=2026-10-22T07:06:02.000Z level=INFO run=a message="ok"'
+  ].join('\n');
+  const oe = R.parseOpencodeErrors(ocText);
+  assert.strictEqual(oe.length, 1, 'small=true и INFO пропущены'); assert(/^Free usage limit reached/.test(oe[0].text));
+  const at = R.attributeErrors([{ ...oe[0], ts: ses[1].S + 1000 }], ses, [], ses[1].S + 5000);
+  assert.deepStrictEqual(at[0].roles, ['engineer']);
+  // 5) файлы: куски журнала, from/before, API
+  const data = path.join(dir, 'roles-data'), brain = path.join(dir, 'roles-brain');
+  fs.mkdirSync(data, { recursive: true }); fs.mkdirSync(path.join(brain, 'skill_requests'), { recursive: true });
+  const big = ['> build · opencode/m2'];
+  for (let i = 0; i < 15000; i++) big.push('[10:05:' + String(i % 60).padStart(2, '0') + '] мысль номер ' + i, '');
+  fs.writeFileSync(path.join(data, 'engineer-chest.log'), big.join('\n') + '\n');
+  const now = new Date(), d2 = n => String(n).padStart(2, '0');
+  const stamp = t => `${t.getFullYear()}-${d2(t.getMonth() + 1)}-${d2(t.getDate())} ${d2(t.getHours())}:${d2(t.getMinutes())}:${d2(t.getSeconds())}`;
+  const took = new Date(now.getTime() - 60000);
+  fs.writeFileSync(path.join(data, 'guard.log'), `[${stamp(new Date(now.getTime() - 3600e3))}] сторож запущен\n[${stamp(took)}] инженер: взял заявку chest (pid 12, модель opencode/m2)\n`);
+  fs.writeFileSync(path.join(brain, 'skill_requests', 'chest.md'), '# Заявка: сундук\n');
+  fs.writeFileSync(path.join(brain, 'skill_requests', 'chest.working'), '');
+  const oc = path.join(dir, 'opencode.log');
+  fs.writeFileSync(oc, ocText.replace('2026-10-22T07:06:00.000Z', new Date(took.getTime() + 2000).toISOString()));
+  const cfg = { dataDir: data, brainDir: brain, root: path.join(__dirname, '..'), bodyUrl: 'http://127.0.0.1:1', runnerUrl: 'http://127.0.0.1:1', opencodeLog: oc,
+    runningModels: async () => [{ pid: 12, role: 'engineer', model: 'opencode/m2' }], guardProcs: async () => [{ pid: 5 }] };
+  const file = path.join(data, 'engineer-chest.log');
+  const tail = R.readRoleLog(file, 'engineer', { max: 4096 });
+  assert(tail.start > 0 && tail.entries.length > 10 && tail.entries.every(e => e.k === 'think'));
+  const prev = R.readRoleLog(file, 'engineer', { before: tail.start, max: 4096 });
+  assert(prev.entries.length && prev.entries[prev.entries.length - 1].off < tail.start, 'раньше — кусок до показанного');
+  const rs = await A.api(cfg, 'roles', new URLSearchParams());
+  assert(rs.engineer.working && rs.engineer.session.key === 'chest' && /сундук/.test(rs.engineer.what) && rs.engineer.model === 'opencode/m2', JSON.stringify(rs.engineer));
+  assert(rs.engineer.modelError && /Free usage/.test(rs.engineer.modelError.text) && rs.engineer.modelError.fresh, 'ошибка модели видна у инженера');
+  assert.strictEqual(rs.guard.working, true); assert.strictEqual(rs.teacher.working, false);
+  const c1 = await A.api(cfg, 'console', new URLSearchParams('role=engineer'));
+  assert(c1.ok && c1.file === 'engineer-chest.log' && c1.more && c1.entries.length > 100);
+  const last = c1.entries[c1.entries.length - 1];
+  fs.appendFileSync(file, '[10:06:00] новая строка\n');
+  const c2 = await A.api(cfg, 'console', new URLSearchParams('role=engineer&file=engineer-chest.log&from=' + last.off));
+  assert.strictEqual(c2.entries[0].off, last.off); assert.strictEqual(c2.entries[c2.entries.length - 1].text, 'новая строка');
+  const bad = await A.api(cfg, 'console', new URLSearchParams('role=engineer&file=..%2F..%2Fsecret.log'));
+  assert.strictEqual(bad.file, 'engineer-chest.log', 'чужой файл не открывается');
+  const all = await A.api(cfg, 'console', new URLSearchParams('role=all'));
+  assert(all.ok && all.entries.some(e => e.role === 'guard') && all.entries.some(e => e.role === 'engineer') && all.entries.some(e => e.k === 'modelerr'));
+  for (let i = 1; i < all.entries.length; i++) assert(all.entries[i].ts >= all.entries[i - 1].ts, 'по времени');
+  const same = await A.api(cfg, 'console', new URLSearchParams('role=all&sig=' + encodeURIComponent(all.sig)));
+  assert(same.same, 'без изменений — пустой ответ');
+  // навыки: тела и исполнителя нет — счёт вариантов с диска
+  fs.writeFileSync(path.join(data, 'variants.json'), JSON.stringify({ stats: { melee: { '*': { kite: { n: 2, ok: 1, sum: 1.2 } } } }, recent: [] }));
+  const sk = await A.api(cfg, 'skills', new URLSearchParams());
+  assert(!sk.catalog.ok && sk.variants.from === 'диск' && sk.variants.stats.melee['*'].kite.n === 2);
+  // новые события в ленте автопилота
+  const rf = A.reflexFeed(A.parseEventLines([
+    '{"id":1,"t":"10:00:00","type":"own_block_broken","at":[1,2,3],"block":"spruce_planks","now":"air","by":"mob:enderman"}',
+    '{"id":2,"t":"10:00:01","type":"behavior_trouble","kind":"crash","why":"упало","score":{"faults":1,"crashes":2,"hangs":0},"lastGood":"v1"}'
+  ], Date.UTC(2026, 9, 22, 10, 1, 0)), 10);
+  assert(rf.some(x => x.who === 'свой блок' && /моб enderman/.test(x.text)), JSON.stringify(rf));
+  assert(rf.some(x => x.who === 'поведение' && x.level === 'bad' && /откатить на v1/.test(x.text)));
+  // страница
+  const html = fs.readFileSync(path.join(__dirname, '..', 'audit', 'index.html'), 'utf8');
+  assert(/\['console', 'Консоль ролей'\]/.test(html) && /\/api\/console\?role=/.test(html) && /\['skills', 'Навыки'\]/.test(html));
+  assert(!/DeepSeek/.test(html), 'устаревшее «(DeepSeek)» убрано');
+}
+
 module.exports = async function testAudit() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-test-'));
   try {
@@ -517,6 +626,7 @@ module.exports = async function testAudit() {
     testModelsParsing();
     await testModelsServer(dir);
     testModelsWiring();
+    await testRoles(dir);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   console.log('audit: OK');
 };

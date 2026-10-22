@@ -60,6 +60,26 @@
   .mdctl { display: block; width: 100%; background: #0d1015; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; margin: 4px 0 10px; }
   .btn { background: var(--blue); color: #08111f; border: 0; border-radius: 10px; padding: 8px 20px; font: inherit; font-weight: 700; cursor: pointer; }
   .btn:disabled { opacity: .5; cursor: default; }
+  .con { background: #0a0c10; border: 1px solid var(--line); border-radius: 12px; height: 64vh; overflow: auto; padding: 6px 0; font: 13.5px/1.45 Consolas, "Cascadia Mono", monospace; }
+  .cl { display: flex; gap: 10px; padding: 1px 12px; }
+  .cl:hover { background: #141922; }
+  .cl .ct { flex: none; width: 84px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .cl .ct.ax { color: #6f7889; font-style: italic; }
+  .cl .cr { flex: none; width: 70px; font-weight: 700; }
+  .cl .cx { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+  .cl.k-start { background: #1a1630; } .cl.k-modelerr { background: #3a1518; } .cl.k-fail, .cl.k-err { background: #2a1416; }
+  .ctag { color: #7dd3fc; } .ccmd { color: #9be7a6; }
+  .cbody { color: #aab3c2; margin: 2px 0; border-left: 2px solid var(--line); padding-left: 8px; }
+  .cbody .dp { color: var(--ok); } .cbody .dm { color: var(--bad); } .cbody .dh { color: var(--violet); }
+  .cfold { color: var(--dim); cursor: pointer; text-decoration: underline dotted; }
+  .cfold:hover { color: var(--text); }
+  .conbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0 8px; }
+  .seg { background: var(--panel); color: var(--dim); border: 1px solid var(--line); border-radius: 8px; padding: 5px 14px; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .seg.on { color: var(--text); border-color: var(--blue); }
+  .consel { background: #0d1015; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 14px; max-width: 420px; }
+  .btn2 { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+  .btn2:disabled { opacity: .5; cursor: default; }
+  .card .rv { font-size: 19px; font-weight: 700; }
   .detail { background: #0d1015; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 10px 0; }
 </style>
 </head>
@@ -71,12 +91,14 @@
 </header>
 <nav id="tabs"></nav>
 <main>
+  <section class="pane" id="p-console"></section>
   <section class="pane" id="p-body"></section>
   <section class="pane" id="p-reflex"></section>
   <section class="pane" id="p-brain"></section>
   <section class="pane" id="p-engineer"></section>
   <section class="pane" id="p-deaths"></section>
   <section class="pane" id="p-teacher"></section>
+  <section class="pane" id="p-skills"></section>
   <section class="pane" id="p-showcase"></section>
   <section class="pane" id="p-models"></section>
   <section class="pane" id="p-service"></section>
@@ -85,7 +107,7 @@
 
 <script>
 'use strict';
-const TABS = [['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['showcase', 'Витрина'], ['models', 'Модели'], ['service', 'Служебное'], ['chat', 'Чат']];
+const TABS = [['console', 'Консоль ролей'], ['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['skills', 'Навыки'], ['showcase', 'Витрина'], ['models', 'Модели'], ['service', 'Служебное'], ['chat', 'Чат']];
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pad = n => String(n).padStart(2, '0');
@@ -115,8 +137,8 @@ const MOB = { zombie: 'зомби', skeleton: 'скелет', stray: 'зимни
 const mobRu = n => MOB[n] || n;
 
 // ---------- вкладки ----------
-let cur = (() => { try { return localStorage.getItem('audit.tab') || 'body'; } catch (e) { return 'body'; } })();
-if (!TABS.some(t => t[0] === cur)) cur = 'body';
+let cur = (() => { try { return localStorage.getItem('audit.tab') || 'console'; } catch (e) { return 'console'; } })();
+if (!TABS.some(t => t[0] === cur)) cur = 'console';
 function drawTabs() {
   $('tabs').innerHTML = TABS.map(([id, name]) => `<button data-t="${id}" class="${id === cur ? 'on' : ''}">${name}</button>`).join('');
   TABS.forEach(([id]) => $('p-' + id).classList.toggle('on', id === cur));
@@ -143,8 +165,214 @@ function drawLamps(s) {
   const b = s.brain;
   if (!b.file) h += lamp('bad', 'Мозг: нет журнала');
   else h += lamp(b.state === 'ok' ? 'ok' : b.state === 'slow' ? 'warn' : 'bad', `Мозг: журнал обновлялся ${ago(b.mtimeMs, s.now)}`);
+  const R = s.roles;
+  if (R) {
+    for (const [r, name] of [['teacher', 'Учитель'], ['engineer', 'Инженер']]) {
+      const x = R[r];
+      if (x.working && x.modelError && x.modelError.fresh) h += lamp('bad', `${name}: ошибка модели — ${clipS(x.modelError.text, 60)}`);
+      else if (x.working) h += lamp('ok', `${name}: работает${x.session ? ' ' + Math.round((s.now - x.session.S) / 60000) + ' мин' : ''}`);
+      else h += lamp('', `${name}: свободен${x.pending ? ', ждут ' + x.pending : ''}`);
+    }
+    if (R.guard.working === false) h += lamp('bad', 'Сторож: не запущен');
+  }
   $('lamps').innerHTML = h;
   $('clock').textContent = 'обновлено ' + tm(s.now);
+}
+
+// ---------- Консоль ролей ----------
+// Журналы ролей как в терминале: старое сверху, новое снизу. Сам прокручивается вниз, только если ты внизу.
+const ROLE_RU = { brain: 'мозг', teacher: 'учитель', engineer: 'инженер', guard: 'сторож', model: 'модель' };
+const ROLE_CLS = { brain: 'blue', teacher: 'violet', engineer: 'warn', guard: 'dim', model: 'bad' };
+const CON_TABS = [['all', 'Все роли'], ['brain', 'Мозг'], ['teacher', 'Учитель'], ['engineer', 'Инженер'], ['guard', 'Сторож']];
+const FILE_ROLES = ['brain', 'teacher', 'engineer'];
+let conRole = (() => { try { return localStorage.getItem('audit.con') || 'all'; } catch (e) { return 'all'; } })();
+if (!CON_TABS.some(t => t[0] === conRole)) conRole = 'all';
+const conPin = {};          // роль -> журнал, выбранный руками (иначе — текущий журнал роли)
+const conOpen = new Set();  // раскрытые ответы: роль|файл|байт
+let con = null;             // что показано: {role, file, size, start, entries, errs, sig, files, more}
+let conBusy = false, lastRoles = null;
+
+function conShell() {
+  $('p-console').innerHTML = `<div class="grid" id="roleCards"></div>
+    <div class="conbar"><span id="conTabs"></span><select id="conFile" class="consel"></select><button class="btn2" id="conMore">Загрузить раньше</button><button class="btn2" id="conDown">Вниз</button></div>
+    <div id="conNote" class="small dim" style="margin-bottom:6px"></div>
+    <div class="con" id="con"></div>
+    <div class="small dim" style="margin-top:6px">Слева время. <b>≈</b> — примерное: в этой строке журнала нет метки времени, время прикинуто по началу и концу сеанса роли (guard.log). «—» — время не известно.
+    <span class="ok">$</span> — роль выполняет команду (запрос к телу, исполнителю или к файлам), <span class="dim">→</span> — читает файл, <span class="blue">←</span> — правит файл, <span class="bad">✗</span> — инструмент не сработал, <b class="bad">⚠</b> — ошибка модели (лимит, нет связи; её нет в журнале роли — взята из журнала opencode). Нажми «▸ …» — раскроется ответ целиком.</div>`;
+  $('conTabs').onclick = e => { const b = e.target.closest('button[data-cr]'); if (b) setConRole(b.dataset.cr); };
+  $('conFile').onchange = e => { conPin[conRole] = e.target.value || null; conReset(); conTick(); };
+  $('conMore').onclick = conEarlier;
+  $('conDown').onclick = () => { const c = $('con'); c.scrollTop = c.scrollHeight; };
+  $('con').addEventListener('click', e => {
+    const f = e.target.closest('[data-fold]'); if (!f) return;
+    const k = f.dataset.fold; if (conOpen.has(k)) conOpen.delete(k); else conOpen.add(k);
+    drawCon(true);
+  });
+}
+function conReset() { con = null; const c = $('con'); if (c) { c.dataset.init = ''; c.innerHTML = '<div class="cl"><span class="cx dim">загружаю…</span></div>'; } }
+function setConRole(r, file) {
+  conRole = r; try { localStorage.setItem('audit.con', r); } catch (e) {}
+  if (file !== undefined) conPin[r] = file || null;
+  conReset(); conTick();
+}
+
+// Карточки ролей: работает ли, над чем, с какого времени, на какой модели
+function roleCard(title, role, x, now) {
+  const dot = x.working ? 'ok' : x.working === false ? '' : 'warn';
+  let h = `<div class="card"><div class="t"><span class="dot ${dot}" style="display:inline-block;vertical-align:-2px;margin-right:6px"></span>${esc(title)}</div>`;
+  const lines = [];
+  const dur = t => ago(t, now).replace(' назад', '');
+  if (role === 'brain') {
+    h += `<div class="rv ${x.working ? 'ok' : 'dim'}">${x.working ? 'работает' : 'не запущен'}</div>`;
+    if (x.since) lines.push('сессия с ' + tm(x.since) + (x.working ? ' (' + dur(x.since) + ')' : ''));
+    if (x.what) lines.push('цель: ' + clipS(x.what, 160));
+    if (x.lastWrite) lines.push('журнал ' + (x.log || '') + ': запись ' + ago(x.lastWrite, now));
+  } else if (role === 'guard') {
+    h += `<div class="rv ${x.working ? 'ok' : x.working === false ? 'bad' : 'dim'}">${x.working ? 'запущен' : x.working === false ? 'не запущен' : 'не известно'}</div>`;
+    if (x.since) lines.push('с ' + tm(x.since));
+    lines.push('следит за мозгом, по очереди запускает учителя и инженера');
+    if (x.last) lines.push('последнее: ' + tm(x.last.ts) + ' — ' + clipS(x.last.text, 140));
+  } else {
+    const ses = x.session;
+    h += `<div class="rv ${x.working ? 'ok' : 'dim'}">${x.working ? (role === 'teacher' ? 'разбирает случай' : 'пишет код') : 'свободен'}</div>`;
+    if (x.working && x.what) lines.push(clipS(x.what, 200));
+    if (x.working && ses) lines.push('с ' + tm(ses.S) + ' (' + dur(ses.S) + ')');
+    if (!x.working && ses) lines.push('последний раз: ' + (ses.key || '') + ', ' + tm(ses.S) + (ses.E ? ' – ' + tm(ses.E) : '') + (ses.how ? ' (' + ses.how + ')' : ''));
+    if (role === 'teacher' && x.pending != null) lines.push('ждут разбора: ' + x.pending);
+    if (role === 'engineer') lines.push('ждут заявки на навыки: ' + (x.pending || 0) + (x.corePending ? '; запросов на правку ядра ждут твоего разрешения: ' + x.corePending : ''));
+  }
+  if (role !== 'guard') {
+    const m = x.model || x.savedModel;
+    if (m) lines.push('модель: ' + m + (x.model && x.savedModel && x.model !== x.savedModel ? ' (сохранена другая: ' + x.savedModel + ', сменится при следующем запуске)' : ''));
+  }
+  h += '<div class="s">' + lines.map(esc).join('<br>') + '</div>';
+  const me = x.modelError;
+  if (me && (me.fresh || x.working)) h += `<div class="small ${me.fresh ? 'bad' : 'dim'}" style="margin-top:4px">⚠ ошибка модели ${esc(me.model)} ${esc(ago(me.ts, now))}${me.count > 1 ? ' (за час: ' + me.count + ')' : ''}: ${esc(clipS(me.text, 160))}</div>`;
+  if (role === 'guard' && x.oldVersion) h += '<div class="small warn" style="margin-top:4px">Сторож запущен до обновления brain_guard.ps1: журналы учителя и инженера пока пишутся без меток времени (в консоли время примерное). Метки появятся после перезапуска teach.cmd.</div>';
+  h += `<div style="margin-top:8px"><button class="btn2" data-con="${role}">Журнал в консоли</button></div></div>`;
+  return h;
+}
+function renderRoleCards(R, now) {
+  const box = $('roleCards'); if (!box) return;
+  if (!R) { box.innerHTML = '<div class="box dim">Состояние ролей не получено.</div>'; return; }
+  box.innerHTML = roleCard('Мозг', 'brain', R.brain, now) + roleCard('Учитель', 'teacher', R.teacher, now) + roleCard('Инженер', 'engineer', R.engineer, now) + roleCard('Сторож', 'guard', R.guard, now);
+}
+
+async function conTick() {
+  if (conBusy) return; conBusy = true;
+  try {
+    const role = conRole;
+    const want = FILE_ROLES.includes(role) ? (conPin[role] || (lastRoles && lastRoles[role] && lastRoles[role].log) || '') : '';
+    let url = '/api/console?role=' + role, from = null;
+    if (con && con.role === role && con.sig) url += '&sig=' + encodeURIComponent(con.sig);
+    if (con && con.role === role && FILE_ROLES.includes(role) && con.file && (!want || con.file === want) && con.entries.length) {
+      from = con.entries[con.entries.length - 1].off;
+      url += '&file=' + encodeURIComponent(con.file) + '&from=' + from;
+    } else if (want) url += '&file=' + encodeURIComponent(want);
+    const d = await get(url);
+    if (conRole !== role) return;
+    if (!d.ok) { $('con').innerHTML = '<div class="cl"><span class="cx bad">' + esc(d.error || 'ошибка') + '</span></div>'; return; }
+    if (d.same) return;
+    if (from != null && con && d.file === con.file && d.size >= con.size && (d.start === from || !d.entries.length)) {
+      // дочитали хвост; последняя запись перечитана целиком — её ответ мог дописаться
+      const errs = mergeErrs(con.errs, d.modelErrors);
+      if (d.size === con.size && errs.length === con.errs.length) return;
+      con.entries = con.entries.filter(e => e.off < from).concat(d.entries);
+      con.size = d.size; con.files = d.files || con.files; con.errs = errs;
+      if (con.entries.length > 6000) { con.entries = con.entries.slice(-5000); con.start = con.entries[0].off; con.more = true; }
+    } else {
+      const c = $('con'); if (c && (!con || con.role !== role || con.file !== (d.file || null))) c.dataset.init = '';
+      con = { role, file: d.file || null, size: d.size, start: d.start, entries: d.entries || [], errs: d.modelErrors || [], sig: d.sig || null, files: d.files || [], more: !!d.more };
+    }
+    drawCon();
+  } catch (e) {
+    const c = $('con'); if (c) c.innerHTML = '<div class="cl"><span class="cx bad">консоль не загрузилась: ' + esc(e.message) + '</span></div>';
+  } finally { conBusy = false; }
+}
+function mergeErrs(a, b) {
+  const seen = new Set((a || []).map(e => e.ts + '|' + e.text)), out = (a || []).slice();
+  for (const e of b || []) if (!seen.has(e.ts + '|' + e.text)) { seen.add(e.ts + '|' + e.text); out.push(e); }
+  return out.sort((x, y) => x.ts - y.ts);
+}
+async function conEarlier() {
+  if (!con || !con.more || !con.file) return;
+  const btn = $('conMore'); btn.disabled = true; btn.textContent = 'загружаю…';
+  try {
+    const d = await get('/api/console?role=' + con.role + '&file=' + encodeURIComponent(con.file) + '&before=' + con.start);
+    if (d.ok && con && d.file === con.file) {
+      con.entries = d.entries.filter(e => e.off < con.start).concat(con.entries);
+      con.start = d.start; con.more = !!d.more; con.errs = mergeErrs(con.errs, d.modelErrors);
+      drawCon(false, true);
+    }
+  } catch (e) {}
+  btn.textContent = 'Загрузить раньше'; btn.disabled = !(con && con.more);
+}
+
+function bodyLine(b, k) {
+  if (k === 'write') { if (/^\+/.test(b)) return '<span class="dp">' + esc(b) + '</span>'; if (/^-/.test(b)) return '<span class="dm">' + esc(b) + '</span>'; if (/^@@ /.test(b)) return '<span class="dh">' + esc(b) + '</span>'; }
+  return esc(b);
+}
+function conLine(e, all) {
+  const r = e.role || con.role;
+  const key = r + '|' + (e.file || con.file) + '|' + e.off;
+  const t = e.ts == null ? '<span class="ct">—</span>'
+    : `<span class="ct${e.approx ? ' ax' : ''}"${e.approx ? ' title="примерное время: в строке журнала нет метки"' : ''}>${e.approx ? '≈' : ''}${tm(e.ts)}</span>`;
+  const who = all ? `<span class="cr ${ROLE_CLS[r] || ''}">${esc(ROLE_RU[r] || r)}</span>` : '';
+  let x;
+  switch (e.k) {
+    case 'start': x = '<b class="violet">══ ' + esc(e.text) + ' ══</b>'; break;
+    case 'model': x = '<span class="violet">▶ ' + esc(e.text) + '</span>'; break;
+    case 'guard': x = '<span class="dim">' + esc(e.text) + '</span>'; break;
+    case 'cmd': x = '<span class="ok">$</span> ' + (e.tag ? '<span class="ctag">[' + esc(e.tag) + ']</span> ' : '') + '<span class="ccmd">' + esc(e.text) + '</span>' + (e.say ? '\n<b class="violet">говорит в чат:</b> ' + esc(e.say) : ''); break;
+    case 'read': x = '<span class="dim">→ ' + esc(e.text) + '</span>'; break;
+    case 'write': x = '<span class="blue">← ' + esc(e.text) + '</span>'; break;
+    case 'fail': x = '<span class="bad">✗ ' + esc(e.text) + '</span>'; break;
+    case 'err': x = '<span class="bad">' + esc(e.text) + '</span>'; break;
+    case 'modelerr': x = '<b class="bad">⚠ ' + esc(e.text) + '</b>'; break;
+    default: x = esc(e.text);
+  }
+  if (e.body && e.body.length) {
+    const n = e.body.length + (e.cut || 0);
+    if (conOpen.has(key)) x += '<div class="cbody">' + e.body.map(b => bodyLine(b, e.k)).join('\n') + (e.cut ? '\n<span class="dim">… ещё ' + e.cut + ' строк' + (all ? ' (полностью — во вкладке роли)' : '') + '</span>' : '') + '</div><span class="cfold" data-fold="' + esc(key) + '">свернуть</span>';
+    else x += '\n<span class="cfold" data-fold="' + esc(key) + '">▸ ' + esc(clipS(e.body.find(b => b.trim()) || '', 110)) + (n > 1 ? ' … (' + n + ' строк)' : '') + '</span>';
+  }
+  return '<div class="cl k-' + esc(e.k) + '">' + t + who + '<span class="cx">' + x + '</span></div>';
+}
+function drawCon(keep, prepended) {
+  const box = $('con'); if (!box || !con) return;
+  const all = con.role === 'all';
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  const prevH = box.scrollHeight, prevTop = box.scrollTop;
+  // ошибки модели — по времени между строками журнала
+  const errs = (con.errs || []).map(e => ({ ...e, k: 'modelerr', off: 'e' + e.ts }));
+  let h = '', j = 0;
+  for (const e of con.entries) {
+    if (e.ts != null) while (j < errs.length && errs[j].ts <= e.ts) h += conLine(errs[j++], all);
+    h += conLine(e, all);
+  }
+  while (j < errs.length) h += conLine(errs[j++], all);
+  box.innerHTML = h || '<div class="cl"><span class="cx dim">Журнал пуст.</span></div>';
+  if (prepended) box.scrollTop = prevTop + (box.scrollHeight - prevH);
+  else if (!keep && (atBottom || !box.dataset.init)) { box.scrollTop = box.scrollHeight; box.dataset.init = '1'; }
+  else box.scrollTop = prevTop;
+  // переключатель ролей и выбор журнала
+  $('conTabs').innerHTML = CON_TABS.map(([id, n]) => `<button class="seg ${id === conRole ? 'on' : ''}" data-cr="${id}">${n}</button> `).join('');
+  const sel = $('conFile');
+  sel.style.display = FILE_ROLES.includes(con.role) ? '' : 'none';
+  const key = JSON.stringify([con.role, con.file, (con.files || []).map(x => x.name)]);
+  if (sel.dataset.key !== key) {
+    sel.innerHTML = '<option value="">текущий журнал роли</option>' + (con.files || []).map(x => `<option value="${esc(x.name)}">${esc(x.name)} · ${tm(x.mtimeMs)}</option>`).join('');
+    sel.value = conPin[con.role] || ''; sel.dataset.key = key;
+  }
+  $('conMore').style.display = FILE_ROLES.includes(con.role) ? '' : 'none';
+  $('conMore').disabled = !con.more;
+  let note = '';
+  if (all) note = 'Все роли вместе по времени, за последние 12 часов: ' + (con.files || []).map(x => (ROLE_RU[x.role] || x.role) + ' — ' + x.name).join(', ') + '. Ответы здесь укорочены до 60 строк; полностью — во вкладке роли.';
+  else if (con.role === 'guard') note = 'Журнал сторожа data/guard.log — время точное.';
+  else if (con.file) note = 'Журнал data/' + con.file + ', ' + Math.round(con.size / 1024) + ' КБ' + (con.start > 0 ? ', показано с ' + Math.round(con.start / 1024) + ' КБ («Загрузить раньше» — предыдущий кусок)' : ', показан целиком') + '.';
+  else note = 'У этой роли ещё нет журнала.';
+  if (!all && con.entries.length && con.entries.every(e => e.ts == null || e.approx)) note += ' Меток времени в этом журнале нет — время примерное.';
+  $('conNote').textContent = note;
 }
 
 // ---------- Тело ----------
@@ -170,13 +398,15 @@ function renderBody(d) {
   h += `<div class="card"><div class="t">Где стоит</div><div class="v">${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}</div><div class="s">${esc(s.biome || '')}${s.lightLevel != null ? ', свет ' + s.lightLevel : ''}</div></div>`;
   h += `<div class="card"><div class="t">Время в игре</div><div class="v">${esc(t.phase || s.timeOfDay || '')}${t.day ? ', сутки ' + t.day : ''}</div><div class="s">${esc(s.weather || '')}${t.nightIn ? ' · ночь через ' + t.nightIn + ' с' : ''}${t.dayIn ? ' · день через ' + t.dayIn + ' с' : ''}</div></div>`;
   h += `<div class="card"><div class="t">Сейчас делает</div><div class="v">${task ? esc(task.name) : 'ничего'}</div><div class="s">${task ? esc(task.progress || '') + (task.sec != null ? ' · ' + task.sec + ' с' : '') : ''}</div></div>`;
-  h += `<div class="card"><div class="t">Автопилот</div><div class="v ${ap.on ? 'ok' : 'warn'}">${ap.on ? 'включён' : 'выключен'}</div><div class="s">${ap.active ? 'сам делает: ' + esc(ap.doing) : 'мозг рулит, автопилот ждёт'}${ap.paused && ap.paused.length ? ' · пауза: ' + esc(JSON.stringify(ap.paused)) : ''}</div></div>`;
+  h += `<div class="card"><div class="t">Автопилот</div><div class="v ${ap.on ? 'ok' : 'warn'}">${ap.on ? 'включён' : 'выключен'}</div><div class="s">${ap.active ? 'сам делает: ' + esc(ap.doing) : 'мозг рулит, автопилот ждёт'}${ap.goalFailed ? '<br><span class="warn">' + esc(ap.goalFailed) + '</span>' : ''}${ap.paused && ap.paused.length ? '<br>после провала отдыхают: ' + esc(ap.paused.join(', ')) : ''}</div></div>`;
   h += `<div class="card"><div class="t">В руке</div><div class="v">${s.heldItem ? esc(itemRu(s.heldItem.name || s.heldItem)) : 'пусто'}</div><div class="s">Оружие в сумке: ${weapons.length ? esc(weapons.join(', ')) : 'нет'}<br>Инструменты: ${tools.length ? esc(tools.join(', ')) : 'нет'}</div></div>`;
   h += `<div class="card"><div class="t">Броня</div><div class="v ${armor.length ? '' : 'warn'}">${armor.length ? armor.length + ' из 4' : 'нет'}</div><div class="s">${armor.length ? esc(armor.join(', ')) : 'ничего не надето'}</div></div>`;
   const dangerCls = (en.length || ag.length || th.length || hz.length) ? 'bad' : 'ok';
   h += `<div class="card"><div class="t">Угрозы рядом</div><div class="v ${dangerCls}">${(en.length || ag.length || th.length || hz.length) ? 'есть' : 'тихо'}</div><div class="s">${[...en, ...ag.map(x => 'бьёт: ' + x), ...th, ...hz.map(x => 'опасность: ' + x)].map(esc).join('<br>') || 'врагов не видно'}</div></div>`;
+  h += shelterCard(s.sheltered) + dangerCard(s.danger);
   if (s.stats) h += `<div class="card"><div class="t">За всё время</div><div class="v">${s.stats.deaths} смертей</div><div class="s">сейчас жива ${Math.round((s.stats.timeAlive || 0) / 60)} мин · пройдено ${s.stats.distanceTraveled || 0} бл.</div></div>`;
   h += '</div>';
+  if (s.variantsLine) h += '<h2>Способы действий <span class="dim small">(тело выбирает способ по счёту в похожей обстановке; вся таблица — вкладка «Навыки»)</span></h2><div class="box small">' + esc(s.variantsLine) + '</div>';
   h += '<h2>Что в сумке</h2><div class="box">' + (inv.length ? inv.map(i => `${esc(itemRu(i.name))} × ${i.count}`).join(' · ') : 'пусто') + '</div>';
   if (s.memory) h += '<h2>Что помнит о мире</h2><div class="box small">' + esc(s.memory) + '</div>';
   if (s.summary) h += '<h2>Сводка тела (то, что видит мозг)</h2><div class="box small dim">' + esc(s.summary) + '</div>';
@@ -184,7 +414,34 @@ function renderBody(d) {
   return h;
 }
 
-const WHO_CLS = { 'автопилот': 'violet', 'рефлекс': 'blue', 'угроза': 'warn', 'тело': 'dim' };
+// Укрытие: крыша и 8 клеток стен вокруг (4 стороны × ноги/голова)
+function shelterCard(sh) {
+  if (!sh) return '<div class="card"><div class="t">Укрытие</div><div class="v dim">—</div><div class="s">тело не прислало (старое тело или не в игре)</div></div>';
+  const v = sh.closed ? '<span class="ok">в укрытии</span>' : sh.roof || sh.walls ? '<span class="warn">не закрыто</span>' : '<span class="dim">открытое место</span>';
+  const open = (sh.open || []).length ? 'дыры: ' + esc(sh.open.join(', ')) : '';
+  return `<div class="card"><div class="t">Укрытие</div><div class="v">${v}</div><div class="s">крыша: ${sh.roof ? 'есть' : 'нет'}, стены ${esc(sh.walls)} из 8${open ? '<br>' + open : ''}${sh.skill ? '<br>навык «укрытие» считает, что муха в нём' : ''}</div></div>`;
+}
+// Опасность по последствию (lib/danger.js): через сколько секунд умрёт, если ничего не делать, и чем кончится бой
+const WORST_RU = { mobs: 'бой', air: 'воздух', fire: 'огонь', lava: 'лава', hunger: 'голод', fall: 'падение', damage: 'урон', void: 'пустота' };
+function dangerCard(dg) {
+  if (!dg) return '<div class="card"><div class="t">Чем грозит</div><div class="v dim">—</div><div class="s">тело не прислало оценку опасности</div></div>';
+  if (dg.error) return `<div class="card"><div class="t">Чем грозит</div><div class="v bad">ошибка</div><div class="s">${esc(dg.error)}</div></div>`;
+  const w = dg.worst, lines = []; // строки — уже готовая разметка
+  const v = w ? `<span class="${w.ttdSec <= 5 ? 'bad' : 'warn'}">${esc(WORST_RU[w.kind] || w.kind)}: смерть через ${esc(w.ttdSec)} с</span>` : '<span class="ok">ничего не грозит</span>';
+  const m = dg.mobs;
+  if (m) {
+    lines.push(esc('бой с: ' + (m.mobs || []).map(x => mobRu(x.name) + ' ' + x.d + ' м').join(', ') + ' · оружие: ' + (m.weapon === 'fist' ? 'кулак' : itemRu(m.weapon))));
+    lines.push(m.win ? `<span class="ok">отобьётся</span> за ${esc(m.killAllSec)} с, останется ~${esc(m.hpLeft)} HP` : `<span class="bad">проиграет</span>${m.ttdSec != null ? ': умрёт через ' + esc(m.ttdSec) + ' с' : ''}`);
+    if ('passiveTtdSec' in m) lines.push('если не отбиваться (копать укрытие, ждать): ' + (m.passiveTtdSec != null ? 'умрёт через ' + esc(m.passiveTtdSec) + ' с' : 'не умрёт'));
+    if (m.hitsToDie != null) lines.push('выдержит ударов самого сильного: ' + esc(m.hitsToDie));
+    lines.push('<span class="dim">броня и щит не учтены</span>');
+  }
+  for (const k of ['air', 'fire', 'lava', 'hunger', 'fall', 'damage', 'void']) if (dg[k] && dg[k].ttdSec != null && (!w || w.kind !== k)) lines.push(esc(WORST_RU[k] + ': смерть через ' + dg[k].ttdSec + ' с'));
+  if (!m && !lines.length) lines.push('мобов рядом нет; воздух, огонь, голод, падение — в норме');
+  return `<div class="card"><div class="t">Чем грозит (оценка тела)</div><div class="v" style="font-size:20px">${v}</div><div class="s">${lines.join('<br>')}</div></div>`;
+}
+
+const WHO_CLS = { 'автопилот': 'violet', 'рефлекс': 'blue', 'угроза': 'warn', 'тело': 'dim', 'свой блок': 'warn', 'поведение': 'bad' };
 function feedRows(items) {
   if (!items.length) return '<div class="box dim">Пока пусто.</div>';
   return '<div class="feed">' + items.map(i => `<div class="row"><span class="tm">${tm(i.ts)}</span><span class="who ${WHO_CLS[i.who] || ''}">${esc(i.who)}</span><span class="tx ${i.level || ''}">${esc(i.text)}</span></div>`).join('') + '</div>';
@@ -195,12 +452,22 @@ function renderReflex(d) {
   const ap = d.autopilot;
   let h = '<h2>Решения автопилота и рефлексов</h2>';
   h += '<div class="box small dim">Автопилот — это то, что муха делает сама, пока мозг молчит или думает (ночью прячется, днём работает). Рефлексы — мгновенные реакции на удар, врагов и голод. Новое сверху.</div>';
-  if (ap) h += `<p>Автопилот: <b class="${ap.on ? 'ok' : 'warn'}">${ap.on ? 'включён' : 'выключен'}</b>${ap.active ? ' · сейчас делает: <b>' + esc(ap.doing) + '</b>' : ' · сейчас ничего не делает сам'}</p>`;
+  h += '<div class="box small dim" style="margin-top:8px">Автопилот выбирает дело по счёту обстановки: у каждого возможного дела есть счёт (опасность, ночь, голод, цель мозга), провалы его снижают — берётся дело с наибольшим счётом. Навсегда ничего не выключается: после провала дело только отдыхает.</div>';
+  if (ap) h += `<p>Автопилот: <b class="${ap.on ? 'ok' : 'warn'}">${ap.on ? 'включён' : 'выключен'}</b>${ap.active ? ' · сейчас делает: <b>' + esc(ap.doing) + '</b>' + (ap.skill ? ' <span class="dim small">(навык ' + esc(ap.skill) + (ap.sec != null ? ', ' + ap.sec + ' с' : '') + ')</span>' : '') : ' · сейчас ничего не делает сам'}${ap.goalFailed ? '<br><span class="warn">' + esc(ap.goalFailed) + '</span>' : ''}${ap.paused && ap.paused.length ? '<br><span class="dim small">после провала отдыхают: ' + esc(ap.paused.join(', ')) + '</span>' : ''}</p>`;
+  const own = d.items.filter(i => i.who === 'свой блок'), bt = d.items.filter(i => i.who === 'поведение' && i.level === 'bad');
+  if (own.length || bt.length) {
+    h += '<div class="grid" style="margin-bottom:12px">';
+    if (own.length) {
+      const by = {}; for (const i of own) { const k = (String(i.text).split(' — ')[1] || '?').split(',')[0]; by[k] = (by[k] || 0) + 1; }
+      h += `<div class="card"><div class="t">Сломаны свои блоки (в этой ленте)</div><div class="v warn">${own.length}</div><div class="s">кто сломал: ${esc(Object.entries(by).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + ' ' + v).join(', '))}<br>последний: ${tm(own[0].ts)} — ${esc(clipS(own[0].text, 120))}</div></div>`;
+    }
+    if (bt.length) h += `<div class="card"><div class="t">Беда с версией поведения</div><div class="v bad">${bt.length}</div><div class="s">последняя: ${tm(bt[0].ts)} — ${esc(clipS(bt[0].text, 220))}</div></div>`;
+    h += '</div>';
+  }
   return h + feedRows(d.items);
 }
 
 // ---------- Мозг ----------
-let showOut = false, showTools = false;
 function renderBrain(d) {
   const st = d.status || {};
   let h = '';
@@ -210,22 +477,7 @@ function renderBrain(d) {
   h += `<h2>Команды мозга телу <span class="dim small">(новые сверху)</span></h2>`;
   if (!d.commands.length) h += '<div class="box dim">Команд пока нет.</div>';
   else h += '<div class="feed">' + d.commands.map(c => `<div class="row"><span class="tm">${tm(c.ts)}</span><span class="who ${c.level}">${esc(c.status)}</span><span class="tx"><b>${esc(c.label)}</b> <span class="dim small">${esc(c.name)} ${esc(c.params)}</span>${c.note ? '<br><span class="warn small">' + esc(c.note) + '</span>' : ''}</span></div>`).join('') + '</div>';
-  h += `<h2>Мысли и действия мозга <span class="dim small">(журнал ${esc(d.logFile || '—')}${st.mtimeMs ? ', последняя запись ' + ago(st.mtimeMs, d.now) : ''})</span></h2>`;
-  h += `<div><label class="chk"><input type="checkbox" id="chkOut" ${showOut ? 'checked' : ''}> показывать ответы тела</label><label class="chk"><input type="checkbox" id="chkTools" ${showTools ? 'checked' : ''}> показывать чтение/запись файлов</label></div>`;
-  const rows = d.thoughts.filter(e => (showOut || e.k !== 'out') && (showTools || e.k !== 'tool')).map(e => {
-    if (e.k === 'start') return `<div class="row"><span class="tm">${tm(e.ts)}</span><span class="who violet">запуск</span><span class="tx violet">мозг запущен заново</span></div>`;
-    if (e.k === 'model') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who dim">модель</span><span class="tx dim">${esc(e.text)}</span></div>`;
-    if (e.k === 'text') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who blue">думает</span><span class="tx">${esc(e.text)}</span></div>`;
-    if (e.k === 'cmd') {
-      const say = e.say ? `<br><b class="violet">говорит в чат:</b> ${esc(e.say)}` : '';
-      return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who ok">команда</span><span class="tx"><span class="dim small">${esc(e.target)}:</span> <b>${esc(e.title)}</b>${e.n > 1 ? ' <b class="warn">× ' + e.n + '</b>' : ''} <span class="dim small">${esc(e.args)}</span>${say}</span></div>`;
-    }
-    if (e.k === 'out') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who dim">ответ</span><span class="tx dim small">${esc(e.text)}</span></div>`;
-    if (e.k === 'tool') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who dim">${e.write ? 'пишет' : 'читает'}</span><span class="tx dim small">${esc(e.text)}</span></div>`;
-    if (e.k === 'err') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who bad">ошибка</span><span class="tx bad small">${esc(e.text)}</span></div>`;
-    return '';
-  });
-  h += rows.length ? '<div class="feed" id="thoughts">' + rows.join('') + '</div>' : '<div class="box dim">Журнал пуст.</div>';
+  h += `<h2>Мысли и действия мозга</h2><div class="box small">Всё, что мозг думает и делает (каждая команда и ответ тела), — во вкладке «Консоль ролей»: журнал ${esc(d.logFile || '—')}${st.mtimeMs ? ', последняя запись ' + ago(st.mtimeMs, d.now) : ''}. <button class="btn2" data-con="brain">Открыть в консоли</button></div>`;
   return h;
 }
 
@@ -233,14 +485,14 @@ function renderBrain(d) {
 let openReq = null;
 const STC = { waiting: 'warn', working: 'blue', done: 'ok', notdone: 'bad' };
 function renderEngineer(d) {
-  let h = '<h2>Заявки мозга на новые навыки</h2><div class="box small dim">Инженер (DeepSeek) пишет навыки по заявкам мозга. Нажми на строку — увидишь текст заявки, ответ и журнал инженера.</div>';
-  if (!d.items.length) return h + '<div class="box dim">Заявок нет.</div>';
+  let h = `<h2>Заявки на новые навыки</h2><div class="box small dim">Инженер пишет навыки по заявкам мозга и учителя (модель сейчас: <b>${esc(d.model || '—')}</b>, меняется во вкладке «Модели»). Новый навык ложится новой версией рядом со старыми: старые не выключаются, какую версию брать, решает мозг по счёту (вкладка «Навыки»). Нажми на строку — увидишь текст заявки и ответ. <button class="btn2" data-con="engineer">Журнал инженера в консоли</button></div>`;
+  if (!d.items.length) return h + '<div class="box dim">Заявок нет.</div>' + renderCore(d.core);
   h += '<table><tr><th>Навык</th><th>Статус</th><th>Когда</th><th>О чём</th></tr>';
   for (const i of d.items) {
     h += `<tr class="click" data-req="${esc(i.name)}"><td><b>${esc(i.name)}</b></td><td><span class="tag ${STC[i.status]}">${esc(i.statusRu)}</span></td><td>${tm(i.ts)}<div class="dim small">${ago(i.ts, d.now)}</div></td><td class="small">${esc(i.verdict || i.title)}</td></tr>`;
     if (openReq === i.name) h += `<tr><td colspan="4"><div id="reqDetail" class="detail dim">загружаю…</div></td></tr>`;
   }
-  return h + '</table>';
+  return h + '</table>' + renderCore(d.core);
 }
 async function loadReq() {
   if (!openReq) return;
@@ -249,7 +501,7 @@ async function loadReq() {
   if (!d.ok) { box.textContent = d.error; return; }
   const log = (d.log || []).filter(e => e.k === 'text' || e.k === 'err' || e.k === 'tool').slice(0, 40).map(e => `<div class="small ${e.k === 'err' ? 'bad' : e.k === 'tool' ? 'dim' : ''}">${esc(e.text)}</div>`).join('');
   box.classList.remove('dim');
-  box.innerHTML = `<h2>Заявка</h2><pre>${esc(d.request || '(нет файла заявки)')}</pre><h2>Ответ инженера</h2><pre>${esc(d.answer || '(ответа пока нет)')}</pre><h2>Журнал инженера${d.logMtime ? ' <span class="dim small">(' + tm(d.logMtime) + ')</span>' : ''}</h2>${log || '<div class="dim">журнала нет</div>'}`;
+  box.innerHTML = `<h2>Заявка</h2><pre>${esc(d.request || '(нет файла заявки)')}</pre><h2>Ответ инженера</h2><pre>${esc(d.answer || '(ответа пока нет)')}</pre><h2>Журнал инженера${d.logMtime ? ' <span class="dim small">(' + tm(d.logMtime) + ')</span>' : ''}</h2>${log || '<div class="dim">журнала нет</div>'}<div style="margin-top:8px"><button class="btn2" data-con="engineer" data-file="engineer-${esc(openReq)}.log">Весь журнал в консоли</button></div>`;
 }
 
 // ---------- Смерти и дни ----------
@@ -337,7 +589,7 @@ function renderDeaths(d) {
 function renderService(d) {
   const r = d.runner || {};
   let h = '<div class="two"><div>';
-  h += '<h2>Сторож</h2>' + (d.guard.length ? '<div class="feed">' + d.guard.map(g => `<div class="row"><span class="tm">${tm(g.ts)}</span><span class="tx small">${esc(g.text)}</span></div>`).join('') + '</div>' : '<div class="box dim">Записей нет.</div>');
+  h += '<h2>Сторож</h2><div class="box small">Журнал сторожа — во вкладке «Консоль ролей». <button class="btn2" data-con="guard">Открыть</button></div>';
   h += '<h2>Петля: когда запускался мозг</h2>' + (d.starts.length ? '<div class="feed">' + d.starts.map(g => `<div class="row"><span class="tm">${tm(g.ts)}</span><span class="tx small">мозг запущен (${esc(g.file)})</span></div>`).join('') + '</div>' : '<div class="box dim">Запусков не найдено.</div>');
   h += '<h2>Передача мозга (handover)</h2>' + (d.handover.length ? '<div class="feed">' + d.handover.map(g => `<div class="row"><span class="tm">${tm(g.ts)}</span><span class="tx small">${esc(g.text)}</span></div>`).join('') + '</div>' : '<div class="box dim">Записей нет.</div>');
   h += '</div><div>';
@@ -351,7 +603,7 @@ function renderService(d) {
       let tx = e.type === 'run_start' ? `запуск «${e.name}»` : e.type === 'run_end' ? `${e.ok ? 'готово' : 'провал'} «${e.name}» за ${e.sec} с${e.error ? ': ' + e.error : ''}` : (e.msg || e.type + ' ' + (e.name || ''));
       return `<div class="row"><span class="tm">${tm(e.ts)}</span><span class="tx small ${cls}">${esc(String(tx).slice(0, 260))}</span></div>`;
     }).join('') + '</div>' : '<div class="box dim">Пусто.</div>');
-    h += '<h2>Навыки</h2><table><tr><th>Навык</th><th>Состояние</th><th>Запусков (ок/провал)</th></tr>' + (r.skills || []).map(s => `<tr><td>${esc(s.name)}</td><td>${s.enabled ? '<span class="ok">включён</span>' : '<span class="bad">выключен</span><div class="dim small">' + esc(s.reason || '') + '</div>'}</td><td>${s.runs || 0} (${s.ok || 0}/${s.fail || 0})</td></tr>`).join('') + '</table>';
+    h += '<h2>Навыки</h2><div class="box small">Навыки, их версии и счёт — во вкладке «Навыки».</div>';
   }
   h += '<h2>Хвост runner.out.log</h2><div class="feed"><pre class="small" style="padding:8px 12px">' + esc((d.runnerOut || []).join('\n')) + '</pre></div>';
   return h + '</div></div>';
@@ -482,7 +734,7 @@ const LST = { 'проверяется': 'warn', 'подтверждён': 'ok', 
 const VERD_RU = { brain: 'урок мозгу', code: 'заявка инженеру', sensor: 'датчик (ядро)', luck: 'не повезло' };
 function renderTeacher(d) {
   const q = d.queue || {};
-  let h = '<h2>Учитель</h2><div class="box small dim">Учитель (DeepSeek) разбирает смерти, почти-смерти, провалы, застревания, итоги дней и подсказки хозяина. Он не управляет мухой и не пишет код: пишет уроки в учебник мозга и заявки инженеру. Один случай за раз.</div>';
+  let h = '<h2>Учитель</h2><div class="box small dim">Учитель (модель сейчас: <b>' + esc(d.model || '—') + '</b>) разбирает смерти, почти-смерти, провалы, застревания, итоги дней и подсказки хозяина. Он не управляет мухой и не пишет код: пишет уроки в учебник мозга и заявки инженеру. Один случай за раз. <button class="btn2" data-con="teacher">Журнал учителя в консоли</button></div>';
   if (!q.exists) h += '<div class="box warn">Очереди ещё нет: сторож с учителем не запускался (data/teacher_queue.json).</div>';
   h += `<div class="grid" style="margin-top:12px">
     <div class="card"><div class="t">Ждут разбора</div><div class="v">${q.pending || 0}</div></div>
@@ -522,14 +774,14 @@ function renderTeacher(d) {
   }
   h += `<h2>Учебник мозга <span class="dim small">(brain/lessons.md${d.bookLines != null ? ', строк: ' + d.bookLines : ''}${d.bookMtime ? ', изменён ' + tm(d.bookMtime) : ''})</span></h2>`;
   h += d.book == null ? '<div class="box dim">Учебника ещё нет.</div>' : `<div class="box"><pre>${esc(d.book)}</pre></div>`;
-  h += renderCore(d.core);
+  h += '<h2>Запросы на правку ядра</h2><div class="box small dim">Запросы на правку ядра и кнопка «Разрешить» — во вкладке «Инженер».</div>';
   return h;
 }
 // Запросы на правку ядра: пишут мозг и учитель, хозяин разрешает кнопкой, инженер правит с тестами (иначе откат)
 const CST = { new: 'warn', approved: 'blue', working: 'blue', done: 'ok', reverted: 'bad', failed: 'bad' };
 let openCore = null;
 function renderCore(c) {
-  let h = '<h2>Запросы на правку ядра <span class="dim small">(brain/core_requests.md; «Разрешить» — инженер возьмёт его через сторожа и поправит ядро с тестами; тесты стали хуже — его правка откатывается)</span></h2>';
+  let h = '<h2>Запросы на правку ядра <span class="dim small">(brain/core_requests.md: пишут мозг и учитель. «Разрешить» — сторож отдаст запрос инженеру, тот поправит ядро и прогонит тесты; стали хуже — правка откатывается. Без твоего разрешения ядро не трогают)</span></h2>';
   if (!c || !c.ok) return h + `<div class="box bad">${esc((c && c.error) || 'нет данных')}</div>`;
   if (!c.items.length) return h + '<div class="box dim">Запросов нет.</div>';
   h += '<table><tr><th>Запрос</th><th>Статус</th><th></th></tr>';
@@ -537,7 +789,7 @@ function renderCore(c) {
     const can = it.status !== 'working' && it.status !== 'approved';
     const btn = can ? `<button data-approve="${esc(it.id)}">${it.status === 'new' ? 'Разрешить' : 'Разрешить снова'}</button>` : '';
     h += `<tr class="click" data-core="${esc(it.id)}"><td><b>${esc(it.title)}</b><div class="dim small">${esc(it.id)}</div></td><td><span class="tag ${CST[it.status] || ''}">${esc(it.statusRu)}</span>${it.note ? `<div class="small">${esc(clipS(it.note, 300))}</div>` : ''}</td><td>${btn}</td></tr>`;
-    if (openCore === it.id) h += `<tr><td colspan="3"><div class="detail"><pre>${esc(it.text)}</pre>${it.result ? `<h2>Итог</h2><pre>${esc(it.result)}</pre>` : ''}</div></td></tr>`;
+    if (openCore === it.id) h += `<tr><td colspan="3"><div class="detail"><pre>${esc(it.text)}</pre>${it.result ? `<h2>Итог</h2><pre>${esc(it.result)}</pre>` : ''}<div style="margin-top:8px"><button class="btn2" data-con="engineer" data-file="engineer-core-${esc(it.id)}.log">Журнал инженера по этому запросу</button></div></div></td></tr>`;
   }
   return h + '</table>';
 }
@@ -557,7 +809,7 @@ async function loadReport() {
   if (!d.ok) { box.textContent = d.error; return; }
   const log = (d.log || []).filter(e => e.k === 'text' || e.k === 'err' || e.k === 'tool').slice(0, 40).map(e => `<div class="small ${e.k === 'err' ? 'bad' : e.k === 'tool' ? 'dim' : ''}">${esc(e.text)}</div>`).join('');
   box.classList.remove('dim');
-  box.innerHTML = `<h2>Отчёт</h2><pre>${esc(d.text)}</pre><h2>Журнал учителя${d.logMtime ? ' <span class="dim small">(' + tm(d.logMtime) + ')</span>' : ''}</h2>${log || '<div class="dim">журнала нет</div>'}`;
+  box.innerHTML = `<button class="btn2" data-con="teacher" data-file="teacher-${esc(openRep.replace(/-[a-z]+\.md$/, ''))}.log">Весь журнал учителя по этому случаю — в консоли</button><h2>Отчёт</h2><pre>${esc(d.text)}</pre><h2>Журнал учителя${d.logMtime ? ' <span class="dim small">(' + tm(d.logMtime) + ')</span>' : ''}</h2>${log || '<div class="dim">журнала нет</div>'}`;
 }
 
 // ---------- Витрина навыков ----------
@@ -578,27 +830,86 @@ function showcaseTable(title, r) {
   h += '<table><tr><th>Навык</th><th>Запусков</th><th>Успех</th><th>Последняя ошибка</th></tr>';
   for (const x of rows) {
     const p = x.runs ? Math.round(x.ok / x.runs * 100) : null;
-    const cls = p == null ? 'dim' : x.runs < 10 ? 'dim' : p >= 70 ? 'ok' : p >= 40 ? 'warn' : 'bad';
-    h += '<tr><td><b>' + esc(clipS(x.s.name, 60)) + '</b> <span class="tag dim small">' + esc(SC_KIND_RU[x.s.kind] || x.s.kind || '?') + '</span>' + (x.s.enabled === false ? ' <span class="tag bad small">выкл</span>' : '') +
+    const cls = p == null ? 'dim' : p >= 70 ? 'ok' : p >= 40 ? 'warn' : 'bad';
+    h += '<tr><td><b>' + esc(clipS(x.s.name, 60)) + '</b> <span class="tag dim small">' + esc(SC_KIND_RU[x.s.kind] || x.s.kind || '?') + '</span>' + (x.s.enabled === false ? ' <span class="tag dim small">выключен мозгом</span>' : '') +
       (x.s.about ? '<div class="dim small">' + esc(clipS(x.s.about, 140)) + '</div>' : '') + '</td><td>' + (x.runs == null ? '—' : x.runs) + '</td><td class="' + cls + '">' + (p == null ? '—' : p + '% <span class="small">(' + x.ok + '/' + x.runs + ')</span>') + '</td><td class="small dim">' + esc(clipS(x.err || '', 110)) + '</td></tr>';
   }
   return h + '</table>';
 }
 function renderShowcase(d) {
-  let h = '<h2>Витрина навыков</h2><div class="box small dim">Две таблицы по одному формату (SHOWCASE.md): наши навыки и навыки соседа (Ассасин, :3099) со статистикой. Прочерк — такой статистики нет, зелёный/жёлтый/красный цвет — только когда запусков 10 и больше. Учитель смотрит их без порогов, в каждом разборе и как только у соседа появилось новое: полезное у соседа заказывает инженеру переделать под нашу муху, а полезное у нас отмечает в отчёте для соседа (наша витрина открыта ему).</div>';
+  let h = '<h2>Витрина навыков</h2><div class="box small dim">Две таблицы по одному формату (SHOWCASE.md): наши навыки и навыки соседа (Ассасин, :3099) со статистикой. Прочерк — такой статистики нет; цвет — доля успехов (при малом числе запусков она случайна). Версии навыков сами не выключаются. Учитель смотрит таблицы в каждом разборе и как только у соседа появилось новое: полезное у соседа заказывает инженеру переделать под нашу муху, а полезное у нас отмечает в отчёте для соседа (наша витрина открыта ему).</div>';
   h += '<div class="two" style="margin-top:12px"><div>' + showcaseTable('Наши навыки', d.ours) + '</div><div>' + showcaseTable('Навыки соседа', d.neighbor) + '</div></div>';
+  return h;
+}
+
+// ---------- Навыки: версии (исполнитель) и способы действий тела (варианты) ----------
+const pct = (ok, n) => n ? Math.round(ok / n * 100) + '%' : '—';
+const pcls = (ok, n) => !n ? 'dim' : ok / n >= 0.7 ? 'ok' : ok / n >= 0.4 ? 'warn' : 'bad';
+function renderSkills(d) {
+  let h = '<h2>Версии навыков</h2><div class="box small dim">Навыки, которые написали инженер и учитель (исполнитель, порт 3200). У навыка может быть несколько версий, у каждой свой счёт. <b>Версии сами не выключаются</b>: какую запускать, решает мозг по счёту (лучшие сверху); выключить или вернуть версию может только он.</div>';
+  const c = d.catalog || {};
+  if (!c.ok) h += '<div class="box warn">' + esc(c.error || 'нет данных') + '</div>';
+  else {
+    h += '<table><tr><th>Навык</th><th>Версии: запусков, успех</th></tr>';
+    for (const g of c.skills) {
+      const vs = (g.versions || []).map(v => `<div><b>${esc(v.name)}</b> — ${esc(v.runs || 0)} зап., <span class="${pcls(v.ok || 0, v.runs || 0)}">${pct(v.ok || 0, v.runs || 0)}</span> <span class="dim small">(ок ${esc(v.ok || 0)} / провал ${esc(v.fail || 0)})</span>${v.enabled === false ? ' <span class="tag dim small">выключена мозгом</span>' : ''}${v.note ? '<div class="dim small">' + esc(clipS(v.note, 160)) + '</div>' : ''}</div>`).join('');
+      h += `<tr><td><b>${esc(g.base)}</b>${g.description ? '<div class="dim small">' + esc(clipS(g.description, 160)) + '</div>' : ''}${(g.broken || []).length ? '<div class="bad small">не загружаются: ' + esc(g.broken.join(', ')) + '</div>' : ''}</td><td class="small">${vs || '—'}</td></tr>`;
+    }
+    h += '</table>';
+  }
+  const v = d.variants || {}, fam = v.families || {};
+  h += '<h2>Способы действий тела (варианты)</h2><div class="box small dim">У некоторых действий тела (бегство, укрытие, подъём, спуск, дорога домой, подход к блоку, установка, ближний бой) есть несколько способов. Тело запоминает счёт каждого способа в похожей обстановке (против кого, день или ночь, под землёй ли, оружие, здоровье) и берёт лучший, иногда пробует другой, чтобы счёт не застыл. Счёт от 0 до 1: 1 — сделал быстро и без урона. «Всё вместе» — по всем обстановкам.</div>';
+  if (v.note) h += '<div class="box small warn">' + esc(v.note) + '</div>';
+  if (v.line) h += '<div class="box small">' + esc(v.line) + '</div>';
+  const names = [...new Set([...Object.keys(fam), ...Object.keys(v.stats || {})])];
+  if (!names.length) h += '<div class="box dim">Счёта ещё нет.</div>';
+  h += '<div class="two" style="margin-top:8px">';
+  for (const n of names) {
+    const st = (v.stats || {})[n] || {}, F = fam[n] || {};
+    const keys = Object.keys(st).filter(k => !k.includes('|')).sort((a, b) => a === '*' ? -1 : b === '*' ? 1 : a.localeCompare(b));
+    const deep = Object.keys(st).length - keys.length;
+    let t = `<div><h2>${esc(F.label || n)} <span class="dim small">(${esc(n)})</span></h2>`;
+    if (F.variants && F.variants.length) t += '<div class="small dim" style="margin-bottom:6px">' + F.variants.map(x => '<b>' + esc(x.name) + '</b> — ' + esc(x.desc)).join('<br>') + '</div>';
+    if (!keys.length) t += '<div class="box dim small">Ещё ни разу не выбирался.</div>';
+    else {
+      t += '<table><tr><th>Обстановка</th><th>Способ: раз, успех, счёт</th></tr>';
+      for (const k of keys) {
+        const rows = Object.entries(st[k]).map(([vn, x]) => ({ vn, n: x.n || 0, ok: x.ok || 0, avg: x.avg != null ? x.avg : x.n ? x.sum / x.n : null })).sort((a, b) => (b.avg || 0) - (a.avg || 0));
+        t += `<tr><td>${k === '*' ? '<b>всё вместе</b>' : esc(mobRu(k))}</td><td class="small">${rows.map(r => `<div><b>${esc(r.vn)}</b> — ${esc(r.n)} раз, <span class="${pcls(r.ok, r.n)}">${pct(r.ok, r.n)}</span>, счёт ${r.avg == null ? '—' : esc(Math.round(r.avg * 100) / 100)}</div>`).join('')}</td></tr>`;
+      }
+      t += '</table>';
+      if (deep) t += '<div class="dim small">и ещё подробных обстановок: ' + deep + '</div>';
+    }
+    h += t + '</div>';
+  }
+  h += '</div>';
+  const rec = (v.recent || []).slice(-30).reverse();
+  if (rec.length) {
+    h += '<h2>Последние выборы способа <span class="dim small">(новые сверху)</span></h2><table><tr><th>Когда</th><th>Действие</th><th>Способ</th><th>Обстановка</th><th>Итог</th></tr>';
+    for (const r of rec) {
+      const ts = typeof r.t === 'number' ? r.t : Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(String(r.t)) ? r.t : r.t + 'Z');
+      h += `<tr><td>${tm(ts)}</td><td>${esc((fam[r.family] && fam[r.family].label) || r.family)}</td><td><b>${esc(r.variant)}</b></td><td class="small dim">${esc(r.key || '')}</td><td class="${r.ok ? 'ok' : 'bad'}">${r.ok ? 'вышло' : 'не вышло'}${r.score != null ? ' <span class="dim small">' + esc(Math.round(r.score * 100) / 100) + '</span>' : ''}</td></tr>`;
+    }
+    h += '</table>';
+  }
   return h;
 }
 
 const RENDER = {
   body: ['/api/body', renderBody], reflex: ['/api/reflex', renderReflex], brain: ['/api/brain', renderBrain], engineer: ['/api/engineer', renderEngineer],
-  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], showcase: ['/api/showcase', renderShowcase], models: ['/api/models', renderModels], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
+  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], showcase: ['/api/showcase', renderShowcase], skills: ['/api/skills', renderSkills], models: ['/api/models', renderModels], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
 };
 let busy = false;
 async function tick() {
   if (busy) return; busy = true;
   try {
     const s = await get('/api/summary'); drawLamps(s);
+    if (s.roles) lastRoles = s.roles;
+    if (cur === 'console') {
+      if (!$('con')) { conShell(); conReset(); }
+      renderRoleCards(s.roles, s.now);
+      busy = false; await conTick(); return;
+    }
     const [u, fn] = RENDER[cur];
     const d = await get(typeof u === 'function' ? u() : u);
     const pane = $('p-' + cur);
@@ -618,6 +929,13 @@ async function tick() {
   busy = false;
 }
 document.addEventListener('click', e => {
+  const cb = e.target.closest('button[data-con]');
+  if (cb) {
+    e.stopPropagation();
+    cur = 'console'; try { localStorage.setItem('audit.tab', cur); } catch (er) {}
+    drawTabs(); if (!$('con')) conShell();
+    setConRole(cb.dataset.con, cb.dataset.file || null); tick(); return;
+  }
   const ab = e.target.closest('button[data-approve]');
   if (ab) { e.stopPropagation(); approveCore(ab.dataset.approve, ab); return; }
   const tc = e.target.closest('tr[data-core]');
@@ -629,10 +947,7 @@ document.addEventListener('click', e => {
   const tb = e.target.closest('tr[data-box]');
   if (tb) { openBox = openBox === tb.dataset.box ? null : tb.dataset.box; tick(); }
 });
-document.addEventListener('change', e => {
-  if (e.target.id === 'chkOut') { showOut = e.target.checked; tick(); }
-  if (e.target.id === 'chkTools') { showTools = e.target.checked; tick(); }
-});
+
 drawTabs(); tick();
 setInterval(tick, 2500);
 </script>

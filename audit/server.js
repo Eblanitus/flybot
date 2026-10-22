@@ -14,7 +14,8 @@ const { checkOwnerText } = require('../lib/audit_api');
 const bbFiles = require('../lib/blackbox_files'); // файлы чёрного ящика (без зависимостей): запасной путь, когда тело не отвечает
 const ledgerSummary = require('../lib/ledger_summary');
 const showcaseLib = require('../lib/showcase');
-const coreReq = require('../lib/core_requests'); // запросы на правку ядра: список с состоянием и «Разрешить» (только data/core_requests_state.json) // витрина навыков (без зависимостей): запасной путь, когда тело старое или не отвечает
+const coreReq = require('../lib/core_requests'); // запросы на правку ядра: список с состоянием и «Разрешить» (только data/core_requests_state.json)
+const roles = require('./roles'); // консоль ролей: журналы мозга, учителя, инженера и сторожа построчно со временем
 
 const ROOT = path.join(__dirname, '..');
 const DEFAULTS = {
@@ -25,6 +26,7 @@ const DEFAULTS = {
   runnerUrl: process.env.AUDIT_RUNNER_URL || 'http://127.0.0.1:3200',
   neighborUrl: process.env.AUDIT_NEIGHBOR_URL || 'http://127.0.0.1:3099', // Ассасин (бот Хермеса): его витрина навыков
   root: ROOT,
+  opencodeLog: process.env.AUDIT_OPENCODE_LOG || path.join(require('os').homedir(), '.local', 'share', 'opencode', 'log', 'opencode.log'), // ошибки моделей (лимит, нет денег) — только тут
   page: path.join(__dirname, 'index.html')
 };
 
@@ -155,8 +157,15 @@ const DANGER_RU = {
   low_hp: e => `мало здоровья: ${e.hp}/20${e.lastDamage ? ' (' + e.lastDamage + ')' : ''}`,
   hunger: e => 'голод, есть нечего',
   night_soon: e => `скоро ночь (через ${e.nightIn} с)`,
-  enemy_player: e => `рядом игрок-враг${e.name ? ' ' + e.name : ''}`
+  enemy_player: e => `рядом игрок-враг${e.name ? ' ' + e.name : ''}${e.why ? ' (' + e.why + ')' : ''}`
 };
+const OWN_BY_RU = by => !by ? '?' : by === 'brain' ? 'мозг' : by === 'autopilot' ? 'автопилот' : by === 'муха' ? 'сама муха' : /^skill:/.test(by) ? 'навык ' + by.slice(6) : /^mob:/.test(by) ? 'моб ' + by.slice(4) : by;
+// способ действия, который выбрало тело (lib/variants: variant и почему) — в итоге навыка
+function variantNote(e) {
+  const r = e && e.result && typeof e.result === 'object' ? e.result : {};
+  if (!r.variant) return '';
+  return ' · способ: ' + r.variant + (r.why ? ' (' + String(r.why).slice(0, 100) + ')' : '');
+}
 
 // События, которые решили автопилот или рефлексы. -> [{ts,id,who,text,level}]
 function reflexFeed(events, limit) {
@@ -174,8 +183,8 @@ function reflexFeed(events, limit) {
       const s = srcOf.get(e.taskId);
       if (s === 'autopilot' || s === 'reflex') {
         who = s === 'autopilot' ? 'автопилот' : 'рефлекс';
-        if (e.type === 'task_done') { text = `готово: ${taskRu(e.name)}`; level = 'ok'; }
-        else if (e.type === 'task_failed') { text = `не вышло: ${taskRu(e.name)} — ${String(e.reason || '').slice(0, 140)}`; level = 'warn'; }
+        if (e.type === 'task_done') { text = `готово: ${taskRu(e.name)}${variantNote(e)}`; level = 'ok'; }
+        else if (e.type === 'task_failed') { text = `не вышло: ${taskRu(e.name)} — ${String(e.reason || '').slice(0, 140)}${variantNote(e)}`; level = 'warn'; }
         else { text = `прервано: ${taskRu(e.name)} — ${String(e.reason || '').slice(0, 100)}`; level = 'warn'; }
       }
     } else if (e.type === 'info' && typeof e.msg === 'string') {
@@ -188,6 +197,14 @@ function reflexFeed(events, limit) {
       who = 'тело'; text = `СМЕРТЬ №${e.deaths || '?'}: ${e.cause || '?'}${e.at ? ' в ' + e.at.join(' ') : ''}`; level = 'bad';
     } else if (e.type === 'spawn') {
       who = 'тело'; text = e.msg || 'появилась в мире';
+    } else if (e.type === 'own_block_broken') {
+      // свой блок пропал (lib/ownblocks.js): sync — сломала сама муха, это просто запись
+      who = 'свой блок'; text = `сломан ${e.block || '?'}${e.at ? ' в ' + e.at.join(' ') : ''} — ${OWN_BY_RU(e.by)}${e.now && e.now !== 'air' ? ', теперь там ' + e.now : ''}`; level = e.sync ? '' : 'warn';
+    } else if (e.type === 'behavior_trouble') {
+      const sc = e.score || {};
+      who = 'поведение'; text = `беда с версией ${e.id || '?'}: ${e.kind || ''} — ${String(e.why || '').slice(0, 160)} (сбоев ${sc.faults || 0}, падений ${sc.crashes || 0}, зависаний ${sc.hangs || 0}). Решает мозг: оставить, поправить или откатить${e.lastGood ? ' на ' + e.lastGood : ''}`; level = 'bad';
+    } else if (e.type === 'behavior') {
+      who = 'поведение'; text = `${e.what || ''}${e.why ? ': ' + e.why : ''}${e.id ? ' (' + e.id + ')' : ''}`;
     }
     if (text) out.push({ ts: e.ts, id: e.id, who, text, level });
   }
@@ -208,6 +225,7 @@ function brainCommands(events, limit) {
       if (e.type === 'task_done') { it.status = 'готово'; it.level = 'ok'; }
       else if (e.type === 'task_failed') { it.status = 'не вышло'; it.level = 'warn'; it.note = String(e.reason || '').slice(0, 160); }
       else { it.status = 'прервано'; it.level = 'warn'; it.note = String(e.reason || '').slice(0, 100); }
+      const vn = variantNote(e); if (vn) it.note = (it.note ? it.note : '') + vn;
     }
   }
   return list.slice(-limit).reverse();
@@ -677,7 +695,8 @@ function slimSnapshot(s) {
     heldItem: s.heldItem, armor: s.armor || [], inventory: (s.inventory || []).slice(0, 60), timeOfDay: s.timeOfDay, biome: s.biome, gameMode: s.gameMode,
     lightLevel: s.lightLevel, enemies: eyes.enemies || [], aggressors: eyes.aggressors || [], threats: eyes.threats || [], players: eyes.players || [],
     hazards: eyes.hazards || [], weather: eyes.weather, time: eyes.time, task: eyes.task || null, vitals: eyes.vitals || null,
-    autopilot: s.autopilot || null, stats: s.stats || null, memory: s.memory || null, day: s.day || null, experience: eyes.experience || null
+    autopilot: s.autopilot || null, stats: s.stats || null, memory: s.memory || null, day: s.day || null, experience: eyes.experience || null,
+    sheltered: s.sheltered || null, danger: s.danger || null, variantsLine: eyes.variants || null
   };
 }
 
@@ -773,17 +792,25 @@ function parseOpencodeProcs(text) {
   }
   return out;
 }
-async function loadRunningModels(cfg) {
-  if (cfg.runningModels) return cfg.runningModels();
-  if (process.platform !== 'win32') return null;
-  return remoteCached('running-models', 8000, () => new Promise(resolve => {
-    const script = "Get-CimInstance Win32_Process -Filter \"Name='opencode.exe'\" | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }";
+// Сторож (powershell … brain_guard.ps1) среди тех же строк «pid<TAB>командная строка»
+function parseGuardProcs(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) { const mm = /^(\d+)\t(.*)$/.exec(line); if (mm && /brain_guard\.ps1/i.test(mm[2])) out.push({ pid: +mm[1] }); }
+  return out;
+}
+// Запущенные процессы ролей: opencode (мозг, учитель, инженер) и сторож. null — узнать не удалось (не Windows или PowerShell не ответил)
+async function loadProcs(cfg) {
+  if (cfg.runningModels) { const r = await cfg.runningModels(); return { opencode: r, guards: cfg.guardProcs ? await cfg.guardProcs() : null }; }
+  if (process.platform !== 'win32') return { opencode: null, guards: null };
+  return remoteCached('procs', 8000, () => new Promise(resolve => {
+    const script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'opencode.exe' -or ($_.Name -eq 'powershell.exe' -and $_.CommandLine -match 'brain_guard') } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }";
     try {
       execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 10000, windowsHide: true, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' },
-        (err, stdout) => resolve(err ? null : parseOpencodeProcs(stdout)));
-    } catch (e) { resolve(null); }
+        (err, stdout) => resolve(err ? { opencode: null, guards: null } : { opencode: parseOpencodeProcs(stdout), guards: parseGuardProcs(stdout) }));
+    } catch (e) { resolve({ opencode: null, guards: null }); }
   }));
 }
+async function loadRunningModels(cfg) { return (await loadProcs(cfg)).opencode; }
 
 // Сторож, запущенный до этого обновления, файл моделей не читает: его последняя строка «сторож запущен» без упоминания models.json
 function guardReadsModels(cfg) {
@@ -810,6 +837,162 @@ function saveModels(cfg, body) {
   return modelsCfg.save(patch, cfg.dataDir);
 }
 
+// ======================= роли сейчас и консоль =======================
+// Что делает каждая роль: работает ли, над чем, с какого времени, на какой модели, и какой журнал открыть в консоли.
+
+function firstLine(file, re) { try { return (fs.readFileSync(file, 'utf8').split(/\r?\n/).find(l => re.test(l)) || '').replace(/^#+\s*/, '').slice(0, 200); } catch (e) { return ''; } }
+function savedModels(cfg) { try { return modelsCfg.read(cfg.dataDir).models; } catch (e) { return {}; } }
+async function roleStatus(cfg) {
+  const procs = await loadProcs(cfg);
+  const oc = procs.opencode, now = Date.now();
+  const sessions = roles.loadSessions(cfg.dataDir);
+  const models = savedModels(cfg);
+  const runOf = r => oc ? oc.filter(p => p.role === r) : null;
+  // мозг: журнал night*.log, модель из заголовка «brain start» или из процесса
+  const nl = latestNightLog(cfg.dataDir);
+  const bp = runOf('brain');
+  const starts = scanBrainStarts(cfg.dataDir);
+  let startModel = null;
+  if (nl) { const m = roles.scanMarks(nl.file).filter(x => x.kind === 'start').pop(); if (m) startModel = m.model; }
+  const notes = loadNotes(cfg);
+  const brainAge = nl ? now - nl.mtimeMs : null;
+  const brain = {
+    working: bp ? bp.length > 0 : brainAge != null && brainAge < 180000, known: !!bp,
+    model: bp && bp.length ? bp[0].model : startModel || null, savedModel: models.brain || null,
+    since: starts.length ? starts[0].ts : null, log: nl ? nl.name : null, lastWrite: nl ? nl.mtimeMs : null,
+    what: (notes.goal || '').split(/\r?\n/).map(l => l.trim()).find(Boolean) || null
+  };
+  // учитель и инженер: сеанс из guard.log, сверенный с процессами
+  const roleOf = r => {
+    const mine = sessions.filter(x => x.role === r);
+    const open = mine.filter(x => x.E == null).pop() || null;
+    const ps = runOf(r);
+    const working = !!open && (ps == null || ps.length > 0);
+    const last = working ? open : mine.filter(x => x.E != null).pop() || null;
+    const files = roles.listRoleFiles(cfg.dataDir, r);
+    const logName = last && files.some(x => x.name === last.log) ? last.log : files.length ? files[0].name : null;
+    const lf = files.find(x => x.name === logName);
+    return { working, known: !!ps, session: last, model: working ? (ps && ps.length ? ps[0].model : open.model) : null, savedModel: models[r] || null, log: logName, lastWrite: lf ? lf.mtimeMs : null, what: null };
+  };
+  const teacher = roleOf('teacher');
+  try {
+    const q = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'teacher_queue.json'), 'utf8'));
+    const cs = Array.isArray(q.cases) ? q.cases : [];
+    teacher.pending = cs.filter(c => c.status === 'pending').length;
+    const c = teacher.session ? cs.find(x => x.id === teacher.session.key) : null;
+    if (c) { teacher.what = (TEACH_TYPE_RU[c.type] || c.type) + (c.items && c.items[0] ? ': ' + String(c.items[0].text || '').slice(0, 200) : ''); teacher.caseStatus = c.status; }
+  } catch (e) { teacher.pending = null; }
+  const engineer = roleOf('engineer');
+  if (engineer.session) {
+    const k = engineer.session.key;
+    if (engineer.session.type === 'core') {
+      let t = k; try { const it = coreReq.list(coreCfg(cfg)).items.find(x => x.id === k); if (it) t = it.title; } catch (e) {}
+      engineer.what = 'правка ядра: ' + t;
+    } else engineer.what = 'навык ' + k + (firstLine(path.join(cfg.brainDir, 'skill_requests', k + '.md'), /^#\s/) ? ': ' + firstLine(path.join(cfg.brainDir, 'skill_requests', k + '.md'), /^#\s/) : '');
+  }
+  try { engineer.pending = engineerList(cfg).filter(i => i.status === 'waiting').length; } catch (e) { engineer.pending = null; }
+  try { engineer.corePending = coreReq.list(coreCfg(cfg)).items.filter(i => i.status === 'new').length; } catch (e) { engineer.corePending = null; }
+  // сторож
+  const g = roles.guardEntries(cfg.dataDir, 200 * 1024).entries;
+  const st = g.filter(x => /^сторож запущен/.test(x.text)).pop();
+  const lastG = g[g.length - 1];
+  let psMtime = null; try { psMtime = fs.statSync(path.join(cfg.root || ROOT, 'brain_guard.ps1')).mtimeMs; } catch (e) {}
+  const guard = {
+    working: procs.guards ? procs.guards.length > 0 : null, since: st ? st.ts : null,
+    last: lastG ? { ts: lastG.ts, text: lastG.text } : null, log: 'guard.log',
+    // сторож, запущенный до правки brain_guard.ps1, пишет журналы учителя и инженера ещё без меток времени
+    oldVersion: !!(st && psMtime && st.ts < psMtime - 60000)
+  };
+  const errs = modelErrors(cfg);
+  for (const [r, o] of [['brain', brain], ['teacher', teacher], ['engineer', engineer]]) {
+    const e = errs.filter(x => x.roles.includes(r)).pop();
+    // свежая (последний час) — показываем красным в карточке роли
+    if (e) o.modelError = { ts: e.ts, model: e.model, text: e.text, fresh: now - e.ts < 3600e3, count: errs.filter(x => x.roles.includes(r) && now - x.ts < 3600e3).length };
+  }
+  return { now, brain, teacher, engineer, guard };
+}
+
+// Ошибки моделей из журнала opencode, с ролью, чья модель их получила
+function modelErrors(cfg) {
+  const errs = roles.loadOpencodeErrors(cfg.opencodeLog);
+  if (!errs.length) return [];
+  const nl = latestNightLog(cfg.dataDir), brainRuns = [];
+  if (nl) {
+    const st = roles.scanMarks(nl.file).filter(x => x.kind === 'start');
+    st.forEach((m, i) => brainRuns.push({ S: m.abs, E: i + 1 < st.length ? st[i + 1].abs : nl.mtimeMs, model: m.model }));
+  }
+  return roles.attributeErrors(errs.slice(-400), roles.loadSessions(cfg.dataDir), brainRuns, Date.now());
+}
+
+// Консоль: role = brain | teacher | engineer | guard | all
+const CONSOLE_ALL_MAX = 900;
+function cutBody(e, n) { return e.body && e.body.length > n ? { ...e, body: e.body.slice(0, n), cut: (e.cut || 0) + e.body.length - n } : e; }
+async function apiConsole(cfg, q) {
+  const role = q.get('role') || 'all';
+  const num = k => { const v = q.get(k); return v != null && /^\d+$/.test(v) ? +v : null; };
+  const sessions = roles.loadSessions(cfg.dataDir);
+  if (role === 'guard') {
+    const g = roles.guardEntries(cfg.dataDir, 400 * 1024);
+    const sig = 'g:' + g.size + ':' + g.mtimeMs;
+    if (q.get('sig') === sig) return { ok: true, role, same: true, sig };
+    return { ok: true, role, sig, files: [{ name: 'guard.log', mtimeMs: g.mtimeMs, size: g.size }], ...g };
+  }
+  if (role === 'brain' || role === 'teacher' || role === 'engineer') {
+    const files = roles.listRoleFiles(cfg.dataDir, role);
+    let name = q.get('file');
+    if (!name || !files.some(x => x.name === name)) {
+      if (role === 'brain') name = files.length ? files[0].name : null;
+      else name = (await roleStatus(cfg))[role].log;
+    }
+    const list = files.slice(0, 80).map(x => ({ name: x.name, mtimeMs: x.mtimeMs, size: x.size }));
+    if (!name) return { ok: true, role, file: null, files: list, entries: [] };
+    const r = roles.readRoleLog(path.join(cfg.dataDir, name), role, { sessions, from: num('from'), before: num('before'), anchor: num('anchor') });
+    if (!r) return { ok: false, error: 'журнал не читается: ' + name };
+    const t0 = r.entries.length && r.entries[0].ts != null ? r.entries[0].ts : r.mtimeMs - 3600e3;
+    const me = modelErrors(cfg).filter(e => e.roles.includes(role) && e.ts >= t0 - 60000).slice(-60).map(e => ({ k: 'modelerr', ts: e.ts, text: 'ошибка модели ' + e.model + ': ' + e.text }));
+    return { ok: true, role, files: list, ...r, more: r.start > 0, modelErrors: me };
+  }
+  if (role !== 'all') return { ok: false, error: 'нет такой роли' };
+  // все роли: свежие журналы за 12 часов, склейка по времени
+  const since = Date.now() - 12 * 3600e3, parts = [];
+  const add = (r, name, max) => { const x = roles.readRoleLog(path.join(cfg.dataDir, name), r, { sessions, max }); if (x) parts.push({ role: r, x }); };
+  const nl = latestNightLog(cfg.dataDir); if (nl && nl.mtimeMs > since) add('brain', nl.name, 200 * 1024);
+  for (const r of ['teacher', 'engineer']) for (const f of roles.listRoleFiles(cfg.dataDir, r).filter(x => x.mtimeMs > since).slice(0, 4)) add(r, f.name, 150 * 1024);
+  parts.push({ role: 'guard', x: roles.guardEntries(cfg.dataDir, 60 * 1024) });
+  let ocSt = null; try { const st = fs.statSync(cfg.opencodeLog); ocSt = st.size; } catch (e) {}
+  const sig = parts.map(p => p.x.file + ':' + p.x.size + ':' + p.x.mtimeMs).join('|') + '|oc:' + ocSt;
+  if (q.get('sig') === sig) return { ok: true, role, same: true, sig };
+  let all = [];
+  for (const p of parts) for (const e of p.x.entries) if (e.ts != null) all.push({ ...cutBody(e, 60), role: p.role, file: p.x.file });
+  const t0 = Date.now() - 12 * 3600e3;
+  for (const e of modelErrors(cfg)) if (e.ts >= t0) all.push({ k: 'modelerr', ts: e.ts, role: e.roles[0] || 'model', roles: e.roles, text: 'ошибка модели ' + e.model + (e.roles.length ? '' : ' (чья — не понять)') + ': ' + e.text });
+  all.sort((a, b) => a.ts - b.ts); // сортировка устойчивая: порядок строк внутри журнала сохраняется
+  all = all.slice(-CONSOLE_ALL_MAX);
+  return { ok: true, role, sig, entries: all, files: parts.map(p => ({ role: p.role, name: p.x.file, mtimeMs: p.x.mtimeMs })) };
+}
+
+// Навыки: счёт версий у исполнителя (/catalog?format=json) и счёт вариантов действий у тела (/variants), иначе data/variants.json
+function variantsLabels() { try { return require('../lib/variants').list().families || {}; } catch (e) { return {}; } }
+async function loadSkills(cfg) {
+  return remoteCached('skills:' + cfg.runnerUrl + '|' + cfg.bodyUrl + '|' + cfg.dataDir, 5000, async () => {
+    const [cat, vs, vl] = await Promise.all([
+      httpJson(cfg.runnerUrl, 'GET', '/catalog?format=json', null, 4000),
+      httpJson(cfg.bodyUrl, 'GET', '/variants', null, 3000),
+      httpJson(cfg.bodyUrl, 'GET', '/variants?list=1', null, 3000)
+    ]);
+    const catalog = cat.ok && cat.status === 200 && cat.json && Array.isArray(cat.json.skills) ? { ok: true, skills: cat.json.skills }
+      : { ok: false, error: cat.ok ? (cat.status === 404 ? 'исполнитель ещё не перезапущен — счёта версий в нём нет' : 'исполнитель ответил ' + cat.status) : 'исполнитель (порт 3200) не отвечает: ' + cat.error };
+    let variants;
+    if (vs.ok && vs.status === 200 && vs.json && vs.json.stats) variants = { from: 'тело', stats: vs.json.stats, recent: vs.json.recent || [], line: vs.json.line || null };
+    else {
+      let d = null; try { d = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'variants.json'), 'utf8')); } catch (e) {}
+      variants = { from: 'диск', note: (vs.ok ? 'тело ответило ' + vs.status : 'тело не отвечает') + ' — счёт из data/variants.json', stats: (d && d.stats) || {}, recent: (d && d.recent) || [] };
+    }
+    variants.families = vl.ok && vl.status === 200 && vl.json && vl.json.families ? vl.json.families : variantsLabels();
+    return { catalog, variants };
+  });
+}
+
 // ======================= сборка ответов API =======================
 
 function brainStatus(cfg) {
@@ -821,10 +1004,10 @@ function brainStatus(cfg) {
 
 async function apiSummary(cfg) {
   const { events, mtimeMs } = loadEvents(cfg);
-  const [body, run] = await Promise.all([loadBody(cfg), loadRunner(cfg)]);
+  const [body, run, rs] = await Promise.all([loadBody(cfg), loadRunner(cfg), roleStatus(cfg).catch(() => null)]);
   const sn = body.ok ? body.snap : null;
   return {
-    now: Date.now(),
+    now: Date.now(), roles: rs,
     body: { ok: !!body.ok, error: body.error || null, ready: sn ? !!sn.ready : false, hp: sn ? sn.health : null, food: sn ? sn.food : null },
     runner: { ok: !!run.ok, error: run.error || null, active: run.ok && run.runner ? run.runner.active : null },
     brain: brainStatus(cfg),
@@ -839,18 +1022,21 @@ async function api(cfg, name, q) {
     case 'body': { const b = await loadBody(cfg); const { events } = loadEvents(cfg); return { now, ...b, recent: reflexFeed(events, 400).filter(x => x.who === 'угроза' || x.who === 'тело').slice(0, 15) }; }
     case 'reflex': { const { events } = loadEvents(cfg); const b = await loadBody(cfg); return { now, items: reflexFeed(events, 150), autopilot: b.ok ? b.snap.autopilot : null }; }
     case 'brain': {
-      const { events } = loadEvents(cfg); const bl = loadBrainLog(cfg); const notes = loadNotes(cfg);
-      const entries = newestFirst(collapsePolls(bl.entries.slice(-400)).slice(-250));
-      return { now, status: brainStatus(cfg), goal: notes.goal, ownerNote: notes.ownerNote, notesMtime: notes.mtimeMs || null, notesError: notes.error || null, commands: brainCommands(events, 60), thoughts: entries, logFile: bl.file };
+      // мысли мозга — во вкладке «Консоль ролей» (/api/console?role=brain)
+      const { events } = loadEvents(cfg); const notes = loadNotes(cfg); const nl = latestNightLog(cfg.dataDir);
+      return { now, status: brainStatus(cfg), goal: notes.goal, ownerNote: notes.ownerNote, notesMtime: notes.mtimeMs || null, notesError: notes.error || null, commands: brainCommands(events, 60), logFile: nl ? nl.name : null };
     }
-    case 'engineer': return { now, items: engineerList(cfg).map(i => ({ ...i, statusRu: STATUS_RU[i.status] })) };
+    case 'engineer': return { now, items: engineerList(cfg).map(i => ({ ...i, statusRu: STATUS_RU[i.status] })), core: loadCore(cfg), model: savedModels(cfg).engineer || null };
+    case 'roles': return roleStatus(cfg);
+    case 'console': return apiConsole(cfg, q);
+    case 'skills': return { now, ...(await loadSkills(cfg)) };
     case 'request': return engineerDetail(cfg, q.get('name'));
     case 'deaths': return { now, ...loadDeaths(cfg), blackbox: await loadBlackbox(cfg), ledger: await loadLedger(cfg) };
     case 'blackbox_file': return loadBlackboxFile(cfg, q.get('name'));
     case 'service': { const s = loadService(cfg); const r = await loadRunner(cfg); return { now, ...s, runner: r }; }
     case 'chat': { const { events } = loadEvents(cfg); return { now, items: chatFeed(events, 120, q.get('system') === '1') }; }
     case 'showcase': return { now, ...(await loadShowcase(cfg)) };
-    case 'teacher': return { now, ...loadTeacher(cfg) };
+    case 'teacher': return { now, ...loadTeacher(cfg), model: savedModels(cfg).teacher || null };
     case 'teacher_report': return teacherReport(cfg, q.get('name'));
     case 'core_requests': return { now, ...loadCore(cfg) };
     case 'models': return apiModels(cfg, q);
@@ -941,7 +1127,7 @@ function createServer(opts) {
 module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
-  parseVerboseModels, parsePlainFree, parseOpencodeProcs, loadFreeModels, apiModels, saveModels,
+  parseVerboseModels, parsePlainFree, parseOpencodeProcs, parseGuardProcs, roleStatus, apiConsole, loadSkills, modelErrors, loadFreeModels, apiModels, saveModels,
   engineerList, engineerDetail, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, loadCore, api, taskRu
 };
 
