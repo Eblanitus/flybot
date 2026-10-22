@@ -23,7 +23,8 @@ function mk(dir, extra) {
   const session = { bot, timers: [], ended: false };
   return { ctx, bot, chat, events, session, skillsFile };
 }
-const place = (bot, name) => bot.emit('blockPlaced', { name: 'air' }, { name });
+let px = 0; // каждая установка — в новую клетку
+const place = (bot, name, ctx) => { const position = { x: px++, y: 64, z: 0 }; if (ctx) ctx.buildingAt = D.key(position); bot.emit('blockPlaced', { name: 'air' }, { name, position }); if (ctx) ctx.buildingAt = null; };
 
 module.exports = async () => {
   // чистые функции
@@ -37,14 +38,16 @@ module.exports = async () => {
     bot.emit('time');                                   // первый пакет времени: день 5 начался
     assert.strictEqual(dl.state.day, 5);
 
-    // стройка: place_at — «построено»; укрытие/подпорки/факелы — «служебные»
+    // стройка: блок в клетке, которую ставит place_at/place/platform (ctx.buildingAt) — «построено»; укрытие/подпорки/факелы — «служебные»
     ctx.tasks.current = { name: 'place_at' };
-    for (let i = 0; i < 6; i++) place(bot, 'cobblestone');
-    for (let i = 0; i < 2; i++) place(bot, 'oak_planks');
-    place(bot, 'torch');                                // факел — всегда служебный
+    for (let i = 0; i < 6; i++) place(bot, 'cobblestone', ctx);
+    for (let i = 0; i < 2; i++) place(bot, 'oak_planks', ctx);
+    place(bot, 'torch', ctx);                           // факел — всегда служебный
+    place(bot, 'dirt');                                 // подпорка, которую pathfinder поставил по дороге к place_at — служебный
     ctx.tasks.current = { name: 'shelter' };
-    for (let i = 0; i < 5; i++) place(bot, 'dirt');
-    ctx.tasks.current = null; ctx.tasks.legacyBusy = 1; place(bot, 'stone'); ctx.tasks.legacyBusy = 0;   // старая команда place/platform
+    for (let i = 0; i < 4; i++) place(bot, 'dirt');
+    ctx.tasks.current = null; place(bot, 'stone', ctx);   // старая команда place/platform
+    ctx.tasks.legacyBusy = 1; place(bot, 'gravel'); ctx.tasks.legacyBusy = 0; // во время простой команды goto — не стройка
     place(bot, 'gravel');                               // подпорка пути вне задачи — служебный
     // добыча через bot.dig (обёртка), трава игнорируется
     for (let i = 0; i < 7; i++) await bot.dig({ name: 'stone' });
@@ -55,7 +58,7 @@ module.exports = async () => {
     ctx.stats.distanceTraveled = 1812;
 
     let t = dl.today();
-    assert.strictEqual(t.day, 5); assert.strictEqual(t.built, 9); assert.strictEqual(t.aux, 7); assert.strictEqual(t.deaths, 1);
+    assert.strictEqual(t.day, 5); assert.strictEqual(t.built, 9); assert.strictEqual(t.aux, 8); assert.strictEqual(t.deaths, 1);
     assert.strictEqual(t.dist, 812); assert(/cobblestone 6/.test(t.builtItems)); assert(/stone 7/.test(t.mined));
 
     // навыки: за день один build_hut ok, один mine_vein fail
@@ -73,7 +76,7 @@ module.exports = async () => {
     assert(/прошла 812 бл/.test(line) && /навыки ok 2\/провал 1/.test(line), line);
     assert(!line.startsWith('/'));
     const ev = events.find(e => e.type === 'day_report');
-    assert(ev && ev.day === 5 && ev.built === 9 && ev.aux === 7 && ev.deaths === 1 && ev.skills.ok === 2 && ev.skills.fail === 1 && !ev.warn);
+    assert(ev && ev.day === 5 && ev.built === 9 && ev.aux === 8 && ev.deaths === 1 && ev.skills.ok === 2 && ev.skills.fail === 1 && !ev.warn);
     const rows = fs.readFileSync(path.join(dir, 'days.log'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.strictEqual(rows.length, 1); assert.strictEqual(rows[0].day, 5); assert.strictEqual(rows[0].line, line); assert.deepStrictEqual(rows[0].skills.by.build_hut, [1, 0]);
     // новый день пуст, вчера в snapshot
@@ -95,7 +98,7 @@ module.exports = async () => {
     assert(longLine.length <= 200, longLine.length + ' ' + longLine); assert(/^День 12345 \(неполный\): построено 99999 блоков/.test(longLine)); assert(/смертей 123/.test(longLine));
 
     // состояние переживает рестарт тела; день сменился за время простоя -> итог прошлого дня при первом пакете времени
-    ctx.tasks.current = { name: 'place_at' }; place(bot, 'cobblestone'); place(bot, 'cobblestone'); dl.dirty = true; dl.save();
+    ctx.tasks.current = { name: 'place_at' }; place(bot, 'cobblestone', ctx); place(bot, 'cobblestone', ctx); dl.dirty = true; dl.save();
     const m2 = mk(dir); m2.ctx.stats.distanceTraveled = 1000;
     const dl2 = D.create(m2.ctx); m2.ctx.daylog = dl2;
     assert.strictEqual(dl2.state.day, 7); assert.strictEqual(dl2.state.built, 2); assert.strictEqual(dl2.state.restarts, 1); assert.strictEqual(dl2.last.day, 6);
@@ -106,7 +109,16 @@ module.exports = async () => {
     const m3 = mk(fs.mkdtempSync(path.join(os.tmpdir(), 'flybot-daylog3-')));
     const d3 = D.attach(m3.ctx, m3.session); D.attach(m3.ctx, m3.session);
     await m3.bot.dig({ name: 'stone' }); assert.strictEqual(d3.state.mined.stone, 1);
-    for (const ss of [session, m2.session, m3.session]) for (const tm of ss.timers) clearInterval(tm);
+    // bot.dig появляется позже attach (плагины mineflayer грузятся после createBot): обёртка встаёт на spawn; смерть её не снимает
+    const m4 = mk(fs.mkdtempSync(path.join(os.tmpdir(), 'flybot-daylog4-')));
+    const realDig = m4.bot.dig; delete m4.bot.dig;
+    const d4 = D.attach(m4.ctx, m4.session);
+    m4.bot.dig = realDig; m4.bot.emit('spawn'); await new Promise(r => setImmediate(r));
+    await m4.bot.dig({ name: 'stone' }); assert.strictEqual(d4.state.mined.stone, 1, 'добыча считается, хотя bot.dig появился позже');
+    m4.bot.emit('death'); m4.bot.removeAllListeners('diggingCompleted'); m4.bot.emit('spawn');
+    await m4.bot.dig({ name: 'stone' }); assert.strictEqual(d4.state.mined.stone, 2, 'после смерти добыча считается');
+    await m4.bot.dig({ name: 'stone' }).catch(() => {}); assert.strictEqual(d4.state.mined.stone, 3, 'обёртка одна');
+    for (const ss of [session, m2.session, m3.session, m4.session]) for (const tm of ss.timers) clearInterval(tm);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   console.log('daylog: OK');
 };

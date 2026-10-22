@@ -51,7 +51,7 @@ module.exports = async () => {
 
     // добыто (диг -> предмет входит в drops блока), источник — навык исполнителя
     task('collect', 'skill:miner');
-    bot.emit('diggingCompleted', { name: 'stone' }); inv.cobblestone = 1; step();
+    bot.emit('fly_dug', { name: 'stone' }); inv.cobblestone = 1; step();
     assert.strictEqual(get('cobblestone', 'in', 'mined', 'skill:miner'), 1);
     // тот же диг не объясняет чужой предмет: яблоко без причины -> unknown
     inv.apple = 1; step(); assert.strictEqual(get('apple', 'in', 'unknown'), 1, 'причину не установить -> unknown');
@@ -122,8 +122,8 @@ module.exports = async () => {
     // ---- игровые дни ----
     const d = world(path.join(tmp, 'days'));
     d.inv.dirt = 1; for (let i = 0; i < 8; i++) d.step();
-    d.bot.emit('diggingCompleted', { name: 'oak_log' }); d.inv.oak_log = 2; d.step();
-    d.bot.time.day = 6; d.bot.emit('diggingCompleted', { name: 'oak_log' }); d.inv.oak_log = 5; d.step();
+    d.bot.emit('fly_dug', { name: 'oak_log' }); d.inv.oak_log = 2; d.step();
+    d.bot.time.day = 6; d.bot.emit('fly_dug', { name: 'oak_log' }); d.inv.oak_log = 5; d.step();
     assert.strictEqual(d.led.days['5'].oak_log.in.mined['нет задачи'], 2); assert.strictEqual(d.led.days['6'].oak_log.in.mined['нет задачи'], 3);
 
     // ---- сводка ----
@@ -140,7 +140,7 @@ module.exports = async () => {
     assert.strictEqual(d.led.save(), false, 'троттлинг: рано');
     d.clock.t += 16000; assert.strictEqual(d.led.save(), true, 'прошло 15 с — пишем');
     assert(fs.existsSync(file) && !fs.existsSync(file + '.tmp'));
-    d.inv.oak_log = 6; d.bot.emit('diggingCompleted', { name: 'oak_log' }); d.step(); assert.strictEqual(d.led.save(), false, 'снова рано'); assert.strictEqual(d.led.flush(), true, 'flush игнорирует троттлинг');
+    d.inv.oak_log = 6; d.bot.emit('fly_dug', { name: 'oak_log' }); d.step(); assert.strictEqual(d.led.save(), false, 'снова рано'); assert.strictEqual(d.led.flush(), true, 'flush игнорирует троттлинг');
     const again = new Ledger({ bot: d.bot, dataDir: path.join(tmp, 'days'), events: { push() {} }, tasks: {} }, { file });
     assert.strictEqual(again.days['6'].oak_log.in.mined['нет задачи'], 4, 'после перезапуска учёт на месте');
     // слив старых дней
