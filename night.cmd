@@ -15,7 +15,7 @@ for /f "delims=" %%m in ('node "%~dp0models_config.js" get brain 2^>nul') do set
 echo. >> data\night.log
 echo ===== [%date% %time%] brain start, model %MODEL% ===== >> data\night.log
 echo [%time%] brain start, model %MODEL%
-call opencode run --auto -m %MODEL% "You are the brain of the Minecraft bot FlyBot_01. Read brain/BRAIN_PROMPT.md and follow it exactly. The main long project is brain/PROJECT.md (The Abyss Citadel). Continue from where brain/notes.md says you stopped. Work in the loop snapshot - skill - wait without stopping. Before you finish this session, update brain/notes.md. Write notes in Russian." >> data\night.log 2>&1
+call opencode run --auto -m %MODEL% "You are the brain of the Minecraft bot FlyBot_01. Read brain/BRAIN_PROMPT.md and follow it exactly. The main long project is brain/PROJECT.md (The Abyss Citadel). Continue from where brain/notes.md says you stopped. Work in the loop snapshot - skill - wait without stopping. Before you finish this session, update brain/notes.md. Write notes in Russian." 2>&1 | node "%~dp0tools\tstamp.js" >> data\night.log
 echo [%time%] brain stopped, restarting in 15 s
 timeout /t 15 /nobreak >nul
 goto loop

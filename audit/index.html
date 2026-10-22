@@ -214,15 +214,15 @@ function renderBrain(d) {
   h += `<div><label class="chk"><input type="checkbox" id="chkOut" ${showOut ? 'checked' : ''}> показывать ответы тела</label><label class="chk"><input type="checkbox" id="chkTools" ${showTools ? 'checked' : ''}> показывать чтение/запись файлов</label></div>`;
   const rows = d.thoughts.filter(e => (showOut || e.k !== 'out') && (showTools || e.k !== 'tool')).map(e => {
     if (e.k === 'start') return `<div class="row"><span class="tm">${tm(e.ts)}</span><span class="who violet">запуск</span><span class="tx violet">мозг запущен заново</span></div>`;
-    if (e.k === 'model') return `<div class="row"><span class="tm"></span><span class="who dim">модель</span><span class="tx dim">${esc(e.text)}</span></div>`;
-    if (e.k === 'text') return `<div class="row"><span class="tm"></span><span class="who blue">думает</span><span class="tx">${esc(e.text)}</span></div>`;
+    if (e.k === 'model') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who dim">модель</span><span class="tx dim">${esc(e.text)}</span></div>`;
+    if (e.k === 'text') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who blue">думает</span><span class="tx">${esc(e.text)}</span></div>`;
     if (e.k === 'cmd') {
       const say = e.say ? `<br><b class="violet">говорит в чат:</b> ${esc(e.say)}` : '';
-      return `<div class="row"><span class="tm"></span><span class="who ok">команда</span><span class="tx"><span class="dim small">${esc(e.target)}:</span> <b>${esc(e.title)}</b>${e.n > 1 ? ' <b class="warn">× ' + e.n + '</b>' : ''} <span class="dim small">${esc(e.args)}</span>${say}</span></div>`;
+      return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who ok">команда</span><span class="tx"><span class="dim small">${esc(e.target)}:</span> <b>${esc(e.title)}</b>${e.n > 1 ? ' <b class="warn">× ' + e.n + '</b>' : ''} <span class="dim small">${esc(e.args)}</span>${say}</span></div>`;
     }
-    if (e.k === 'out') return `<div class="row"><span class="tm"></span><span class="who dim">ответ</span><span class="tx dim small">${esc(e.text)}</span></div>`;
-    if (e.k === 'tool') return `<div class="row"><span class="tm"></span><span class="who dim">${e.write ? 'пишет' : 'читает'}</span><span class="tx dim small">${esc(e.text)}</span></div>`;
-    if (e.k === 'err') return `<div class="row"><span class="tm"></span><span class="who bad">ошибка</span><span class="tx bad small">${esc(e.text)}</span></div>`;
+    if (e.k === 'out') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who dim">ответ</span><span class="tx dim small">${esc(e.text)}</span></div>`;
+    if (e.k === 'tool') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who dim">${e.write ? 'пишет' : 'читает'}</span><span class="tx dim small">${esc(e.text)}</span></div>`;
+    if (e.k === 'err') return `<div class="row"><span class="tm">${e.ts ? tm(e.ts) : ''}</span><span class="who bad">ошибка</span><span class="tx bad small">${esc(e.text)}</span></div>`;
     return '';
   });
   h += rows.length ? '<div class="feed" id="thoughts">' + rows.join('') + '</div>' : '<div class="box dim">Журнал пуст.</div>';

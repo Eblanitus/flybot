@@ -196,6 +196,17 @@ function testFiles(dir) {
   fs.appendFileSync(path.join(data, 'night-20261021-110000.log'), '===== [21.10.2026 13:00:00,00] brain start =====\r\n');
   assert.strictEqual(A.scanBrainStarts(data).length, 4);
   assert.strictEqual(A.scanBrainStarts(data).length, 4);
+  // метки времени tools/tstamp.js, час без ведущего нуля в «brain start», night.log тоже журнал мозга
+  const P = A.parseNightLog(['===== [22.10.2026  9:50:21,24] brain start, model x =====', '[09:51:02] Думаю про хижину.', '', '[09:51:05] $ curl.exe -s "http://127.0.0.1:3199/snapshot"', '[09:51:06] {"ok":true}', 'старая строка без метки']);
+  const hm = e => { const d = new Date(e.ts); return d.getHours() + ':' + d.getMinutes() + ':' + d.getSeconds(); };
+  assert.strictEqual(P[0].k, 'start'); assert.strictEqual(hm(P[0]), '9:50:21');
+  const th = P.find(e => e.k === 'text' && /хижину/.test(e.text)); assert(th && hm(th) === '9:51:2', 'у мысли есть время');
+  const cm = P.find(e => e.k === 'cmd'); assert(cm && cm.title === 'snapshot' && hm(cm) === '9:51:5', 'у команды есть время, метка не мешает разбору');
+  const P2 = A.parseNightLog(['===== [22.10.2026 23:59:50,00] brain start =====', '[00:00:10] после полуночи']);
+  assert.strictEqual(new Date(P2[1].ts).getDate(), 23, 'переход через полночь');
+  w(path.join(data, 'night.log'), '===== [21.10.2026 14:00:00,00] brain start =====\n[14:00:01] Сейчас.\n', Date.now() + 60000);
+  assert.strictEqual(A.latestNightLog(data).name, 'night.log');
+  fs.unlinkSync(path.join(data, 'night.log'));
   // события: время изменения файла = последняя строка
   const evf = path.join(data, 'events.log'); w(evf, EV.join('\n') + '\n');
   const le = A.loadEvents(cfg);

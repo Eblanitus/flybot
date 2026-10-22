@@ -261,13 +261,15 @@ function parseNightLog(rawLines) {
   let mode = 'normal';
   let firstOut = false;
   let day = null, ts = null; // день — из последнего «brain start», время — из метки «[ЧЧ:ММ:СС] » (tools/tstamp.js)
-  const push = e => { if (ts != null && e.ts == null) e.ts = ts; out.push(e); };
+  let lineTs = null; // время этой строки; у строк без метки (старые журналы) времени нет
+  const push = e => { if (lineTs != null) e.ts = lineTs; out.push(e); };
   for (let raw of rawLines) {
     let line = stripAnsi(raw).replace(/\r/g, '');
     const st = /^\[(\d\d):(\d\d):(\d\d)\] /.exec(line);
+    lineTs = null;
     if (st) {
       line = line.slice(st[0].length);
-      if (day != null) { let t = day + ((+st[1] * 60 + +st[2]) * 60 + +st[3]) * 1000; if (ts != null && t < ts - 3600e3) { day += 86400e3; t += 86400e3; } ts = t; }
+      if (day != null) { let t = day + ((+st[1] * 60 + +st[2]) * 60 + +st[3]) * 1000; if (ts != null && t < ts - 3600e3) { day += 86400e3; t += 86400e3; } ts = lineTs = t; }
     }
     if (line === '') { mode = 'normal'; continue; }
     let m;
@@ -315,7 +317,7 @@ function collapsePolls(entries) {
       while (i >= 0 && out[i].k === 'out') i--; // ответы тела между одинаковыми опросами не нужны
       const last = out[i];
       if (last && last.k === 'cmd' && last.title === e.title && last.target === e.target) {
-        out.length = i + 1; last.n = (last.n || 1) + 1; last.args = e.args; continue;
+        out.length = i + 1; last.n = (last.n || 1) + 1; last.args = e.args; if (e.ts) last.ts = e.ts; continue;
       }
     }
     out.push(e.k === 'cmd' ? { ...e } : e);
