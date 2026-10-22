@@ -155,7 +155,7 @@ function testRealRepo() {
   const body = sc.skills.filter(s => s.kind === 'body').map(s => s.name).sort();
   const real = Object.keys(require('../lib/commands').SKILLS).sort();
   assert.deepStrictEqual(body, real, 'навыки тела из витрины = таблица SKILLS');
-  const learned = fs.readdirSync(path.join(ROOT, 'brain', 'learned')).filter(f => /^[a-z].*\.js$/.test(f)).map(f => f.slice(0, -3)).sort();
+  const learned = fs.readdirSync(path.join(ROOT, 'brain', 'learned')).filter(f => /^[a-z].*\.js$/.test(f)).map(f => f.slice(0, -3)).map(n => real.includes(n) ? 'learned/' + n : n).sort();
   assert.deepStrictEqual(sc.skills.filter(s => s.kind === 'learned').map(s => s.name).sort(), learned);
   const V = require('../lib/variants'); const reg = V.load();
   const vn = []; for (const [fn, f] of reg.families) for (const n of f.variants.keys()) vn.push(fn + '/' + n);
