@@ -4,7 +4,7 @@
 'use strict';
 const autopilot = require('./autopilot');
 const reflexes = require('./reflexes');
-const { chooseMelee } = require('./combat');
+const { chooseMelee, chooseVariant } = require('./combat');
 const thresholds = require('./thresholds');
 
 const API = 1; // версия интерфейса ядро↔поведение
@@ -22,4 +22,4 @@ function attach(api) {
 // Быстрая офлайн-проверка перед включением (без бота и сервера)
 function selfTest() { return require('./test')(); }
 
-module.exports = { API, name: 'учебные колёса', attach, selfTest, chooseMelee, thresholds };
+module.exports = { API, name: 'учебные колёса', attach, selfTest, chooseMelee, chooseVariant, thresholds };

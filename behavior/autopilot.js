@@ -679,7 +679,8 @@ function create(ctx) {
     if (run.name === 'escape' && (run.key === 'lowhp_escape' || run.key === 'escape_player' || run.key === 'night_escape')
         && !/прерван/.test(verdict) && !(err && /занят/.test(err))) {
       const d1 = hostileD();
-      const grew = run.enemyD0 == null || d1 == null || d1 >= run.enemyD0 + T.apEscapeMinDist; // моб пропал или отстал — побег удался
+      const rr = res && (res.result || res);
+      const grew = run.enemyD0 == null || d1 == null || d1 >= run.enemyD0 + T.apEscapeMinDist || !!(rr && rr.away === true); // моб пропал или отстал (или не достаёт: столб) — побег удался
       const pause = escapePause(run.key, grew);
       ap.until[run.key] = now + pause;
       if (!grew) { // В: не оторвался — в причины провала: в следующий раз другая тактика, а не тот же побег

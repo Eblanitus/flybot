@@ -55,7 +55,18 @@ module.exports = {
 `V.choose(...)` + `variant.run(...)` + `V.judge(ctx, family, name, ch.keys, { result, error, sit })`.
 `style=auto|<имя>` мозг передаёт в параметрах навыка; `V.checkStyle(family, style)` — ошибка на неизвестное имя.
 
-Планируемые семейства: `melee` (есть), `escape`, `shelter`, `travel` / `unstick`, `gather_wood`, `mine_stone`, `night`.
+Семейства (каталог = семейство; кто зовёт; style=auto|<имя> в параметрах навыка):
+- `melee` — схватка (fight/defend): kite, wtap_combo, crit_jump, strafe, shield_counter, hit_and_run, pillar_fight;
+- `escape` — оторваться от врага (escape, до укрытия): sprint_away, zigzag, pillar;
+- `shelter` — укрыться (shelter без mode): smart, dig, walls;
+- `climb` / `descend` — подъём/спуск (climb, descend): path, pillar / path, stairs;
+- `home` — дорога далеко (goto базы автопилота и хозяина, go_home): hops, short_hops, direct;
+- `dig` — подход к блоку (collect на каждый блок, dig_at): look, near;
+- `place` — как встать для установки (place_at): near, close, pillar.
+
+В итоге навыка — `variant`, `why` и `variants` (счёт всех вариантов в этой обстановке: «ok/n», «—» не пробован,
+«неприменим»). Полная статистика — GET /variants (?family=<семейство>), выбор — `V.pick` (через поведение:
+behavior/combat.js chooseVariant), счёт в обстановке — `V.scores(ctx, family, sit)`.
 Пустые каталоги не создавать — каталог появляется с первым вариантом.
 
 ## Прерываемость (обязательно)
