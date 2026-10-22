@@ -301,5 +301,67 @@ module.exports = async function selfTest() {
   assert(gs && gs.key === 'go_base' && gs.kind === 'learned' && gs.name === 'go_safe', 'go_safe есть — дорогу ведёт он: ' + JSON.stringify(gs));
   assert.strictEqual(gs.params.max_sec, T.goSafeMaxSec, 'предел времени go_safe — из порогов');
   assert.strictEqual(decide({ ...farBase, goSafe: true }).name, 'go_safe', 'не goto');
+  // ---- v0.2 «простой страшнее смерти»: давление простоя стройки (idleBuildMin) ----
+  const bg = { x: 0, y: 64, z: 0, r: 96 };
+  const hut = { name: 'build_hut', params: { x: 5, z: 5 }, kind: 'learned', sig: 'h' };
+  // (а) без поля idleBuildMin (и при 0) — всё как раньше
+  assert.strictEqual(decide({ ...base, idleBuildMin: 0 }).key, 'day_routine', 'простоя нет — как раньше');
+  assert.strictEqual(decide({ ...base, goal: hut, base: bg, baseDist: 400 }).key, 'go_base', 'без поля — база далеко важнее цели');
+  assert.strictEqual(decide({ ...nz, crashed: { night_mine: { reason: 'x.js:1' } }, goal: hut }).key, 'wait_night', 'без поля, ночью без базы — пережидаем');
+  // (б) днём простой 10 мин — цель побеждает дорогу к базе и разведку
+  assert.strictEqual(decide({ ...base, goal: hut, base: bg, baseDist: 400, idleBuildMin: 10 }).key, 'goal', 'простой 10 мин — цель раньше go_base');
+  const noWork = { ...base, crashed: { day_routine: { reason: 'x.js:1' } } };
+  assert.strictEqual(decide(noWork).key, 'explore');
+  a = decide({ ...noWork, goal: hut, idleBuildMin: 10, failInfo: { goal: { reason: 'x', count: 2 } } });
+  assert.strictEqual(a.key, 'goal', 'простой 10 мин — цель раньше разведки даже после двух провалов');
+  assert.strictEqual(a.score, 50 + T.idlePerMin * 10 - 2 * T.apFailPenalty, 'счёт цели: 50 + давление − провалы');
+  assert.strictEqual(decide({ ...base, goal: hut, idleBuildMin: 1000 }).score, 50 + T.idlePerMin * T.idleCapMin, 'давление не выше потолка');
+  // (в) ночью без угрозы у базы, простой ≥ 8 — цель раньше ожидания/укрытия; идущий wait_night прерываем
+  const nb = { ...nz, base: bg, baseDist: 10, goal: hut };
+  assert.strictEqual(decide({ ...nb, idleBuildMin: T.idleBreakWaitMin }).key, 'goal', 'ночь у базы, простой — цель, а не wait_night/night_mine');
+  assert.strictEqual(decide({ ...nb, sheltered: false, idleBuildMin: 10 }).key, 'goal', 'ночь у базы без укрытия, простой — цель, а не укрытие');
+  assert.strictEqual(decide({ ...nb, sheltered: false }).key, 'night_shelter_dig', 'простоя нет — укрытие как раньше');
+  assert.ok(decide({ ...nb, freeBed: true, idleBuildMin: 10 }).key !== 'sleep', 'простой — не сон');
+  const wn = { ...nb, running: { name: 'wait_night', key: 'wait_night', kind: 'body' } };
+  nd = decide({ ...wn, idleBuildMin: T.idleBreakWaitMin });
+  assert.ok(nd && nd.key === 'goal' && nd.preempt === true, 'идущий wait_night прерываем ради цели: ' + JSON.stringify(nd));
+  assert.strictEqual(decide({ ...wn, idleBuildMin: T.idleBreakWaitMin - 1 }), null, 'простой меньше порога — ждём ночь дальше');
+  assert.strictEqual(decide({ ...wn, idleBuildMin: 20, idle: false }), null, 'мозг командовал — не прерываем');
+  assert.strictEqual(decide({ ...wn, idleBuildMin: 20, blocked: { goal: true } }), null, 'цель на паузе — не прерываем');
+  // (г) ночью с угрозой или мало HP — давление не действует
+  nd = decide({ ...nb, idleBuildMin: 40, hostilesNear: 1, hostile: { name: 'zombie', d: 5 } });
+  assert.ok(!nd || nd.key !== 'goal', 'моб рядом ночью — не цель');
+  nd = decide({ ...wn, idleBuildMin: 40, hostilesNear: 1, hostile: { name: 'zombie', d: 2 } });
+  assert.ok(!nd || nd.key !== 'goal', 'моб рядом — wait_night прерывает защита, не цель');
+  assert.strictEqual(decide({ ...wn, idleBuildMin: 40, hitRecent: true }).key, 'night_escape', 'били — защита, не цель');
+  assert.notStrictEqual((decide({ ...nb, idleBuildMin: 40, hp: 5 }) || {}).key, 'goal', 'мало HP ночью — не цель');
+  assert.strictEqual(decide({ ...wn, idleBuildMin: 40, hp: 5 }), null, 'мало HP — wait_night не прерываем ради цели');
+  assert.strictEqual(decide({ ...base, goal: hut, idleBuildMin: 40, hp: 5 }).key, 'lowhp_shelter', 'мало HP днём — укрытие, не цель');
+  // (д) ночью вне базы (или без базы, или точка цели вне базы) — цели нет
+  assert.notStrictEqual(decide({ ...nb, baseDist: 300, idleBuildMin: 40 }).key, 'goal', 'ночью вне базы — не цель');
+  assert.notStrictEqual(decide({ ...nb, base: null, baseDist: null, idleBuildMin: 40 }).key, 'goal', 'ночью без базы — не цель');
+  assert.notStrictEqual(decide({ ...nb, goal: { ...hut, params: { x: 500, z: 500 } }, idleBuildMin: 40 }).key, 'goal', 'точка цели вне базы — не цель');
+  assert.strictEqual(decide({ ...wn, baseDist: 300, idleBuildMin: 40 }), null, 'вне базы wait_night не прерываем');
+  // (е) провал цели — повтор после паузы goalRetryMs с шагом вдвое меньше; успех без нового блока — не повторяем
+  const { goalState: GS, goalAfter: GA, stepParams: SP } = require('./autopilot');
+  const g60 = { name: 'collect', params: { block: 'stone', count: 60 }, kind: 'body', sig: 's60' };
+  const apg = { goal: g60 };
+  const t0 = 1e12;
+  assert.deepStrictEqual(GS(apg, t0), { goal: g60, goalDone: false, goalFailed: false }, 'цель свежая');
+  GA(apg, { sig: 's60', name: 'collect' }, 'провал', 'не нашёл stone', t0, false);
+  assert.strictEqual(GS(apg, t0 + 1000).goalFailed, true, 'сразу после провала — пауза');
+  let gs2 = GS(apg, t0 + T.goalRetryMs);
+  assert.ok(!gs2.goalFailed && gs2.goal.params.count === 30, 'после паузы — повтор, count вдвое меньше: ' + JSON.stringify(gs2));
+  assert.strictEqual(decide({ ...base, ...gs2 }).params.count, 30, 'decide берёт уменьшенный шаг');
+  GA(apg, { sig: 's60', name: 'collect' }, 'провал', 'не нашёл stone', t0 + T.goalRetryMs, false);
+  assert.strictEqual(GS(apg, t0 + 3 * T.goalRetryMs).goal.params.count, 15, 'второй провал — ещё вдвое');
+  assert.strictEqual(SP({ n: 1, count: 3, 'кол-во': 5 }, 8).n, 1, 'не меньше 1');
+  GA(apg, { sig: 's60', name: 'collect' }, 'ok', null, t0 + 4 * T.goalRetryMs, true);
+  gs2 = GS(apg, t0 + 4 * T.goalRetryMs + 1000);
+  assert.ok(gs2.goalDone && gs2.goal.params.count === 60, 'успех — шаг сброшен, короткая пауза');
+  assert.strictEqual(GS(apg, t0 + 4 * T.goalRetryMs + T.goalRepeatMs).goalDone, false, 'успех с прогрессом — следующий шаг');
+  GA(apg, { sig: 's60', name: 'collect' }, 'ok', null, t0 + 5 * T.goalRetryMs, false);
+  assert.strictEqual(GS(apg, t0 + 50 * T.goalRetryMs).goalDone, true, 'успех без нового блока — до новой строки не повторяем');
+  assert.strictEqual(GS({ goal: { ...g60, sig: 'new' }, goalDone: 's60', goalEmpty: 's60' }, t0).goalDone, false, 'новая строка — снова');
   return { ok: true };
 };

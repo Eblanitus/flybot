@@ -212,9 +212,13 @@ module.exports = async () => {
     const at = (rx, ry, rz) => { const q = BP.instantiate(hut, 0, 64, 0, rot).cells.find(k => k.lx === rx && k.ly === ry && k.lz === rz); return q; };
     const q1 = at(3, 1, 3), q2 = at(2, 0, 2), q3 = at(0, 1, 1), q4 = at(3, 4, 3);
     w.set(q1.x, q1.y, q1.z, 'stone'); w.set(q2.x, q2.y, q2.z, 'dirt'); w.set(q3.x, q3.y, q3.z, 'cobblestone'); w.set(q4.x, q4.y, q4.z, 'short_grass');
+    // v0.2: каждый блок чертежа ставится в клетку ctx.buildingAt — итог дня считает его «построено» (lib/daylog.js)
+    const origP = w.bot._placeBlockWithOptions; let bAt = 0, bMiss = 0;
+    w.bot._placeBlockWithOptions = w.bot.placeBlock = async (ref, face, o) => { const d = ref.position.plus(face); if (w.ctx.buildingAt === `${d.x},${d.y},${d.z}`) bAt++; else bMiss++; return origP(ref, face, o); };
     const t = task();
     const res = await BP.buildBlueprint(w.ctx, t, { name: 'hut_west', x: 0, y: 64, z: 0, rot });
     assert(res.ok, JSON.stringify(res)); assert.deepStrictEqual(res.failed, []);
+    assert(bAt > 0 && bMiss === 0 && w.ctx.buildingAt == null, `блоки чертежа — в клетке buildingAt: ${bAt}/${bMiss}, после: ${w.ctx.buildingAt}`);
     assert.strictEqual(res.matched, 245); assert.strictEqual(res.total, 245);
     assert(res.removed >= 2, 'вырезано/заменено: ' + res.removed);
     // готовые: воздух чертежа (кроме вырезанного камня q1) + стоявшая стена q3; число воздуха — из самого чертежа (brain/blueprints меняет мозг)

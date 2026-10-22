@@ -26,6 +26,12 @@
 // ноги, но: до старта горю/лава/под водой дорогу не начинаем; ночью (закат) при HP<8 или еде<18 (без регенерации,
 // REGEN_FOOD в lib/danger.js) дорогу не начинаем; на голом goto по ходу «горю»/в лаве — бросаем дорогу немедленно
 // (HP 20 → 7 за 70 с — цена одной проверки) и отходим/укрываемся. L003/L014/L013/L052 и правила паузы/цели не тронул.
+// v0.2 «простой страшнее смерти»: idleBuildMin — минуты без блока стройки (lib/daylog.js). Давление idlePerMin за минуту
+// (не выше idleCapMin): + к цели мозга, − к ожиданию/укрытию без угрозы (wait_night, night_shelter*, sleep). Ночью цель —
+// только у базы (муха и точка цели в радиусе «База:»), не в поле. Идущий wait_night при простое ≥ idleBreakWaitMin без
+// угрозы у базы — прерываем ради цели. Угроза (враг, лава, мало HP, моб ночью) — всегда раньше давления.
+// Цель: провал — повтор через goalRetryMs с count/n вдвое меньше; успех с прогрессом — следующий шаг через goalRepeatMs;
+// успех без нового блока — до новой строки «Автопилот:» не повторяем (иначе пустой круг).
 'use strict';
 const http = require('http');
 const fs = require('fs');
@@ -88,7 +94,8 @@ function lowHpOf(s) {
 //     goalFailed (цель мозга уже провалилась — с теми же параметрами не повторяем), crashed:{навык:{reason,at}}
 //     (навыки, упавшие со сбоем кода: автопилот их не повторяет),
 //     base:{x,y,z,r}|null (строка «База:» из notes.md), baseDist (горизонтальная дистанция до базы, null если не считается),
-//     outlook (А, lib/danger.js outlook: {win, ttdSec, passiveTtdSec, hitsToDie, mobs…}; нет — пороги HP)}
+//     outlook (А, lib/danger.js outlook: {win, ttdSec, passiveTtdSec, hitsToDie, mobs…}; нет — пороги HP),
+//     idleBuildMin (v0.2: минуты без блока стройки; нет поля — давления нет, всё как раньше)}
 // -> null | {key, kind:'body'|'learned', name, params, why, preempt?, score?, others?} (score/others — В: счёт выбранного дела и следующих)
 function decide(s) {
   if (!s.on) return null;
@@ -150,6 +157,25 @@ function decide(s) {
     return body('go_base_escape', 'escape', { distance: T.apEscapeDist, shelter: true },
       s.inLava ? 'в лаве на дороге к базе — бросаю дорогу и выхожу' : 'горю на дороге к базе — бросаю дорогу и отхожу/укрываюсь', true);
   }
+  // v0.2: давление простоя и цель мозга (ночью — только у базы)
+  const threat = s.hostilesNear > 0 || s.hitRecent;
+  const idleMin = Math.max(0, Number(s.idleBuildMin) || 0);
+  const press = T.idlePerMin * Math.min(idleMin, T.idleCapMin);
+  const g = s.goal && !s.goalDone && !s.goalFailed ? s.goal : null;
+  const goalAct = () => {
+    const why = `продолжаю цель мозга: ${g.name}${Object.keys(g.params).length ? ' ' + JSON.stringify(g.params) : ''}${press ? ` (простой ${Math.round(idleMin)} мин)` : ''}`;
+    return g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why); // упала со сбоем кода — её нет
+  };
+  const inBase = (x, z) => Math.hypot(x - s.base.x, z - s.base.z) <= s.base.r;
+  const gp = g && g.params || {};
+  const atBase = !!(s.base && s.baseDist != null && s.baseDist <= s.base.r &&
+    !(Number.isFinite(gp.x) && Number.isFinite(gp.z) && !inBase(gp.x, gp.z))); // ночная стройка — у базы, не в поле
+  // идущий wait_night: простой давно, угрозы нет, у базы — будим ради цели (после угроз и go_base_escape, мозг молчит)
+  if (run === 'wait_night' && s.idle && g && atBase && !threat && idleMin >= T.idleBreakWaitMin && ok('goal') && !lowHpOf(s)
+      && !(s.inLava || s.suffocating || s.stuck || s.underWater)) {
+    const a = goalAct();
+    if (a) return { ...a, why: a.why + ' — прерываю ожидание ночи', preempt: true };
+  }
   if (run || s.task) return null; // свой навык идёт — не дёргать
   if (!s.idle) return null;       // мозг недавно командовал — ждём
 
@@ -190,7 +216,6 @@ function decide(s) {
   const night = nightSoon;
   // L052 (смерть 23): ночью моб в hostileR или по муху били — «укрытие объявлено» ≠ «безопасно ждать»:
   // бой/стены/отход, а не wait_night и не яма (копка двух блоков 3-4 с — зомби успевает дойти и влезть).
-  const threat = s.hostilesNear > 0 || s.hitRecent;
   if (night && threat) {
     const a = nightDefense(false);
     return a; // все варианты защиты на паузе — жду (яму и ночную работу при мобе не начинаем)
@@ -216,13 +241,16 @@ function decide(s) {
     if (!s.sheltered) {
       if (s.blocks < T.nightBlocksMin && s.hostilesNear === 0) add(80, body('night_dirt', 'collect', { block: 'dirt', count: T.nightBlocksMin + 1 - s.blocks, radius: wider('night_dirt', 48) }, 'запасаю землю на укрытие'));
       // L052: яму (3-4 с) не начинаем, когда моб уже близко и сближается — тогда стены, отход или бой
-      if (s.hasPickaxe && s.hostilesNear === 0) add(75, body('night_shelter_dig', 'shelter', { mode: 'dig' }, 'ночь: закапываюсь (мобов рядом нет)'));
-      add(70, body('night_shelter', 'shelter', {}, 'ночь: строю укрытие'));
+      // v0.2: угрозы нет (иначе выше ночная защита) — простой снижает укрытие/ожидание
+      if (s.hasPickaxe && s.hostilesNear === 0) add(Math.max(0, 75 - press), body('night_shelter_dig', 'shelter', { mode: 'dig' }, 'ночь: закапываюсь (мобов рядом нет)'));
+      add(Math.max(0, 70 - press), body('night_shelter', 'shelter', {}, 'ночь: строю укрытие'));
     }
     if (s.phase === 'ночь' || s.phase === 'закат') add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью')); // упал со сбоем кода — его нет в выборе
-    if (s.isNight && s.freeBed) add(45 + (s.hp < 20 || s.food < T.huntFood ? 10 : 0), body('sleep', 'sleep', {}, 'сплю в кровати')); // ранена или голодна — сон полезнее
+    if (s.isNight && s.freeBed) add(Math.max(0, 45 + (s.hp < 20 || s.food < T.huntFood ? 10 : 0) - press), body('sleep', 'sleep', {}, 'сплю в кровати')); // ранена или голодна — сон полезнее
+    // v0.2: цель мозга ночью — только у базы (без «База:» или вне радиуса — нет: ночью в поле не строим)
+    if (g && atBase) add(50 + press, goalAct());
     // L052: wait_night только без врагов рядом и без свежих ударов (иначе выше сработала ночная защита)
-    if (s.isNight) add(20, body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь'));
+    if (s.isNight) add(Math.max(0, 20 - press), body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь'));
     return pick();
   }
 
@@ -249,11 +277,8 @@ function decide(s) {
       add(45 + Math.min(25, (s.baseDist - s.base.r) / 8) + (duskSoon ? 20 : 0), act);
     }
   }
-  // цель мозга (строка «Автопилот:» в notes.md); проваленная с теми же параметрами не повторяется (goalFailed) — следующее дело
-  if (s.goal && !s.goalDone && !s.goalFailed) {
-    const g = s.goal, why = `продолжаю цель мозга: ${g.name}${Object.keys(g.params).length ? ' ' + JSON.stringify(g.params) : ''}`;
-    add(50, g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why)); // упала со сбоем кода — её нет в выборе
-  }
+  // цель мозга (строка «Автопилот:» в notes.md); провал — пауза goalRetryMs (goalFailed), выполнена — goalDone; v0.2: + давление простоя
+  if (g) add(50 + press, goalAct());
   // длинная дневная работа: до ночи не успеет — счёт ниже
   add(35 - (s.nightIn != null && s.nightIn < T.dayRoutineSec ? 10 : 0), learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)'));
   // голод: чем меньше сытость (а еды нет), тем важнее охота — голодная муха охотится раньше цели мозга
@@ -390,6 +415,41 @@ function failInfoOf(ap, now) {
   }
   return out;
 }
+// v0.2: цель мозга для decide — провал: пауза goalRetryMs, затем повтор с count/n/кол-во вдвое меньше (ap.goalDiv, не меньше 1);
+// выполнена: снова через goalRepeatMs (следующий шаг стройки), но выполнена без нового блока (goalEmpty) — до новой строки нет
+const STEP_KEYS = ['count', 'n', 'кол-во'];
+function stepParams(params, div) {
+  if (!(div > 1)) return params;
+  const out = { ...params };
+  for (const k of STEP_KEYS) if (typeof out[k] === 'number' && out[k] > 0) out[k] = Math.max(1, Math.floor(out[k] / div));
+  return out;
+}
+function goalState(ap, now) {
+  const g = ap.goal;
+  if (!g) return { goal: null, goalDone: false, goalFailed: false };
+  const div = ap.goalDivSig === g.sig ? ap.goalDiv || 1 : 1;
+  return {
+    goal: div > 1 ? { ...g, params: stepParams(g.params, div) } : g,
+    goalDone: ap.goalDone === g.sig && (ap.goalEmpty === g.sig || now - (ap.goalDoneAt || 0) < T.goalRepeatMs),
+    goalFailed: !!(ap.goalFail && ap.goalFail.sig === g.sig && now - (ap.goalFail.at || 0) < T.goalRetryMs)
+  };
+}
+// итог запуска цели: verdict 'ok' | 'провал' (прочее — null); progressed — за запуск встал хоть один блок стройки (ctx.lastProgressAt)
+function goalAfter(ap, run, verdict, reason, now, progressed) {
+  if (verdict === 'ok') {
+    ap.goalDone = run.sig; ap.goalDoneAt = now; ap.goalFail = null; ap.goalDiv = 1; ap.goalDivSig = null;
+    ap.goalEmpty = progressed ? null : run.sig; // без прогресса — пустой круг, до новой строки не повторяем
+    return progressed ? `цель ${run.name}: шаг сделан — следующий через ${Math.round(T.goalRepeatMs / 1000)} с`
+      : `цель ${run.name}: выполнена, нового блока нет — не повторяю до новой цели`;
+  }
+  if (verdict === 'провал') {
+    ap.goalFail = { sig: run.sig, name: run.name, reason, at: now };
+    const div = ap.goalDivSig === run.sig ? ap.goalDiv || 1 : 1;
+    ap.goalDiv = div * 2; ap.goalDivSig = run.sig;
+    return `цель ${run.name}: провал (${reason}) — повтор через ${Math.round(T.goalRetryMs / 1000)} с, шаг вдвое меньше`;
+  }
+  return null;
+}
 function gather(ctx, ap) {
   const bot = ctx.bot;
   const now = Date.now();
@@ -440,9 +500,9 @@ function gather(ctx, ap) {
     enemies, alone: hostiles.filter(h => h.d <= T.aloneR).length === 0 && enemies.filter(e => e.d <= T.aloneEnemyR).length <= 1,
     freeBed, animals: ents.filter(e => isAnimal(e) && GAME.includes(entName(e)) && e.position.distanceTo(p) <= T.animalsR).length,
     recoverable: !!(ld && ld.at && now - ld.ts < T.recoverMs && ap.recoverFor !== ld.ts),
-    blocked, failInfo: failInfoOf(ap, now), goal: ap.goal || null, goalDone: !!ap.goal && ap.goalDone === ap.goal.sig,
-    // цель мозга уже провалилась (с теми же параметрами) — ждём новой строки «Автопилот:» или явного enable
-    goalFailed: !!(ap.goalFail && ap.goal && ap.goalFail.sig === ap.goal.sig),
+    blocked, failInfo: failInfoOf(ap, now),
+    ...goalState(ap, now), // цель мозга: пауза после провала/успеха, шаг после провала (v0.2)
+    idleBuildMin: ctx.daylog && ctx.daylog.idleMin ? ctx.daylog.idleMin() : 0, // v0.2: минуты без блока стройки
     crashed: crashList(ap, now),
     base: ap.base || null, baseDist: ap.base && baseDimOk(bot) ? Math.hypot(ap.base.x - p.x, ap.base.z - p.z) : null,
     // go_safe включён у исполнителя? — дорогу к базе ведёт он (заявка учителя, день 21); не проверили/выключен — нет
@@ -456,7 +516,9 @@ function create(ctx) {
     on: true, lastBrainCmd: Date.now(), lastBusy: 0, running: null, runnerOther: false,
     goal: null, goalDone: null, goalMtime: -1, base: null, baseSig: '', goalSkills: { t: 0, names: new Set(), enabled: {} },
     goSafe: false, goSafeT: 0, // go_safe включён у исполнителя? — раз в 30 с узнаём (дорогу к базе ведёт он, заявка 21.10)
-    goalFail: null,   // проваленная цель мозга: {sig, name, reason, at} — с теми же параметрами не повторяем
+    goalFail: null,   // проваленная цель мозга: {sig, name, reason, at} — повтор через goalRetryMs (v0.2)
+    goalDiv: 1, goalDivSig: null, // шаг цели после провалов: count/n делим на goalDiv
+    goalDoneAt: 0, goalEmpty: null, // выполнена когда; выполнена без прогресса (sig) — не повторяем
     goalFailNote: null, // что написать в журнал про проваленную цель (сразу после строки о провале)
     codeCrash: {},    // навыки, упавшие со сбоем кода: {навык: {reason, at}} — автопилот их не зовёт
     _mod: MOD, fails: {}, failInfo: {}, until: {}, lastChat: 0, recoverFor: 0, stuckSince: 0, wetSince: 0, lastPos: null, ticking: false, history: [],
@@ -574,7 +636,7 @@ function create(ctx) {
       if (bsig !== ap.baseSig) { ap.baseSig = bsig; delete ap.until.go_base; ap.fails.go_base = 0; } // новая база — пауза не действует
       // новая строка «Автопилот:» — новая попытка: проваленную цель можно пробовать снова
       if (!ap.goal || !g || g.sig !== ap.goal.sig) {
-        delete ap.until.goal; ap.fails.goal = 0; ap.goalFail = null;
+        delete ap.until.goal; ap.fails.goal = 0; ap.goalFail = null; ap.goalDiv = 1; ap.goalDivSig = null; ap.goalEmpty = null;
         if (g && g.name) delete ap.codeCrash[g.name]; // сбой кода этого навыка — тоже новая попытка
       }
       ap.goalRaw = g;
@@ -661,7 +723,7 @@ function create(ctx) {
     ...(ap.running ? { skill: ap.running.name, kind: ap.running.kind, sec: Math.round((Date.now() - ap.running.started) / 1000) } : {}),
     idleSec: Math.round((Date.now() - Math.max(ap.lastBrainCmd, ap.lastBusy)) / 1000),
     yields: ap.yields || 0,
-    ...(ap.goalFail ? { goalFailed: `${ap.goalFail.name}: жду новой цели (${ap.goalFail.reason})` } : {}),
+    ...(ap.goalFail ? { goalFailed: `${ap.goalFail.name}: повтор через ${Math.max(0, Math.round((ap.goalFail.at + T.goalRetryMs - Date.now()) / 1000))} с (${ap.goalFail.reason})` } : {}),
     paused: Object.entries(ap.until).filter(([, t]) => t > Date.now()).map(([k, t]) => `${k} ${Math.round((t - Date.now()) / 1000)}с`)
   });
 
@@ -728,12 +790,10 @@ function create(ctx) {
       note(`побег: ${grew ? 'оторвался' : 'не оторвался'}${run.enemyD0 != null && d1 != null ? ` (враг: ${run.enemyD0.toFixed(1)} → ${d1.toFixed(1)} м)` : ''} — пауза ${Math.round(pause / 1000)} с`);
     }
     if (run.key === 'goal') {
-      if (verdict === 'ok') { ap.goalDone = run.sig; ap.goalFail = null; }
-      else if (verdict === 'провал') {
-        // проваленную цель с теми же параметрами не повторяем: ждём новой строки «Автопилот:» (или явного enable)
+      if (verdict === 'ok' || verdict === 'провал') {
+        // v0.2: провал — повтор через goalRetryMs с шагом вдвое меньше; успех — следующий шаг через goalRepeatMs, без прогресса — стоп
         const reason = err ? String(err).split('\n')[0].slice(0, 120) : 'провал';
-        ap.goalFail = { sig: run.sig, name: run.name, reason, at: now }; // В: без паузы — просто следующее дело
-        ap.goalFailNote = `цель ${run.name}: с теми же параметрами не повторяю, беру другие дела и жду новой цели (провал: ${reason})`;
+        ap.goalFailNote = goalAfter(ap, run, verdict, reason, now, (ctx.lastProgressAt || 0) >= run.started);
       } else {
         ap.until.goal = Math.max(ap.until.goal || 0, now + BACKOFF_MS); // прерванная/выключенная цель — тоже пауза (L013)
       }
@@ -833,7 +893,7 @@ function attach(api) {
   if (!ap || ap._mod !== MOD) {
     const prev = ap;
     ap = create(ctx);
-    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; ap.goSafe = !!prev.goSafe; ap.goSafeT = prev.goSafeT || 0; }
+    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.goalDiv = prev.goalDiv || 1; ap.goalDivSig = prev.goalDivSig || null; ap.goalDone = prev.goalDone || null; ap.goalDoneAt = prev.goalDoneAt || 0; ap.goalEmpty = prev.goalEmpty || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; ap.goSafe = !!prev.goSafe; ap.goSafeT = prev.goSafeT || 0; }
     ctx.autopilot = ap;
   }
   api.on(bot, 'death', () => { ap.yieldAll('смерть').catch(() => {}); });
@@ -841,4 +901,4 @@ function attach(api) {
   return { detach: reason => ap.yieldAll(reason || 'поведение выгружено') };
 }
 
-module.exports = { attach, decide, lowHpOf, gather, create, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };
+module.exports = { attach, decide, lowHpOf, gather, create, goalState, goalAfter, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };

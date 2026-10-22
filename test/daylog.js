@@ -118,7 +118,37 @@ module.exports = async () => {
     m4.bot.emit('death'); m4.bot.removeAllListeners('diggingCompleted'); m4.bot.emit('spawn');
     await m4.bot.dig({ name: 'stone' }); assert.strictEqual(d4.state.mined.stone, 2, 'после смерти добыча считается');
     await m4.bot.dig({ name: 'stone' }).catch(() => {}); assert.strictEqual(d4.state.mined.stone, 3, 'обёртка одна');
-    for (const ss of [session, m2.session, m3.session, m4.session]) for (const tm of ss.timers) clearInterval(tm);
+    // ---- v0.2: прогресс стройки и простой ----
+    const m5 = mk(fs.mkdtempSync(path.join(os.tmpdir(), 'flybot-daylog5-')));
+    const d5 = D.attach(m5.ctx, m5.session); m5.bot.emit('time');
+    const T0 = 1e12;
+    d5.tickIdle(T0); d5.tickIdle(T0 + 3000); assert.strictEqual(d5.idle.ms, 3000, 'простой копится');
+    d5.tickIdle(T0 + 3000 + 3600000); assert.strictEqual(d5.idle.ms, 8000, 'офлайн/пауза — не больше 5 с за тик');
+    d5.tickIdle(T0 + 3000 + 3600000 + 4000, false); assert.strictEqual(d5.idle.ms, 8000, 'не в мире — не копится');
+    let tt = T0 + 3000 + 3600000 + 4000;
+    for (let i = 0; i < 125; i++) d5.tickIdle(tt += 5000);
+    assert.ok(d5.idleMin() >= 10, 'минуты простоя: ' + d5.idleMin());
+    assert.deepStrictEqual(m5.events.filter(e => e.type === 'progress_idle').map(e => e.min), [10], 'событие progress_idle на 10 мин');
+    // служебные навыки и рефлекс — служебные (aux), даже в клетке place_at; стройка и чертёж — прогресс
+    const b0 = d5.state.built, a0 = d5.state.aux;
+    m5.ctx.tasks.current = { name: 'place_at', source: 'brain', by: 'skill:climb_up' }; place(m5.bot, 'cobblestone', m5.ctx);
+    m5.ctx.tasks.current = { name: 'place_at', source: 'brain', by: 'skill:go_safe_v2' }; place(m5.bot, 'cobblestone', m5.ctx);
+    m5.ctx.tasks.current = { name: 'place_at', source: 'reflex' }; place(m5.bot, 'cobblestone', m5.ctx);
+    assert.strictEqual(d5.state.built, b0); assert.strictEqual(d5.state.aux, a0 + 3, 'climb_up/go_safe*/reflex — служебные');
+    assert.ok(d5.idleMin() >= 10, 'служебные не сбрасывают простой');
+    m5.ctx.tasks.current = { name: 'place_at', source: 'brain', by: 'skill:build_hut' }; place(m5.bot, 'oak_planks', m5.ctx);
+    assert.strictEqual(d5.state.built, b0 + 1, 'build_* — построено');
+    assert.strictEqual(d5.idle.ms, 0, 'прогресс — простой с нуля'); assert.ok(m5.ctx.lastProgressAt > 0, 'lastProgressAt');
+    d5.tickIdle(tt += 5000); d5.tickIdle(tt += 5000); assert.strictEqual(d5.idle.ms, 10000, 'после прогресса копится снова');
+    // день: сумма простоя и самый длинный отрезок — в day_report и в daylog.json (переживает рестарт)
+    d5.dirty = true; d5.save();
+    const d5b = D.create({ ...m5.ctx, daylog: null }); assert.strictEqual(d5b.idle.ms, 10000, 'простой переживает рестарт тела');
+    m5.bot.time.day = 6; m5.bot.emit('time');
+    const ev5 = m5.events.find(e => e.type === 'day_report');
+    assert.ok(ev5 && ev5.idleMin >= 10 && ev5.idleMaxMin >= 10 && /^простой: \d+ мин \(самый длинный \d+ мин\)$/.test(ev5.idle), JSON.stringify(ev5));
+    assert.ok(/простой \d+ мин/.test(ev5.line), ev5.line);
+    // чертёж ставит ctx.buildingAt — проверка в test/blueprint.js
+    for (const ss of [session, m2.session, m3.session, m4.session, m5.session]) for (const tm of ss.timers) clearInterval(tm);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   console.log('daylog: OK');
 };

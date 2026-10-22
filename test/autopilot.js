@@ -23,7 +23,11 @@ module.exports = async () => {
   a = decide({ ...base, goal: { ...goal, name: 'build_hut', kind: 'learned' } }); assert(a.key === 'goal' && a.kind === 'learned');
   assert.strictEqual(decide({ ...base, goal, goalDone: true }).name, 'day_routine', 'выполнена -> не повторять');
   assert.strictEqual(decide({ ...base, goal, blocked: { goal: true } }).name, 'day_routine', 'бэкофф -> day_routine');
-  assert.notStrictEqual(decide({ ...base, goal, isNight: true, phase: 'ночь' }).key, 'goal', 'ночью цель не трогаем');
+  // v0.2: ночью цель — только у базы (без «База:» или вне радиуса — нет)
+  assert.notStrictEqual(decide({ ...base, goal, isNight: true, phase: 'ночь' }).key, 'goal', 'ночью без базы цель не трогаем');
+  const nbs = { x: 0, y: 64, z: 0, r: 96 };
+  assert.notStrictEqual(decide({ ...base, goal, isNight: true, phase: 'ночь', base: nbs, baseDist: 200, idleBuildMin: 30 }).key, 'goal', 'ночью вне базы цель не трогаем');
+  assert.strictEqual(decide({ ...base, goal, isNight: true, phase: 'ночь', base: nbs, baseDist: 20, idleBuildMin: 30 }).key, 'goal', 'ночью у базы при простое — цель');
   assert.notStrictEqual((decide({ ...base, goal, hp: 5, hostilesNear: 2 }) || {}).key, 'goal', 'безопасность важнее');
   assert.strictEqual(decide({ ...base, goal, idle: false }), null, 'мозг активен');
   assert.strictEqual(decide({ ...base, goal, recoverable: true }).key, 'recover', 'recover раньше цели');
