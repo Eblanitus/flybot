@@ -280,7 +280,7 @@ async function doRun(name, params, timeoutSec) {
   if (r.output) out.output = r.output.slice(0, 1500);
   if (!ok) {
     const s = stats[name] || {};
-    out.note = `Счёт версии "${name}": успешно ${s.ok || 0} из ${s.runs || 0}, провалов подряд ${s.consecutiveFails || 0}.`;
+    out.note = `Счёт версии "${name}": успешно ${s.ok || 0} из ${s.runs || 0}, провалов подряд ${s.consecutiveFails || 0}. Другие версии — GET /catalog?name=${V.baseOf(name)}, выключить эту — /disable; причину разбирает учитель (заявка инженеру).`;
   }
   return out;
 }
