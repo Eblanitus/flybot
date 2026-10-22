@@ -1,0 +1,1 @@
+{"name":"flybot-mcp","version":"1.0.0","private":true,"description":"MCP server: FlyBot body and runner HTTP API as tools for OpenCode roles","type":"commonjs","dependencies":{"@modelcontextprotocol/sdk":"^1.32.1","zod":"^4.6.7"}}

@@ -11,26 +11,212 @@
   },
   "starter_kit": {
     "enabled": true,
-    "runs": 2,
-    "ok": 1,
-    "fail": 1,
-    "consecutiveFails": 1,
-    "lastError": "шаг \"бревна\": навык тела \"collect\" не удался: не нашёл log в радиусе 48 (добыто 0/5); попробуй explore",
-    "lastRun": "2026-10-21T01:18:56.925Z",
-    "lastOk": "2026-10-20T20:18:19.961Z"
+    "runs": 7,
+    "ok": 5,
+    "fail": 2,
+    "consecutiveFails": 0,
+    "lastError": "шаг \"бревна\": навык тела \"collect\" не удался: занят навыком collect (taskId 1113); пошли {\"action\":\"stop\"} или force:true",
+    "lastRun": "2026-10-21T18:30:20.963Z",
+    "lastOk": "2026-10-21T18:30:20.963Z"
   },
   "build_fence_line": {
     "enabled": true,
-    "runs": 0,
-    "ok": 0,
-    "fail": 0,
+    "runs": 17,
+    "ok": 5,
+    "fail": 12,
     "consecutiveFails": 0,
-    "lastError": null,
-    "lastRun": null,
-    "lastOk": null
+    "lastError": "стоит 3 из 4; ошибок 0",
+    "lastRun": "2026-10-21T22:49:11.213Z",
+    "lastOk": "2026-10-21T22:49:11.213Z"
   },
   "build_hut": {
     "enabled": true,
+    "runs": 30,
+    "ok": 6,
+    "fail": 24,
+    "consecutiveFails": 1,
+    "lastError": "построено 133/167; дверь: за стеной пусто, опоры нет; дыры: -400 66 29, -399 66 29, -400 66 30, -397 66 30, -400 66 31, -399 66 31",
+    "lastRun": "2026-10-21T21:26:29.940Z",
+    "lastOk": "2026-10-21T21:26:02.370Z"
+  },
+  "gather_wood": {
+    "enabled": true,
+    "runs": 7,
+    "ok": 1,
+    "fail": 6,
+    "consecutiveFails": 0,
+    "lastError": "запуск прерван (POST /abort): процесс навыка убит, телу отправлен stop",
+    "lastRun": "2026-10-21T18:51:52.231Z",
+    "lastOk": "2026-10-21T18:51:52.231Z"
+  },
+  "climb_stairs": {
+    "enabled": true,
+    "runs": 6,
+    "ok": 3,
+    "fail": 3,
+    "consecutiveFails": 2,
+    "lastError": "навык вернул ok:false без error",
+    "lastRun": "2026-10-21T14:05:31.623Z",
+    "lastOk": "2026-10-21T10:34:48.361Z"
+  },
+  "night_mine": {
+    "enabled": false,
+    "runs": 43,
+    "ok": 21,
+    "fail": 22,
+    "consecutiveFails": 3,
+    "lastError": "night_mine: нет безопасного направления: север: рядом с туннелем (потолок: воздух) — пещера/вода/поверхность; восток: рядом с туннелем (стена: снежный слой (поверхность)) — пещера/вода/поверхность; юг: рядом с туннелем (потолок: воздух) — пещера/вода/поверхность; запад: рядом с туннелем (потолок: воздух) — пещера/вода/поверхность [вокруг воздух/поверхность: туннель 1×2 копается только в сплошной породе — сначала спустись на 3+ блока под поверхность (mine_stairs) или выйди из пещеры]",
+    "lastRun": "2026-10-21T16:21:31.199Z",
+    "lastOk": "2026-10-21T08:28:28.531Z",
+    "disabledReason": "авто: 3 провала подряд; последняя ошибка: night_mine: нет безопасного направления: север: рядом с туннелем (потолок: воздух) — пещера/вода/поверхность; восток: рядом с туннелем (стена: снежный слой (поверхность)) — пещера/вода/поверхность; юг: рядом с туннелем (потолок: воздух) — пещера/вода/поверхность; запад: рядом с туннелем (потолок: во",
+    "disabledAt": "2026-10-21T16:21:31.199Z"
+  },
+  "mine_stairs": {
+    "enabled": true,
+    "runs": 10,
+    "ok": 7,
+    "fail": 3,
+    "consecutiveFails": 0,
+    "lastError": "ok:false",
+    "lastRun": "2026-10-21T10:39:47.846Z",
+    "lastOk": "2026-10-21T10:39:47.846Z"
+  },
+  "day_routine": {
+    "enabled": false,
+    "runs": 37,
+    "ok": 14,
+    "fail": 23,
+    "consecutiveFails": 3,
+    "lastError": "уголь: край в 1 м здесь (перепад 5 м) — сбор не начинаю",
+    "lastRun": "2026-10-21T21:30:14.767Z",
+    "lastOk": "2026-10-21T13:55:50.033Z",
+    "disabledReason": "авто: 3 провала подряд; последняя ошибка: уголь: край в 1 м здесь (перепад 5 м) — сбор не начинаю",
+    "disabledAt": "2026-10-21T21:30:14.767Z"
+  },
+  "go_safe": {
+    "enabled": false,
+    "runs": 46,
+    "ok": 18,
+    "fail": 28,
+    "consecutiveFails": 3,
+    "lastError": "край в 10 м у -364 43 (землю не видно — возможен обрыв) — не иду",
+    "lastRun": "2026-10-22T00:34:26.315Z",
+    "lastOk": "2026-10-21T20:29:24.768Z",
+    "disabledReason": "авто: 3 провала подряд (выключена только эта версия); последняя ошибка: край в 10 м у -364 43 (землю не видно — возможен обрыв) — не иду",
+    "disabledAt": "2026-10-22T00:34:26.315Z"
+  },
+  "gather_list": {
+    "enabled": true,
+    "runs": 67,
+    "ok": 36,
+    "fail": 31,
+    "consecutiveFails": 0,
+    "lastError": "запуск прерван (POST /abort): процесс навыка убит, телу отправлен stop",
+    "lastRun": "2026-10-21T16:52:12.118Z",
+    "lastOk": "2026-10-21T16:52:12.118Z"
+  },
+  "setup_base": {
+    "enabled": true,
+    "runs": 9,
+    "ok": 3,
+    "fail": 6,
+    "consecutiveFails": 0,
+    "lastError": "не всё стоит: chest",
+    "lastRun": "2026-10-21T15:52:06.530Z",
+    "lastOk": "2026-10-21T15:25:37.659Z"
+  },
+  "deposit": {
+    "enabled": true,
+    "runs": 25,
+    "ok": 21,
+    "fail": 4,
+    "consecutiveFails": 0,
+    "lastError": "не всё сложено: spruce_fence ошибка: Can't find spruce_fence in slots [27 - 63], (item id: 346)",
+    "lastRun": "2026-10-22T00:39:22.174Z",
+    "lastOk": "2026-10-22T00:39:22.174Z"
+  },
+  "craft_gear": {
+    "enabled": true,
+    "runs": 13,
+    "ok": 8,
+    "fail": 5,
+    "consecutiveFails": 0,
+    "lastError": "не хватает материалов: planks 4, copper_ingot 7, furnace печь или 8 cobblestone",
+    "lastRun": "2026-10-21T19:19:52.112Z",
+    "lastOk": "2026-10-21T19:19:52.112Z"
+  },
+  "make_bed": {
+    "enabled": true,
+    "runs": 3,
+    "ok": 0,
+    "fail": 3,
+    "consecutiveFails": 0,
+    "lastError": "не хватает досок: нужно 3 (3 на кровать), есть 0 в пересчёте на доски; добудь бревна (gather_wood)",
+    "lastRun": "2026-10-21T11:33:28.908Z",
+    "lastOk": null
+  },
+  "cook_food": {
+    "enabled": true,
+    "runs": 6,
+    "ok": 0,
+    "fail": 6,
+    "consecutiveFails": 1,
+    "lastError": "нет топлива для печи (coal/charcoal/доски/бревна) — жарить нечем",
+    "lastRun": "2026-10-22T00:40:28.864Z",
+    "lastOk": null
+  },
+  "smelt_all": {
+    "enabled": true,
+    "runs": 11,
+    "ok": 4,
+    "fail": 7,
+    "consecutiveFails": 0,
+    "lastError": "ничего не выплавилось: raw_copper — заменён навыком shelter",
+    "lastRun": "2026-10-21T22:53:36.908Z",
+    "lastOk": "2026-10-21T22:53:36.908Z"
+  },
+  "stairs_down": {
+    "enabled": true,
+    "runs": 3,
+    "ok": 2,
+    "fail": 1,
+    "consecutiveFails": 1,
+    "lastError": "пустота под ступенью -399 52 22",
+    "lastRun": "2026-10-21T08:57:38.736Z",
+    "lastOk": "2026-10-21T08:55:47.162Z"
+  },
+  "mine_tunnel": {
+    "enabled": true,
+    "runs": 5,
+    "ok": 3,
+    "fail": 2,
+    "consecutiveFails": 0,
+    "lastError": "не дошла до входа -336 48 24: навык тела \"goto\" не удался: timeout",
+    "lastRun": "2026-10-21T10:46:43.450Z",
+    "lastOk": "2026-10-21T10:46:43.450Z"
+  },
+  "mine_vein": {
+    "enabled": true,
+    "runs": 31,
+    "ok": 17,
+    "fail": 14,
+    "consecutiveFails": 0,
+    "lastError": "для copper нужна каменная (или медная) кирка или лучше, у меня слабее",
+    "lastRun": "2026-10-21T10:45:16.464Z",
+    "lastOk": "2026-10-21T10:45:16.464Z"
+  },
+  "branch_mine": {
+    "enabled": true,
+    "runs": 3,
+    "ok": 0,
+    "fail": 3,
+    "consecutiveFails": 0,
+    "lastError": "спуск остановился на y=42, нужно 39: под следующей ступенью ненадёжно (air)",
+    "lastRun": "2026-10-21T10:39:47.848Z",
+    "lastOk": null
+  },
+  "farm_plot": {
+    "enabled": true,
     "runs": 0,
     "ok": 0,
     "fail": 0,
@@ -39,34 +225,770 @@
     "lastRun": null,
     "lastOk": null
   },
-  "gather_wood": {
+  "light_base": {
     "enabled": true,
-    "runs": 2,
+    "runs": 8,
     "ok": 0,
-    "fail": 2,
+    "fail": 8,
     "consecutiveFails": 2,
-    "lastError": "брёвен 0/12",
-    "lastRun": "2026-10-21T01:36:54.379Z",
+    "lastError": "поставлено 3 из 4; ошибок 1: навык тела \"place_at\" не удался: слишком долго идти",
+    "lastRun": "2026-10-21T22:57:36.252Z",
     "lastOk": null
   },
-  "climb_stairs": {
+  "wall_base": {
     "enabled": true,
     "runs": 1,
-    "ok": 1,
+    "ok": 0,
+    "fail": 1,
+    "consecutiveFails": 1,
+    "lastError": "поставлено 67 из 68; ошибок 1: навык тела \"place_at\" не удался: не к чему прислонить блок в (-385, 69, 28)",
+    "lastRun": "2026-10-21T16:35:10.542Z",
+    "lastOk": null
+  },
+  "bring_bed_home": {
+    "enabled": true,
+    "runs": 1,
+    "ok": 0,
+    "fail": 1,
+    "consecutiveFails": 1,
+    "lastError": "запуск прерван (POST /abort): процесс навыка убит, телу отправлен stop",
+    "lastRun": "2026-10-21T11:37:18.801Z",
+    "lastOk": null
+  },
+  "home_path": {
+    "enabled": false,
+    "runs": 15,
+    "ok": 2,
+    "fail": 13,
+    "consecutiveFails": 3,
+    "lastError": "не дошла до -302 67 51: путь в гору: подъём +11 м (предел +6) — обхода не нашёл; укрыться не вышло (нельзя копать вниз: water; блоков на стены мало (2/9))",
+    "lastRun": "2026-10-22T00:58:45.657Z",
+    "lastOk": "2026-10-21T15:29:37.090Z",
+    "disabledReason": "авто: 3 провала подряд (выключена только эта версия); последняя ошибка: не дошла до -302 67 51: путь в гору: подъём +11 м (предел +6) — обхода не нашёл; укрыться не вышло (нельзя копать вниз: water; блоков на стены мало (2/9))",
+    "disabledAt": "2026-10-22T00:58:45.657Z"
+  },
+  "build_column": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
     "fail": 0,
     "consecutiveFails": 0,
     "lastError": null,
-    "lastRun": "2026-10-21T02:55:12.347Z",
-    "lastOk": "2026-10-21T02:55:12.347Z"
+    "lastRun": null,
+    "lastOk": null
   },
-  "night_mine": {
+  "lamp_posts": {
     "enabled": true,
-    "runs": 4,
-    "ok": 2,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_up": {
+    "enabled": true,
+    "runs": 10,
+    "ok": 4,
+    "fail": 6,
+    "consecutiveFails": 1,
+    "lastError": "блоки кончились: поднялась до y=51 из 67, осталось 16 уровней, нужно ~30 блоков (есть 0, не хватает 30)",
+    "lastRun": "2026-10-22T00:48:11.926Z",
+    "lastOk": "2026-10-21T22:09:51.914Z"
+  },
+  "chest_open": {
+    "enabled": true,
+    "runs": 29,
+    "ok": 29,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": "2026-10-22T01:21:01.682Z",
+    "lastOk": "2026-10-22T01:21:01.682Z"
+  },
+  "chest_take": {
+    "enabled": false,
+    "runs": 15,
+    "ok": 4,
+    "fail": 11,
+    "consecutiveFails": 3,
+    "lastError": "в точке -392 67 35 не сундук, а cobblestone — дай координаты сундука",
+    "lastRun": "2026-10-22T01:18:31.732Z",
+    "lastOk": "2026-10-22T00:50:41.463Z",
+    "disabledReason": "авто: 3 провала подряд (выключена только эта версия); последняя ошибка: в точке -392 67 35 не сундук, а cobblestone — дай координаты сундука",
+    "disabledAt": "2026-10-22T01:18:31.732Z"
+  },
+  "chest_store": {
+    "enabled": true,
+    "runs": 11,
+    "ok": 11,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": "2026-10-22T00:39:22.132Z",
+    "lastOk": "2026-10-22T00:39:22.132Z"
+  },
+  "bring_bed_home_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_fence_line_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v10": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v11": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v7": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v6": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v8": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_open_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_open_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_open_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "build_hut_v9": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_store_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_store_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_store_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_store_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_open_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_take_v5": {
+    "enabled": false,
+    "runs": 3,
+    "ok": 0,
+    "fail": 3,
+    "consecutiveFails": 3,
+    "lastError": "в точке -392 66 35 не сундук, а cobblestone — дай координаты сундука",
+    "lastRun": "2026-10-22T01:21:01.685Z",
+    "lastOk": null,
+    "disabledReason": "авто: 3 провала подряд (выключена только эта версия); последняя ошибка: в точке -392 66 35 не сундук, а cobblestone — дай координаты сундука",
+    "disabledAt": "2026-10-22T01:21:01.685Z"
+  },
+  "chest_store_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_take_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_take_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_stairs_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_take_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_take_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_stairs_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_up_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_up_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_up_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_up_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "cook_food_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_up_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "cook_food_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "cook_food_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "day_routine_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "day_routine_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "day_routine_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "day_routine_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_list_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "deposit_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "day_routine_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_list_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_list_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "go_safe_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_wood_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_wood_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "go_safe_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "go_safe_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "go_safe_v6": {
+    "enabled": true,
+    "runs": 5,
+    "ok": 3,
     "fail": 2,
     "consecutiveFails": 1,
-    "lastError": "навык вернул ok:false без error",
-    "lastRun": "2026-10-21T03:00:35.664Z",
-    "lastOk": "2026-10-21T02:58:33.183Z"
+    "lastError": "HP 2 — не иду, отступила",
+    "lastRun": "2026-10-22T01:22:12.500Z",
+    "lastOk": "2026-10-22T01:15:46.449Z"
+  },
+  "go_safe_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "go_safe_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "home_path_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "home_path_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "home_path_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "home_path_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "mine_stairs_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "night_mine_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "night_mine_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "setup_base_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "setup_base_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "setup_base_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "setup_base_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_open_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
   }
 }

@@ -1,3 +1,4 @@
+// версия: была текущей на 22.10; против v1: кладёт через выученный chest_store (отказ за 2-3 с с причиной)
 // deposit — дойти до сундука базы и сложить всё, кроме keep.
 // Сундук: ближайший в радиусе 8 от x,y,z (params) или от метки home. Нет сундука — скрафтить (доски/брёвна) и поставить.
 // keep: "pickaxe,axe,sword,shovel,food,torch,bed" (по умолчанию; плюс броня и щит всегда), "имя:n" — оставить n штук.
@@ -41,7 +42,7 @@ async function invMap(api) {
 
 module.exports = {
   name: 'deposit',
-  description: 'Дойти до сундука базы (ближайший в радиусе 8 от x,y,z или метки home) и сложить всё, кроме keep ("pickaxe,axe,sword,shovel,food,torch,bed"; "cobblestone:16" — оставить 16). Броня/щит не кладёт. Нет сундука — скрафтит и поставит. dry=1 — что сложит.',
+  description: 'Дойти до сундука базы (ближайший в радиусе 8 от x,y,z или метки home) и сложить всё, кроме keep ("pickaxe,axe,sword,shovel,food,torch,bed"; "cobblestone:16" — оставить 16). Броня/щит не кладёт. Нет сундука — скрафтит и поставит. Сундук открывает через chest_store: если мешает (блок над сундуком, муха выше уровня) — отказ за 2-3 с с причиной. dry=1 — что сложит.',
   params: {
     keep: 'что оставить: "pickaxe,axe,sword,shovel,food,torch,bed" (по умолчанию); имя:n — оставить n штук',
     x: 'точка базы (необязательно; иначе метка home)', y: 'y', z: 'z',
@@ -133,12 +134,14 @@ module.exports = {
     const full = Object.keys(plan).filter(n => (inv[n] || 0) > 0 && plan[n] >= (inv[n] || 0));
     const part = Object.keys(plan).filter(n => (inv[n] || 0) > 0 && plan[n] < (inv[n] || 0));
     const [cx, cy, cz] = chest;
+    // сложить через выученный chest_store: он сначала проверяет, что мешает (над сундуком блок,
+    // муха выше уровня, сундук не виден) и встаёт на уровень сундука — отказ приходит за 2-3 с с причиной
     if (full.length) {
-      try { const r = await api.cmd('chest_store', { items: full, x: cx, y: cy, z: cz }); Object.assign(stored, r.stored || {}); }
+      try { const r = await api.skill('chest_store', { items: full, x: cx, y: cy, z: cz }); if (!r || r.ok === false) errors.push(String((r && r.error) || 'сундук не открылся').slice(0, 160)); else Object.assign(stored, r.stored || {}); }
       catch (e) { errors.push(e.message.slice(0, 160)); }
     }
     for (const n of part) {
-      try { const r = await api.cmd('chest_store', { items: [n], count: plan[n], x: cx, y: cy, z: cz }); Object.assign(stored, r.stored || {}); }
+      try { const r = await api.skill('chest_store', { items: [n], count: plan[n], x: cx, y: cy, z: cz }); if (!r || r.ok === false) errors.push(`${n}: ${String((r && r.error) || 'сундук не открылся').slice(0, 140)}`); else Object.assign(stored, r.stored || {}); }
       catch (e) { errors.push(`${n}: ${e.message.slice(0, 120)}`); }
     }
     const bad = Object.entries(stored).filter(([, v]) => typeof v !== 'number');

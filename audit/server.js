@@ -231,7 +231,7 @@ function chatFeed(events, limit, withSystem) {
   return out.slice(-limit);
 }
 
-// ======================= журнал мозга (data/night-*.log) =======================
+// ======================= журнал мозга (data/night.log, data/night-*.log) =======================
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const stripAnsi = s => String(s).replace(ANSI, '');
@@ -260,38 +260,46 @@ function parseNightLog(rawLines) {
   const out = [];
   let mode = 'normal';
   let firstOut = false;
+  let day = null, ts = null; // день — из последнего «brain start», время — из метки «[ЧЧ:ММ:СС] » (tools/tstamp.js)
+  const push = e => { if (ts != null && e.ts == null) e.ts = ts; out.push(e); };
   for (let raw of rawLines) {
-    const line = stripAnsi(raw).replace(/\r/g, '');
+    let line = stripAnsi(raw).replace(/\r/g, '');
+    const st = /^\[(\d\d):(\d\d):(\d\d)\] /.exec(line);
+    if (st) {
+      line = line.slice(st[0].length);
+      if (day != null) { let t = day + ((+st[1] * 60 + +st[2]) * 60 + +st[3]) * 1000; if (ts != null && t < ts - 3600e3) { day += 86400e3; t += 86400e3; } ts = t; }
+    }
     if (line === '') { mode = 'normal'; continue; }
     let m;
-    if ((m = /^=====\s*\[(\d\d)\.(\d\d)\.(\d{4}) (\d\d):(\d\d):(\d\d)[,.]?\d*\]\s*(.*?)\s*=====\s*$/.exec(line))) {
-      out.push({ k: 'start', ts: new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime(), text: m[7] || 'brain start' });
+    if ((m = /^=====\s*\[(\d\d)\.(\d\d)\.(\d{4})\s+(\d{1,2}):(\d\d):(\d\d)[,.]?\d*\]\s*(.*?)\s*=====\s*$/.exec(line))) {
+      ts = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime(); day = new Date(+m[3], +m[2] - 1, +m[1]).getTime();
+      out.push({ k: 'start', ts, text: m[7] || 'brain start' });
       mode = 'normal'; continue;
     }
-    if (/^>\s*build\b/.test(line)) { out.push({ k: 'model', text: line.replace(/^>\s*/, '') }); mode = 'skip'; continue; }
+    if (/^>\s*build\b/.test(line)) { push({ k: 'model', text: line.replace(/^>\s*/, '') }); mode = 'skip'; continue; }
     if (line.startsWith('$ ')) {
       const c = parseCurl(line);
-      out.push(c ? { k: 'cmd', ...c, raw: line.slice(2, 300) } : { k: 'cmd', target: 'оболочка', title: line.slice(2, 160), args: '', raw: line.slice(2, 300) });
+      push(c ? { k: 'cmd', ...c, raw: line.slice(2, 300) } : { k: 'cmd', target: 'оболочка', title: line.slice(2, 160), args: '', raw: line.slice(2, 300) });
       mode = 'out'; firstOut = true; continue;
     }
     if ('→←✱✗↗'.includes(line[0]) && line[1] === ' ') {
       const sym = line[0];
       const body = line.slice(2);
       if (sym === '✗') { mode = 'skip'; continue; }
-      out.push({ k: 'tool', text: body.slice(0, 200), write: sym === '←' });
+      push({ k: 'tool', text: body.slice(0, 200), write: sym === '←' });
       mode = sym === '←' ? 'skip' : 'normal'; continue;
     }
     if (mode === 'out') {
-      if (firstOut) { firstOut = false; out.push({ k: 'out', text: line.slice(0, 220) }); }
+      if (firstOut) { firstOut = false; push({ k: 'out', text: line.slice(0, 220) }); }
       continue;
     }
     if (mode === 'skip') continue;
     if (/^Error:\s*The user has specified a rule/.test(line)) continue;
-    if (/^Error:/.test(line)) { out.push({ k: 'err', text: line.slice(0, 240) }); continue; }
+    if (/^Error:/.test(line)) { push({ k: 'err', text: line.slice(0, 240) }); continue; }
     if (/^Wrote file successfully/.test(line) || !line.trim()) continue;
     const last = out[out.length - 1];
     if (last && last.k === 'text' && last.joined < 40) { last.text += '\n' + line; last.joined++; }
-    else out.push({ k: 'text', text: line, joined: 1 });
+    else push({ k: 'text', text: line, joined: 1 });
   }
   for (const o of out) if (o.k === 'text') { delete o.joined; if (o.text.length > 1500) o.text = o.text.slice(0, 1500) + '…'; }
   return out;
@@ -327,7 +335,7 @@ function latestNightLog(dataDir) {
   let names = [];
   try { names = fs.readdirSync(dataDir); } catch (e) { return null; }
   for (const n of names) {
-    if (!/^night-.+\.log$/.test(n)) continue;
+    if (!/^night(-.+)?\.log$/.test(n)) continue;
     let st; try { st = fs.statSync(path.join(dataDir, n)); } catch (e) { continue; }
     if (!best || st.mtimeMs > best.mtimeMs) best = { name: n, file: path.join(dataDir, n), mtimeMs: st.mtimeMs, size: st.size };
   }
@@ -353,7 +361,7 @@ function scanBrainStarts(dataDir) {
   const res = [];
   let names = []; try { names = fs.readdirSync(dataDir); } catch (e) { return res; }
   for (const n of names) {
-    if (!/^night-.+\.log$/.test(n)) continue;
+    if (!/^night(-.+)?\.log$/.test(n)) continue;
     const file = path.join(dataDir, n);
     let st; try { st = fs.statSync(file); } catch (e) { continue; }
     let sc = startScan.get(file);
@@ -370,7 +378,7 @@ function scanBrainStarts(dataDir) {
           const buf = Buffer.alloc(len); const got = fs.readSync(fd, buf, 0, len, pos);
           if (got <= 0) break;
           const text = stripAnsi(buf.subarray(0, got).toString('latin1'));
-          const re = /=====\s*\[(\d\d)\.(\d\d)\.(\d{4}) (\d\d):(\d\d):(\d\d)[,.]?\d*\]\s*brain start\s*=====/g;
+          const re = /=====\s*\[(\d\d)\.(\d\d)\.(\d{4})\s+(\d{1,2}):(\d\d):(\d\d)[,.]?\d*\]\s*brain start\s*=====/g;
           let m;
           while ((m = re.exec(text))) {
             const ts = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime();
