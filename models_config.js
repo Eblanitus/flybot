@@ -2,7 +2,8 @@
 //   {"brain":"opencode/...","teacher":"opencode/...","engineer":"opencode/..."}
 // Его пишет вкладка «Модели» в аудите, а читают: night.cmd (мозг, перед каждой сессией) и brain_guard.ps1 (учитель — перед каждым
 // случаем, инженер — перед каждой заявкой). Нет файла или в нём мусор — берётся значение по умолчанию.
-// Без зависимостей. Из командной строки:  node models_config.js get brain|teacher|engineer   (печатает id модели)
+// Без зависимостей. Из командной строки:  node models_config.js get brain|teacher|engineer   (печатает id модели; если она
+// недоступна — запасную, см. effective)
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -66,16 +67,50 @@ function save(patch, dir) {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = file + '.tmp-' + process.pid;
-    fs.writeFileSync(tmp, JSON.stringify({ brain: next.brain, teacher: next.teacher, engineer: next.engineer }, null, 2) + '\n');
+    const keep = readRaw(dir).reserve;   // запасную модель вкладка «Модели» не знает — не терять её при сохранении
+    fs.writeFileSync(tmp, JSON.stringify({ brain: next.brain, teacher: next.teacher, engineer: next.engineer, ...(validModelId(keep) ? { reserve: keep } : {}) }, null, 2) + '\n');
     fs.renameSync(tmp, file);
   } catch (e) { return { ok: false, error: 'не удалось записать ' + FILE_NAME + ': ' + (e && e.message || e) }; }
   return { ok: true, models: next };
 }
 
-module.exports = { ROLES, DEFAULTS, FILE_NAME, validModelId, read, get, save, filePath };
+// Запасная модель (поле "reserve" в models.json; нет — Gemini Flash-Lite по ключу Google): берётся вместо модели роли, пока та
+// за последние DOWN_MS дала в журнале opencode DOWN_N+ ошибок «модель недоступна / лимит» (так 22.10 тихо пропала minimax).
+// Обрыв связи сюда не входит: без сети запасная не поможет. Через DOWN_MS без новых ошибок роль сама возвращается к своей модели.
+const RESERVE = 'google/gemini-3.5-flash-lite';
+const DOWN_MS = 2 * 3600e3, DOWN_N = 3;
+const DOWN_RE = /Endpoint is unavailable|Insufficient account funds|ProviderModelNotFound|Model not found|Free usage limit|Rate limit exceeded/;
+const OC_LOG = path.join(process.env.USERPROFILE || process.env.HOME || '', '.local', 'share', 'opencode', 'log', 'opencode.log');
+
+function downCount(id, logFile = OC_LOG, now = Date.now()) {
+  const [prov, ...rest] = id.split('/'), model = rest.join('/');
+  let s = '';
+  try {
+    const fd = fs.openSync(logFile, 'r'); const size = fs.fstatSync(fd).size, n = Math.min(size, 4 * 1024 * 1024);
+    const buf = Buffer.alloc(n); fs.readSync(fd, buf, 0, n, size - n); fs.closeSync(fd); s = buf.toString('utf8');
+  } catch (e) { return 0; }
+  let c = 0;
+  for (const line of s.split('\n')) {
+    if (!line.includes('level=ERROR') || !line.includes(`providerID=${prov} `) || !line.includes(`modelID=${model} `) || !DOWN_RE.test(line)) continue;
+    const t = Date.parse((line.match(/^timestamp=(\S+)/) || [])[1]);
+    if (t && now - t < DOWN_MS) c++;
+  }
+  return c;
+}
+
+// модель, которую роль реально запустит сейчас -> { id, reserve: bool }
+function effective(role, dir, logFile) {
+  const id = get(role, dir);
+  const raw = readRaw(dir);
+  const reserve = validModelId(raw.reserve) ? raw.reserve : RESERVE;
+  if (reserve === id || downCount(id, logFile) < DOWN_N || downCount(reserve, logFile) >= DOWN_N) return { id, reserve: false };
+  return { id: reserve, reserve: true };
+}
+
+module.exports = { ROLES, DEFAULTS, FILE_NAME, RESERVE, validModelId, read, get, save, filePath, downCount, effective };
 
 if (require.main === module) {
   const [cmd, role] = process.argv.slice(2);
-  if (cmd === 'get' && ROLES.includes(role)) { process.stdout.write(get(role) + '\n'); }
+  if (cmd === 'get' && ROLES.includes(role)) { process.stdout.write(effective(role).id + '\n'); }
   else { console.error('использование: node models_config.js get brain|teacher|engineer'); process.exit(2); }
 }
