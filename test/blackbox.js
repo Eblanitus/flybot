@@ -25,10 +25,11 @@ function world(dir, limits) {
   const events = [];
   const clock = { t: T0 };
   const ctx = {
-    bot, ready: true, dataDir: dir, hurtLog: [], lastDamage: null,
+    bot, ready: true, dataDir: dir, hurtLog: [], lastDamage: null, stats: { deaths: 0 },
     events: { push: (type, data) => { events.push({ type, ...data }); } },
     tasks: { current: { id: 7, name: 'collect', source: 'brain', by: 'skill:miner', status: 'running', started: T0 - 5000, progressText: 'копаю' }, legacy: null }
   };
+  bot.on('death', () => { ctx.stats.deaths++; }); // как body_events: счётчик растёт сразу (он подключён раньше ящика)
   const bb = new BlackBox(ctx, { dir: path.join(dir, 'blackbox'), now: () => clock.t, limits });
   const session = { timers: [] };
   bb.attach(session); session.timers.forEach(clearInterval); session.timers = []; // кадры в тесте делаем руками
@@ -76,11 +77,11 @@ module.exports = async () => {
     assert(w.bb.frozen, 'ящик заморожен');
     const frozenN = w.bb.frames.length; w.step(); w.step(); assert.strictEqual(w.bb.frames.length, frozenN, 'после смерти новые кадры не пишутся');
     assert.strictEqual(files(w.bb).length, 0, 'до события death файла ещё нет (ждём причину)');
-    w.bb.onEvent('death', { cause: 'drowned', message: 'муха drowned', at: [10, 64, -21], phase: 'день', deaths: 3 });
+    w.bb.onEvent('death', { cause: 'drowned', message: 'муха drowned', at: [10, 64, -21], phase: 'день', deaths: 1 });
     const fl = files(w.bb); assert.strictEqual(fl.length, 1); assert(/^death-\d{8}-\d{6}\.json$/.test(fl[0]), fl[0]);
     const death = JSON.parse(fs.readFileSync(path.join(w.bb.dir, fl[0]), 'utf8'));
     assert.strictEqual(death.kind, 'death'); assert.strictEqual(death.summary.cause, 'drowned'); assert.strictEqual(death.summary.message, 'муха drowned');
-    assert.strictEqual(death.summary.lastTask.by, 'skill:miner'); assert.deepStrictEqual(death.summary.pos, [10, 64, -21]); assert.strictEqual(death.summary.deaths, 3);
+    assert.strictEqual(death.summary.lastTask.by, 'skill:miner'); assert.deepStrictEqual(death.summary.pos, [10, 64, -21]); assert.strictEqual(death.summary.deaths, 1);
     assert.deepStrictEqual(death.lost.items, { cobblestone: 40, bread: 3, stone_pickaxe: 1 }); assert.strictEqual(death.lost.total, 44);
     assert(death.frames.length >= 60 && death.frames[death.frames.length - 1].why === 'смерть', 'кадры: ' + death.frames.length);
     const ev = w.events.find(e => e.type === 'blackbox_saved'); assert(ev && ev.kind === 'death' && ev.file === 'data/blackbox/' + fl[0], JSON.stringify(ev));
@@ -89,6 +90,39 @@ module.exports = async () => {
     w.bot.health = 20; w.bb.onEvent('spawn', { msg: 'респавн' }); assert(!w.bb.frozen && w.bb.frames.length === 0, 'после респавна буфер пустой');
     w.step(); assert.strictEqual(w.bb.frames.length, 1);
 
+    // ---- порядок событий вживую: смерть (бот) -> спавн -> через ~600 мс death с причиной ----
+    const wa = world(path.join(tmp, 'sd'));
+    for (let i = 0; i < 10; i++) wa.step();
+    wa.bot.health = 0; wa.bot.emit('death');
+    wa.bot.health = 20; wa.bb.onEvent('spawn', { msg: 'респавн' });
+    assert(wa.bb.frozen && wa.bb.frames.length === 0, 'спавн раньше причины: ящик ждёт death, новая жизнь с чистого листа');
+    wa.clock.t += 600; wa.bb.onEvent('death', { cause: 'zombie', deaths: 1 });
+    let fa = files(wa.bb); assert.strictEqual(fa.length, 1, 'одна смерть — один файл');
+    let da = JSON.parse(fs.readFileSync(path.join(wa.bb.dir, fa[0]), 'utf8'));
+    assert.strictEqual(da.summary.cause, 'zombie'); assert(da.frames.length >= 10, 'кадры прошлой жизни: ' + da.frames.length);
+    for (let i = 0; i < 3; i++) wa.step(); assert.strictEqual(wa.bb.frames.length, 3, 'после записи ящик пишет новую жизнь');
+    // быстрая вторая смерть (раньше отсекалась по времени как «та же») — свой файл
+    wa.clock.t += 1000; wa.bot.health = 0; wa.bot.emit('death'); wa.bb.onEvent('spawn', { msg: 'респавн' }); wa.bb.onEvent('death', { cause: 'skeleton', deaths: 2 });
+    fa = files(wa.bb); assert.strictEqual(fa.length, 2, 'вторая смерть через 2 с — второй файл: ' + fa);
+    wa.bb.onEvent('death', { cause: 'skeleton', deaths: 2 }); assert.strictEqual(files(wa.bb).length, 2, 'повтор той же смерти не пишется');
+
+    // ---- смерть не поймана ботом (счётчик вырос, freeze не было): спавн -> death берёт кадры прошлой жизни ----
+    const wb = world(path.join(tmp, 'pl'));
+    for (let i = 0; i < 8; i++) wb.step();
+    wb.ctx.stats.deaths++; wb.bb.onEvent('spawn', { msg: 'респавн' });
+    wb.bot.entity.position = new Vec3(0.5, 70, 0.5); wb.step(); wb.step();
+    wb.bb.onEvent('death', { cause: 'lava', deaths: 1 });
+    const db = JSON.parse(fs.readFileSync(path.join(wb.bb.dir, files(wb.bb)[0]), 'utf8'));
+    assert(db.frames.length === 8 && db.frames.every(f => f.pos[0] === 10.5), 'кадры прошлой жизни, без спавна: ' + db.frames.length);
+    assert.strictEqual(wb.bb.frames.length, 2, 'кадры новой жизни на месте');
+
+    // ---- спавн без смерти (вход, смена мира): кадры не теряются ----
+    const wc = world(path.join(tmp, 'sp'));
+    for (let i = 0; i < 6; i++) wc.step();
+    wc.bb.onEvent('spawn', { msg: 'вошёл в мир' });
+    assert.strictEqual(wc.bb.frames.length, 6, 'спавн без смерти кадры не стирает');
+    assert.strictEqual(files(wc.bb).length, 0);
+
     // ---- смерть без события death: запасной таймер ----
     const w2 = world(path.join(tmp, 'b'), { DEATH_WAIT_MS: 30 });
     w2.ctx.lastDamage = { cause: 'creeper', t: w2.clock.t - 500 };
@@ -96,6 +130,8 @@ module.exports = async () => {
     await sleep(120);
     const f2 = files(w2.bb); assert.strictEqual(f2.length, 1, 'файл по таймеру');
     assert.strictEqual(JSON.parse(fs.readFileSync(path.join(w2.bb.dir, f2[0]), 'utf8')).summary.cause, 'creeper', 'причина из последнего урона');
+    w2.bb.onEvent('death', { cause: 'creeper', deaths: 1 }); assert.strictEqual(files(w2.bb).length, 1, 'запоздавший death после таймера — не второй файл');
+    w2.bb.onEvent('spawn', { msg: 'респавн' }); w2.step(); assert.strictEqual(w2.bb.frames.length, 1, 'смерть без спавна, потом спавн — новая жизнь');
 
     // ---- почти-смерть: HP <= 4 и выжила >= 10 с; серия склеивается; чаще раза в 60 с не пишем ----
     const w3 = world(path.join(tmp, 'c'));
