@@ -31,13 +31,13 @@
   },
   "build_hut": {
     "enabled": true,
-    "runs": 30,
-    "ok": 6,
+    "runs": 37,
+    "ok": 13,
     "fail": 24,
-    "consecutiveFails": 1,
+    "consecutiveFails": 0,
     "lastError": "построено 133/167; дверь: за стеной пусто, опоры нет; дыры: -400 66 29, -399 66 29, -400 66 30, -397 66 30, -400 66 31, -399 66 31",
-    "lastRun": "2026-10-21T21:26:29.940Z",
-    "lastOk": "2026-10-21T21:26:02.370Z"
+    "lastRun": "2026-10-22T10:30:02.888Z",
+    "lastOk": "2026-10-22T10:30:02.888Z"
   },
   "gather_wood": {
     "enabled": true,
@@ -107,33 +107,33 @@
   },
   "gather_list": {
     "enabled": true,
-    "runs": 67,
-    "ok": 36,
-    "fail": 31,
-    "consecutiveFails": 0,
-    "lastError": "запуск прерван (POST /abort): процесс навыка убит, телу отправлен stop",
-    "lastRun": "2026-10-21T16:52:12.118Z",
-    "lastOk": "2026-10-21T16:52:12.118Z"
+    "runs": 71,
+    "ok": 37,
+    "fail": 34,
+    "consecutiveFails": 3,
+    "lastError": "не добрал: sand x4 (sand: навык тела \"collect\" не удался: не вижу sand (добыто 0/4) — исследуй (explore) или копай туннель: руда в стене туннеля станет видна)",
+    "lastRun": "2026-10-22T10:12:18.578Z",
+    "lastOk": "2026-10-22T06:54:16.992Z"
   },
   "setup_base": {
     "enabled": true,
-    "runs": 9,
-    "ok": 3,
+    "runs": 13,
+    "ok": 7,
     "fail": 6,
     "consecutiveFails": 0,
     "lastError": "не всё стоит: chest",
-    "lastRun": "2026-10-21T15:52:06.530Z",
-    "lastOk": "2026-10-21T15:25:37.659Z"
+    "lastRun": "2026-10-22T09:34:01.685Z",
+    "lastOk": "2026-10-22T09:34:01.685Z"
   },
   "deposit": {
     "enabled": true,
-    "runs": 25,
-    "ok": 21,
+    "runs": 28,
+    "ok": 24,
     "fail": 4,
     "consecutiveFails": 0,
     "lastError": "не всё сложено: spruce_fence ошибка: Can't find spruce_fence in slots [27 - 63], (item id: 346)",
-    "lastRun": "2026-10-22T00:39:22.174Z",
-    "lastOk": "2026-10-22T00:39:22.174Z"
+    "lastRun": "2026-10-22T10:10:18.166Z",
+    "lastOk": "2026-10-22T10:10:18.166Z"
   },
   "craft_gear": {
     "enabled": true,
@@ -157,12 +157,12 @@
   },
   "cook_food": {
     "enabled": true,
-    "runs": 6,
+    "runs": 8,
     "ok": 0,
-    "fail": 6,
-    "consecutiveFails": 1,
-    "lastError": "нет топлива для печи (coal/charcoal/доски/бревна) — жарить нечем",
-    "lastRun": "2026-10-22T00:40:28.864Z",
+    "fail": 8,
+    "consecutiveFails": 0,
+    "lastError": "готовой еды 0 из 8: hunt — животных рядом нет; искали 1 раз (попыток охоты), смен места 1, последняя точка -378 68 33 (тут); животных не видно ни разу — искать в другую сторону (выбрать сторону самому) или подняться наверх (climb_up); тот же вызов не повторять",
+    "lastRun": "2026-10-22T06:27:59.343Z",
     "lastOk": null
   },
   "smelt_all": {
@@ -177,13 +177,13 @@
   },
   "stairs_down": {
     "enabled": true,
-    "runs": 3,
-    "ok": 2,
+    "runs": 5,
+    "ok": 4,
     "fail": 1,
-    "consecutiveFails": 1,
+    "consecutiveFails": 0,
     "lastError": "пустота под ступенью -399 52 22",
-    "lastRun": "2026-10-21T08:57:38.736Z",
-    "lastOk": "2026-10-21T08:55:47.162Z"
+    "lastRun": "2026-10-22T10:34:24.513Z",
+    "lastOk": "2026-10-22T10:34:24.513Z"
   },
   "mine_tunnel": {
     "enabled": true,
@@ -289,23 +289,23 @@
   },
   "climb_up": {
     "enabled": true,
-    "runs": 10,
-    "ok": 4,
-    "fail": 6,
-    "consecutiveFails": 1,
-    "lastError": "блоки кончились: поднялась до y=51 из 67, осталось 16 уровней, нужно ~30 блоков (есть 0, не хватает 30)",
-    "lastRun": "2026-10-22T00:48:11.926Z",
-    "lastOk": "2026-10-21T22:09:51.914Z"
+    "runs": 17,
+    "ok": 7,
+    "fail": 10,
+    "consecutiveFails": 4,
+    "lastError": "время вышло (240 с)",
+    "lastRun": "2026-10-22T08:33:57.245Z",
+    "lastOk": "2026-10-22T06:35:47.650Z"
   },
   "chest_open": {
     "enabled": true,
-    "runs": 29,
-    "ok": 29,
+    "runs": 34,
+    "ok": 34,
     "fail": 0,
     "consecutiveFails": 0,
     "lastError": null,
-    "lastRun": "2026-10-22T01:21:01.682Z",
-    "lastOk": "2026-10-22T01:21:01.682Z"
+    "lastRun": "2026-10-22T10:10:17.731Z",
+    "lastOk": "2026-10-22T10:10:17.731Z"
   },
   "chest_take": {
     "enabled": false,
@@ -321,13 +321,13 @@
   },
   "chest_store": {
     "enabled": true,
-    "runs": 11,
-    "ok": 11,
+    "runs": 16,
+    "ok": 16,
     "fail": 0,
     "consecutiveFails": 0,
     "lastError": null,
-    "lastRun": "2026-10-22T00:39:22.132Z",
-    "lastOk": "2026-10-22T00:39:22.132Z"
+    "lastRun": "2026-10-22T10:10:18.163Z",
+    "lastOk": "2026-10-22T10:10:18.163Z"
   },
   "bring_bed_home_v1": {
     "enabled": true,
@@ -673,13 +673,13 @@
   },
   "climb_up_v5": {
     "enabled": true,
-    "runs": 0,
-    "ok": 0,
+    "runs": 5,
+    "ok": 5,
     "fail": 0,
     "consecutiveFails": 0,
     "lastError": null,
-    "lastRun": null,
-    "lastOk": null
+    "lastRun": "2026-10-22T09:06:38.847Z",
+    "lastOk": "2026-10-22T09:06:38.847Z"
   },
   "cook_food_v3": {
     "enabled": true,
@@ -982,6 +982,116 @@
     "lastOk": null
   },
   "chest_open_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_open_v6": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_store_v6": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_take_v6": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "deposit_v2": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "go_safe_v7": {
+    "enabled": true,
+    "runs": 16,
+    "ok": 3,
+    "fail": 13,
+    "consecutiveFails": 0,
+    "lastError": "край в 3 м у -351 85 (землю не видно — возможен обрыв) — план: край в 3 м у -351 85: обход СВ/ЮЗ (±16..32 м) не вышел — край стоит на месте: веди муху сам по survey у края или зови от другой точки",
+    "lastRun": "2026-10-22T10:16:20.977Z",
+    "lastOk": "2026-10-22T10:16:20.977Z"
+  },
+  "go_safe_v8": {
+    "enabled": true,
+    "runs": 6,
+    "ok": 0,
+    "fail": 6,
+    "consecutiveFails": 6,
+    "lastError": "край в 2 м у -336 -3 (землю не видно — возможен обрыв) — план: край в 2 м у -336 -3: обход СЗ/ЮВ (±16..32 м) не вышел — край стоит на месте: веди муху сам по survey у края или зови от другой точки",
+    "lastRun": "2026-10-22T08:29:20.099Z",
+    "lastOk": null
+  },
+  "cook_food_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "cook_food_v5": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "cook_food_v6": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "cook_food_v7": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "craft_gear_v1": {
     "enabled": true,
     "runs": 0,
     "ok": 0,

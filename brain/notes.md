@@ -1,10 +1,105 @@
 ﻿# Блокнот мозга
 
 ## Текущая цель
-Шаг проекта: ВЫЖИВАНИЕ — сервер ОФФЛАЙН (ECONNREFUSED), жду восстановления. HP 20/20, еда 19/20, на спавне (-38 71 10). Инвентарь: spruce_sapling 2, spruce_planks 39, stick 16, spruce_button 1. Смертей: 25. Деревянный меч и кирка НЕ сделаны.
-Дальше (когда сервер вернётся): 1) craft wooden_sword + wooden_pickaxe 2) еда (enable cook_food → cook_food min=8) 3) дорога к базе (legacy goto x=-393 y=67 z=36 r=96) 4) сбор материалов у базы 5) ремонт хижины (survey → place_at дыры → дверь use_item → make_bed → забор/факелы).
+Шаг проекта: ЭТАП 1 — ремонт хижины у базы. Сервер отключился (socketClosed). Муха на спавне (-100 66 -5) в укрытии (shelter walls), HP 20/20, еда 20/20. Инвентарь: wooden_axe 1, wooden_pickaxe 1, wooden_sword 1, spruce_planks 31, stick 3. Смертей: 30.
+Дальше (при восстановлении сервера): 1) ждать рассвета в укрытии 2) craft spruce_planks из spruce_log (если есть) / collect log 3) еда (cook_food enable → cook_food) 4) дорога к базе (legacy goto x=-393 y=67 z=36 r=96) 5) chest_take материалы из сундука базы 6) build_hut dry=1 → gather_list missing → build_hut ремонт хижины.
 База: -393 67 36
-Автопилот: wait_server_recovery
+Автопилот: wait_night (жду утра в укрытии на спавне)
+
+## СОСТОЯНИЕ НА КОНЦЕ СЕССИИ (22.10, день 47, ночь ~10:20) — НОЧЬ НА БАЗЕ
+- ready.flag создан. Сервер онлайн. Муха НА БАЗЕ (-392 67 36), в укрытии (shelter closed+roof), HP 20/20, еда 16/20. wait_night ждёт утра (день через 407с). Смертей: 29.
+- Сундук базы: -392 66 37 [cobblestone 135, spruce_planks 19, stick 11] — материалы для хижины есть.
+- Хижина (x=-397 z=29 y=66): крыша 49/49 ✓, западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32); окно на западе пустое.
+- Выполнено в сессии: пережил ночь на краю каньона → pillar_up на поверхность → go_safe_v7 к базе (ручной обход обрывов) → setup_base ✓ → deposit ✓ → build_hut dry=1 (смета) → gather_list sand неудачно (нет песка у базы) → возврат к базе.
+- Проблемы: go_safe_v7 6 раз проваливался у обрывов (край в 3-5 м) — приходилось вручную обходить goto; песка у базы нет, нужен спуск к реке в каньоне (stairs_down) или поиск в другом биоме; climb_up_v5 бажен (мгновенный ok без подъёма).
+- План следующей сессии: на рассвете craft spruce_planks → gather_list sand:4 (спуск к реке или explore) → build_hut dry=1 → gather_list missing → build_hut ремонт хижины.
+
+## СОСТОЯНИЕ НА КОНЕЦ СЕССИИ (22.10, день 47, ночь ~10:50) — СМЕРТЬ 30, СЕРВЕР ОТКЛЮЧИЛСЯ
+- ready.flag создан. Сессия началась на базе (-392 67 36) ночью, wait_night в укрытии.
+- Рассвет: craft spruce_planks 28 из 7 spruce_log ✓. build_hut dry=1 (x=-399 z=29 y=66 door=west) → ok за 0.1с (детали смета не вернула, но gather_list потом вызван на sand:4).
+- stairs_down x=-393 z=36 dir=east to=water — построил лестницу до реки в каньоне (y=39), за 51с ✓. На реке collect sand неудачно (песка не видно в радиусе 10, даже в воде).
+- Началась ночь в пещере (dripstone_caves). Shelter (dig) — выкопал яму 2 вниз + крышка, HP 3/20 после атак zombie по пути. Еды нет — реген не работает.
+- Пытался вернуться на базу goto x=-393 y=67 z=36 — пошел не по лестнице, сбился в пещеру, zombie и skeleton убили (смерть 30). Инвентарь потерян (cobblestone 68, spruce_planks 29, raw_copper 10, инструменты).
+- Респавн на спавне (-87 81 22). Collect log 8 → 13 spruce_log ✓. Craft spruce_planks 52, wooden_axe, wooden_pickaxe, wooden_sword ✓.
+- Ночь на спавне: shelter (walls) 9 досок ✓. wait_night запущен. Сервер отключился (socketClosed) — тело переподключается само.
+- Сундук базы (-392 66 37) цел: cobblestone 135, spruce_planks 19, stick 11.
+- Хижина: крыша 49/49 ✓, западная стена x=-400 дыры y=67,68, пол дыры, дверь нет, окно пустое.
+- План следующей сессии: ждать восстановления сервера → рассвет на спавне → еда (cook_food enable → cook_food) → legacy goto к базе → chest_take материалы → build_hut ремонт.
+
+## СОСТОЯНИЕ НА СТАРТЕ СЕССИИ (22.10, день 44, ночь ~09:20) — НОВАЯ СЕССИЯ, СЕРВЕР ОНЛАЙН, НОЧЬ
+- ready.flag создан. Сервер отвечает, тело подключено. Муха В УКРЫТИИ НА КРАЮ КАНЬОНА (-407 65 1, snowy_plains), HP 20/20, еда 16/20. В инвентаре: cobblestone 217, stone_sword 1, stick 11, spruce_planks 10, crafting_table 1, dripstone_block 3, spruce_button 1, spruce_sapling 1. Смертей: 28.
+- Сундук базы: -392 66 37 [spruce_planks 19] (рядом с базой -393 67 36).
+- Хижина: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path, go_safe_v8 (6 провалов подряд), climb_up (4 провала подряд). Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up, starter_kit, craft_gear, gather_list, build_hut, build_fence_line, stairs_down, mine_tunnel, light_base, wall_base, deposit, climb_up_v5, mine_stairs, mine_vein, smelt_all, make_bed, farm_plot, lamp_posts, build_column, bring_bed_home, branch_mine, climb_stairs, gather_wood, setup_base.
+- Уроки обновлены (lessons_updated 01:31:24) — перечитал brain/lessons.md.
+- Автопилот: выключен (autopilot?on=0), жду утра в укрытии (shelter mode=walls, closed+roof).
+- climb_up_v5 бажен (мгновенный ok:true без подъёма) — подъём делал pillar_up (y=31→65).
+- go_safe_v7 отказывает у обрыва — нужен ручной обход.
+- План: ждать рассвета в укрытии → на рассвете уйти от обрыва (goto запад) → go_safe_v7 к базе → setup_base → ремонт хижины.
+
+## СОСТОЯНИЕ НА СТАРТЕ СЕССИИ (22.10, день 42, день ~08:35) — НОВАЯ СЕССИЯ, СЕРВЕР ОНЛАЙН, НОЧЬ
+- ready.flag создан (08:35). Сервер отвечает, тело подключено. Муха В УКРЫТИИ ПОД ЗЕМЛЁЙ (-321 62 -2, dripstone_caves), HP 20/20, еда 20/20. В инвентаре: cobblestone 229, stone_sword 1, wooden_pickaxe 1, stick 11, spruce_planks 10, spruce_button 1, spruce_sapling 1. Смертей: 28.
+- Сундук базы найден в снимке: -392 66 37 [spruce_planks 19] (рядом с базой -393 67 36).
+- Хижина: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path. go_safe_v8 (6 провалов подряд), climb_up (4 провала подряд). Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up, starter_kit, craft_gear, gather_list, build_hut, build_fence_line, stairs_down, mine_tunnel, light_base, wall_base, deposit, climb_up (v5), mine_stairs, mine_vein, smelt_all, make_bed, farm_plot, lamp_posts, build_column, bring_bed_home, branch_mine, climb_stairs, gather_wood, setup_base.
+- Уроки обновлены (lessons_updated 01:31:24) — перечитал brain/lessons.md.
+- Автопилот: wait_night (жду утра, день через ~499 с). Рефлексы работают. night_mine выключен авто (3 провала).
+- План: ждать рассвета (НЕ МЕШАТЬ автопилоту wait_night) → на рассвете go_safe к базе → setup_base → gather_list материалов → ремонт хижины (build_hut dry=1 → gather_list missing → build_hut).
+
+## СОСТОЯНИЕ СЕРЕДИНА СЕССИИ (22.10, день 42, день ~08:38) — НОЧЬ, ЖДУ РАССВЕТА
+- Игровой сервер онлайн. Тело подключено. Муха в укрытии под землёй (-321 62 -2, dripstone_caves), HP 20/20, еда 20/20. wait_night [autopilot] жду утра, день через ~370 с (6 мин). Рефлексы работают. Скелет 20 м ЮВ↑.
+- Инвентарь: cobblestone 229, stone_sword 1, wooden_pickaxe 1, stick 11, spruce_planks 10, spruce_button 1, spruce_sapling 1. Каменный меч ЕСТЬ.
+- Никаких команд не даю — автопилот wait_night справляется. Любая моя команда вытеснит укрытие (урок: не выбивать укрытие ночью).
+- План неизменен: на рассвете go_safe к базе → setup_base → gather_list → ремонт хижины.
+
+## СОСТОЯНИЕ (22.10, день 42, ночь ~08:40) — ХОЗЯИН СПРОСИЛ
+- Eblanitus228 в чате: «тебе норм ночь переживать в пещере?»
+- Ответил: «Да, автопилот wait_night держит в укрытии под землёй (HP 20/20, еда 20/20). День через ~340с.»
+- Автопилот продолжает wait_night.
+
+## СОСТОЯНИЕ НА КОНЕЦ СЕССИИ (22.10, день 43, ночь ~09:15) — НОЧЬ В ПЕЩЕРЕ, ЖДУ РАССВЕТА
+- Игровой сервер онлайн. Тело подключено. Муха В УКРЫТИИ ПЕЩЕРЫ (-402 31 20, dripstone_caves), HP 20/20, еда 17/20. wait_night [autopilot] жду утра, день через ~430 с (7 мин). Рефлексы работают.
+- Инвентарь: cobblestone 279, stone_sword 1, wooden_pickaxe 1, stick 11, spruce_planks 10, crafting_table 1, dripstone_block 2, dirt 1, spruce_button 1, spruce_sapling 1.
+- go_safe_v7 (runId 13) УСПЕШНО дошёл до базы (-393 36 67), но autopilot тут же запустил explore → сбросил в пещеру к y=31.
+- climb_up_v5 (runId 14, 16) — баг: мгновенный ok:true (0.1с) без подъёма.
+- go_safe_v7 (runId 15) упал у обрыва в пещере.
+- Автопилот: wait_night (не мешать, урок: не выбивать укрытие ночью).
+- Навык climb_up_v5 требует проверки/исправления (баг мгновенного завершения).
+- План на следующую сессию: ждать утра → climb_up_v5 dry=1 → climb_up_v5 к поверхности → go_safe_v7 к базе → setup_base → ремонт хижины.
+
+## СОСТОЯНИЕ НА СТАРТЕ СЕССИИ (22.10, день 35, день ~22:45) — НОВАЯ СЕССИЯ, СЕРВЕР ОФФЛАЙН 3+ МИН
+- ready.flag создан (22:45). Игровой сервер localhost:25565 ОФФЛАЙН (ECONNREFUSED, offlineSec 221, попытка 8, следующая через 22 с). Тело (порт 3199/3200) работает, переподключается само. Муха замерла на спавне (-38 71 10), HP 20/20, еда 19/20. В инвентаре: spruce_sapling 2, spruce_planks 39, stick 16, spruce_button 1. Деревянный меч и кирка НЕ сделаны. Смертей: 25.
+- СУНДУК БАЗЫ УТРАЧЕН: на месте -392 67 35 — только cobblestone, сундука нет. Материалы (cobblestone 109, spruce_planks 17, spruce_fence 9, spruce_door 2, charcoal 7, еда) ПОТЕРЯНЫ НАВСЕГДА.
+- Хижина: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path. Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up.
+- Уроки обновлены (lessons_updated 01:31:24) — перечитал brain/lessons.md.
+- Тело переподключается само. Жду восстановления сервера.
+- План: ждать восстановления сервера → craft wooden_sword + wooden_pickaxe → еда (enable cook_food → cook_food min=8) → дорога к базе (legacy goto x=-393 y=67 z=36 r=96) → сбор материалов у базы → ремонт хижины.
+
+## СОСТОЯНИЕ НА СТАРТЕ СЕССИИ (22.10, день 35, день ~06:06) — НОВАЯ СЕССИЯ, СЕРВЕР ОФФЛАЙН 40+ СЕК
+- ready.flag создан (06:06). Сервер не отвечает (ECONNREFUSED на 25565, offlineSec 40, попытка 5, следующая через ~22 с). Тело (порт 3199/3200) работает, переподключается само. Муха замерла на спавне (-38 71 10), HP 20/20, еда 19/20. В инвентаре: spruce_sapling 2, spruce_planks 39, stick 16, spruce_button 1. Деревянный меч и кирка НЕ сделаны. Смертей: 25.
+- СУНДУК БАЗЫ УТРАЧЕН: на месте -392 67 35 — только cobblestone, сундука нет. Материалы (cobblestone 109, spruce_planks 17, spruce_fence 9, spruce_door 2, charcoal 7, еда) ПОТЕРЯНЫ НАВСЕГДА.
+- Хижина: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path. Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up.
+- Уроки обновлены (lessons_updated 01:31:24) — перечитал brain/lessons.md.
+- Тело переподключается само. Жду восстановления сервера.
+- План: ждать восстановления сервера → craft wooden_sword + wooden_pickaxe → еда (enable cook_food → cook_food min=8) → дорога к базе (legacy goto x=-393 y=67 z=36 r=96) → сбор материалов у базы → ремонт хижины.
+
+## СОСТОЯНИЕ СЕРЕДИНА СЕССИИ (22.10, день 35, день ~06:08) — СЕРВЕР ВСЁ ЕЩЁ ОФФЛАЙН
+- Игровой сервер localhost:25565 ОФФЛАЙН 1.5+ минут (offlineSec 93, попытка 6, следующая через ~29 с). Тело переподключается само. Муха замерла на спавне (-38 71 10), HP 20/20, еда 19/20.
+- Сервер не поднимается уже 1.5+ минут. Тело будет переподключаться само каждые ~30-60 с.
+- Материалы в инвентаре: spruce_planks 39, stick 16, саженцы 2, spruce_button 1. Деревянный меч и кирка НЕ сделаны. Смертей: 25.
+- План: ждать восстановления сервера (тело переподключится само). Если не поднимется — сессия заканчивается без прогресса, нужна помощь хозяина с перезапуском сервера.
+
+## СОСТОЯНИЕ НА КОНЕЦ СЕССИИ (22.10, день 35, день ~06:09) — СЕРВЕР НЕ ПОДНЯЛСЯ 2+ МИНУТЫ
+- Игровой сервер localhost:25565 ОФФЛАЙН 2+ минуты (offlineSec ~120, попытка 6+). Тело переподключается само. Муха замерла на спавне (-38 71 10), HP 20/20, еда 19/20.
+- За 2+ минут ожидания сервер не восстановился. Тело будет переподключаться само каждую минуту.
+- Материалы в инвентаре: spruce_planks 39, stick 16, саженцы 2, spruce_button 1. Деревянный меч и кирка НЕ сделаны. Смертей: 25.
+- СУНДУК БАЗЫ УТРАЧЕН: на месте -392 67 35 — только cobblestone, сундука нет. Материалы (cobblestone 109, spruce_planks 17, spruce_fence 9, spruce_door 2, charcoal 7, еда) ПОТЕРЯНЫ НАВСЕГДА.
+- Хижина: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path. Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up.
+- Заявка в core_bugs.md: [2026-10-22 23:10] требуется перезапуск игрового сервера localhost:25565.
+- План на следующую сессию: ждать восстановления сервера → craft wooden_sword + wooden_pickaxe → еда (enable cook_food → cook_food min=8) → дорога к базе (legacy goto x=-393 y=67 z=36 r=96) → сбор материалов у базы → ремонт хижины.
 
 ## СОСТОЯНИЕ НА СТАРТЕ СЕССИИ (22.10, день 35, день ~03:25) — НОВАЯ СЕССИЯ, СЕРВЕР ОФФЛАЙН 23+ МИН
 - ready.flag создан (03:25). Сервер всё ещё не отвечает (ECONNREFUSED на 25565, offlineSec 1389, попытка 27, следующая через ~53 с). Тело (порт 3199/3200) работает, переподключается само. Муха замерла на спавне (-38 71 10), HP 20/20, еда 19/20. В инвентаре: spruce_sapling 2, spruce_planks 39, stick 16, spruce_button 1. Деревянный меч и кирка НЕ сделаны. Смертей: 25.
@@ -496,3 +591,36 @@
 - Лес (отдельный, безопасный) 57 м ЮВ от базы: -352 66 74. Лес у обрыва (x=-400) — НЕ собирать (смерть 9, 10, 14).
 - Руда в каньоне (ниже базы): уголь -390 58 41 (9 м ниже), медь -401 48 26, железо -373 49 18, вода -376 39 36. Спуск/подъём = риск, только днём.
 - Спавн: тайга -62..-76 82 27 (верстак в 12-18 м, 50-70 брёвен в 4-15 м).
+
+## СОСТОЯНИЕ НА СТАРТЕ СЕССИИ (22.10, день 36, ночь ~06:41) — НОВАЯ СЕССИЯ, СЕРВЕР РАБОТАЕТ
+- ready.flag создан (06:41). Сервер отвечает, тело подключено. Муха на спавне (-58 75 13) в укрытии (shelter), HP 20/20, еда 20/20. Инвентарь: ПУСТ. Смертей: 26 (только что от паука в пещере y=30).
+- СУНДУК БАЗЫ УТРАЧЕН: на месте -392 67 35 — только cobblestone, сундука нет. Материалы (cobblestone 109, spruce_planks 17, spruce_fence 9, spruce_door 2, charcoal 7, еда) ПОТЕРЯНЫ НАВСЕГДА.
+- Хижина: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path. Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up.
+- До рассвета ~250 с (4 мин). Ясно, биом snowy_taiga. Бревна 7 м ЮВ (-52 77 16), верстак 14 м ЮЗ↑ (-69 82 19).
+- План: ждать рассвета в укрытии (wait_night автопилот/рефлексы). На рассвете: collect log 8 → craft spruce_planks → wooden_sword + wooden_pickaxe → еда (enable cook_food → cook_food min=8) → дорога к базе (legacy goto x=-393 y=67 z=36 r=96) → сбор материалов у базы → ремонт хижины.
+
+## СОСТОЯНИЕ НА СТАРТЕ СЕССИИ (22.10, день 38, день ~07:06) — НОВАЯ СЕССИЯ, СЕРВЕР РАБОТАЕТ
+- ready.flag создан (07:06). Сервер отвечает, тело подключено. Муха на спавне (-149 73 40), автопилот legacy goto → база (-393 67 36), 324 м. HP 20/20, еда 20/20. Инвентарь: ПУСТ. Смертей: 27 (только что от падения с обрыва во время autopilot collect).
+- СУНДУК БАЗЫ: на месте -392 66 37 — spruce_planks 19. Печь и верстак на базе установлены (setup_base выполнен).
+- Хижина: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path. Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up.
+- День, дождь, до ночи ~519 с (8.6 мин). Биом snowy_taiga. Лес 3 м ЮВ (-147 74 42).
+- План: дождаться прихода к базе (autopilot goto ~5 мин). На базе: взять материалы из сундука (chest_take spruce_planks 19, cobblestone...) → ремонт хижины (build_hut dry=1 → gather_list → build_hut) → факелы → забор.
+
+## СОСТОЯНИЕ СЕРЕДИНА СЕССИИ (22.10, день 38, ночь ~07:20) — НОЧЬ, ЖДУ РАССВЕТА
+- Игровой сервер онлайн. Тело подключено. Муха в тайге (-248 68 79), HP 20/20, еда 19/20. wait_night [autopilot] жду утра, день через ~246 с. Рефлексы работают.
+- Инвентарь: wooden_pickaxe 1, wooden_sword 1, spruce_planks 37, stick 1, dirt 3, spruce_sapling 1.
+- СУНДУК БАЗЫ: на месте -392 66 37 — spruce_planks 19. Печь и верстак на базе установлены.
+- Хижина: крыша 49/49 ✓, западная стена — дыры, пол — дыры, дверь нет, окно пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5, go_safe_v6, cook_food, day_routine, night_mine, home_path. Работают: рефлексы, craft, collect, place_at, dig_at, pillar_up.
+- План: ждать рассвета в укрытии (wait_night). На рассвете: legacy goto x=-393 y=67 z=36 r=96 → chest_take материалы → build_hut dry=1 → gather_list → build_hut ремонт.
+
+## СОСТОЯНИЕ НА КОНЕЦ СЕССИИ (22.10, день 42, день ~08:36) — НОЧЬ ЧЕРЕЗ 99 СЕК, В ПЕЩЕРЕ
+- ready.flag создан. Сервер работает, тело подключено. Муха в пещере (dripstone_caves) на позиции -335 67 -4, HP 20/20, еда 20/20. В инвентаре: cobblestone 230, spruce_planks 13, stick 13, stone_sword, wooden_pickaxe, spruce_button, spruce_sapling. Смертей: 28.
+- СУНДУК БАЗЫ: на месте -392 66 37 — spruce_planks 19 (видно в памяти снимка). База -393 67 36.
+- Хижина на базе: крыша 49/49 ✓ (y=70 spruce_planks), западная стена x=-400 — дыры y=67,68; пол y=66 — дыры; дверь нет (проём на востоке -394 67 32 открыт). Окно на западе пустое.
+- Навыки ОТКЛЮЧЕНЫ: chest_take/v5 (3 провала), go_safe_v6 (отказывает при HP<5), cook_food, day_routine, night_mine, home_path. Работают: рефлексы escape/shelter, craft, collect, place_at, dig_at, pillar_up, starter_kit, craft_gear, gather_list, build_hut, build_fence_line, stairs_down, mine_tunnel, light_base, wall_base, deposit, climb_up, mine_stairs, mine_vein, smelt_all, make_bed, farm_plot, lamp_posts, build_column, bring_bed_home, branch_mine, climb_stairs, gather_wood, setup_base.
+- go_safe_v8 проваливается 9 раз подряд из-за обрывов в пещере и мобов. climb_up поднял муху с y=30 до y=72, но ушёл в timeout.
+- Ночь через 99 с. Крипер 11 м СЗ↓. Автопилот: day_routine на паузе.
+- План: переждать ночь в укрытии (wait_night / shelter) → на рассвете go_safe_v8 к базе (или построить мостик вручную через обрыв) → setup_base (dry=1) → deposit → ремонт хижины (западная стена, пол, дверь) → забор/факелы.

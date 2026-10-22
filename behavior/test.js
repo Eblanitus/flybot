@@ -278,5 +278,28 @@ module.exports = async function selfTest() {
   assert.ok(a.key === 'collect_log' && a.params.radius > 48, 'повтор сбора — шире радиус: ' + JSON.stringify(a.params));
   assert.strictEqual(decide({ ...wood, failInfo: { collect_log: { reason: 'не нашёл log', count: 2 } } }).key, 'explore', 'дважды не вышло — следующее дело');
   assert.ok(decide(base).score != null, 'счёт выбранного дела виден');
+  // ---- behavior_autopilot (заявка учителя, день 21): «иду на базу» — не голая команда goto через огонь и лаву ----
+  const farBase = { ...base, base: { x: 0, y: 64, z: 0, r: 96 }, baseDist: 275 };
+  assert.strictEqual(decide(farBase).key, 'go_base', 'дорога чистая и днём — начинаем');
+  // до старта: снимок «горю» — дорогу не начинаем (берём следующее дело); в лаве — сначала «выбираюсь»
+  assert.strictEqual(decide({ ...farBase, onFire: true }).key, 'day_routine', 'горю — дорогу не начинаем');
+  assert.strictEqual(decide({ ...farBase, inLava: true }).key, 'unstuck', 'в лаве — сначала выходим, дорогу не начинаем');
+  // по ходу голого goto: загорела на дороге к базе — бросаем дорогу немедленно и отходим/укрываемся (go_safe смотрит сам, его не дёргаем)
+  let gfire = decide({ ...farBase, onFire: true, running: { name: 'goto', key: 'go_base', kind: 'body' } });
+  assert.strictEqual(gfire.key, 'go_base_escape', 'загорела на дороге к базе — бросаем дорогу');
+  assert.strictEqual(gfire.preempt, true, 'дорогу прерываем немедленно');
+  assert.ok(/горю/.test(gfire.why), 'в журнале видно, что бросаем из-за огня: ' + gfire.why);
+  assert.strictEqual(decide({ ...farBase, running: { name: 'go_safe', key: 'go_base', kind: 'learned' }, onFire: true }), null, 'go_safe сам смотрит снимок — не дёргаем');
+  // ночью (закат) HP < 8 или еда < 18 (без регенерации, REGEN_FOOD=18) — дорогу не начинаем; днём можно
+  // (HP 7 при оценке «бой по силам» в «мало HP» не попадает — тем гейт и ловим)
+  const oWin = { win: true, passiveTtdSec: 60, hitsToDie: 2 };
+  assert.strictEqual(decide({ ...farBase, nightIn: 60, hp: 7, outlook: oWin }).key, 'day_routine', 'ночью при HP 7 дорогу не начинаем');
+  assert.strictEqual(decide({ ...farBase, nightIn: 60, food: 17 }).key, 'day_routine', 'ночью без регенерации (еда < 18) дорогу не начинаем');
+  assert.strictEqual(decide({ ...farBase, hp: 7, food: 17, outlook: oWin }).key, 'go_base', 'днём и чисто — дорогу можно');
+  // go_safe включён у исполнителя — дорогу ведёт он (проверки лавы/огня/воды/края/HP/ночи), а не голый goto
+  const gs = decide({ ...farBase, goSafe: true });
+  assert(gs && gs.key === 'go_base' && gs.kind === 'learned' && gs.name === 'go_safe', 'go_safe есть — дорогу ведёт он: ' + JSON.stringify(gs));
+  assert.strictEqual(gs.params.max_sec, T.goSafeMaxSec, 'предел времени go_safe — из порогов');
+  assert.strictEqual(decide({ ...farBase, goSafe: true }).name, 'go_safe', 'не goto');
   return { ok: true };
 };

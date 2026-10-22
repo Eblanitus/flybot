@@ -68,5 +68,9 @@ module.exports = {
   pickLogs: 3, needLogs: 8, logCount: 6,
   cobbleWant: 24, stoneCount: 12,
   exploreDist: 48,
-  baseTimeoutSec: 420
+  baseTimeoutSec: 420,
+  // behavior_autopilot (заявка учителя, день 21): «иду на базу» — не голая команда goto через огонь и лаву
+  goBaseMinHp: 8,   // HP ниже — ночью (закат) дорогу к базе не начинаем; в дорогу на изношенных ногах не лезем
+  goBaseMinFood: 18, // еды меньше — регенерации нет (REGEN_FOOD в lib/danger.js, сытость 17 в том самом снимке); ночью в дорогу без регенерации — нет
+  goSafeMaxSec: 900 // дорогу ведёт go_safe (если включён): предел времени навыка с проверками перебежек — есть запас на переждать ночь
 };

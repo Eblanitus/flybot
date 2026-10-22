@@ -21,6 +21,11 @@
 // не берём вовсе, а начавшийся wait_night прерываем не молча: бой (оружие, HP в норме) → укрытие стенами (НЕ яма:
 // копка ямы 3-4 с, за это время зомби дошёл 9.7 → 2.7 м и залез в неё) → отход. Яму (night_shelter_dig) не начинаем
 // при мобе рядом. Ждать утра с мобом в 0.3 м — смерть (удары 9 с, HP 20 → 0).
+// Правка по заявке учителя (behavior_autopilot.md, 21.10 19:48, смерть 17): «иду на базу» — не голая команда goto.
+// Дорогу ведёт выученный go_safe (проверки лавы/огня/воды/края/HP/ночи), если он включён у исполнителя; нет — прежние
+// ноги, но: до старта горю/лава/под водой дорогу не начинаем; ночью (закат) при HP<8 или еде<18 (без регенерации,
+// REGEN_FOOD в lib/danger.js) дорогу не начинаем; на голом goto по ходу «горю»/в лаве — бросаем дорогу немедленно
+// (HP 20 → 7 за 70 с — цена одной проверки) и отходим/укрываемся. L003/L014/L013/L052 и правила паузы/цели не тронул.
 'use strict';
 const http = require('http');
 const fs = require('fs');
@@ -138,6 +143,13 @@ function decide(s) {
     const a = nightDefense(s, true);
     if (a) return a;
   }
+  // behavior_autopilot (заявка учителя, день 21): на голом goto к базе (kind «тело») по ходу присматриваем —
+  // go_safe у исполнителя смотрит снимок сам (его не дёргаем). Снимок «горю»/в лаве — бросаем дорогу немедленно
+  // (HP 20 → 7 за 70 с — цена одной проверки): отходим/укрываемся, дальше разберётся самозащита и гейт до старта.
+  if (run === 'go_base' && s.running.kind === 'body' && (s.onFire || s.inLava)) {
+    return body('go_base_escape', 'escape', { distance: T.apEscapeDist, shelter: true },
+      s.inLava ? 'в лаве на дороге к базе — бросаю дорогу и выхожу' : 'горю на дороге к базе — бросаю дорогу и отхожу/укрываюсь', true);
+  }
   if (run || s.task) return null; // свой навык идёт — не дёргать
   if (!s.idle) return null;       // мозг недавно командовал — ждём
 
@@ -218,13 +230,24 @@ function decide(s) {
   const duskSoon = s.nightIn != null && s.nightIn < T.apDuskSec; // до ночи мало — далеко не уходим, к базе спешим
   // после смерти — за вещами (лежат ~5 мин: самое срочное днём; если у места смерти враг — recover откажет сам)
   if (s.recoverable) add(60, body('recover', 'recover', {}, 'иду за вещами к месту смерти'));
-  // база далеко: чем дальше и чем ближе ночь — тем важнее дойти
+  // база далеко: чем дальше и чем ближе ночь — тем важнее дойти. behavior_autopilot (заявка учителя, день 21):
+  // дорога — не через огонь и лаву: до старта если снимок «горю»/в лаве — дорогу не начинаем; ночью (закат) при
+  // HP < 8 или еде < 18 (без регенерации — REGEN_FOOD в lib/danger.js) тоже не начинаем, ждём (еда и HP вернутся);
+  // дорогу ведёт выученный go_safe (лава/огонь/вода/край/HP/ночь), нет включённого — прежние ноги с присмотром выше.
   const farBase = s.base && s.baseDist != null && s.baseDist > s.base.r;
   if (farBase) {
-    // переход на базу только что не вышел — дальше от базы не уходим (только за вещами), ждём следующей попытки
+    // переход на базу только сейчас не вышел — дальше от базы не уходим (только за вещами), ждём следующей попытки
     if (!ok('go_base')) return pick();
-    add(45 + Math.min(25, (s.baseDist - s.base.r) / 8) + (duskSoon ? 20 : 0),
-      body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec }, 'иду на базу'));
+    const nightRoad = s.isNight || (s.nightIn != null && s.nightIn < T.apDuskSec);
+    const dirtyRoad = s.onFire || s.inLava || (nightRoad && (s.hp < T.goBaseMinHp || s.food < T.goBaseMinFood));
+    // дорогу не начинаем — тела не отдаём ей, берём следующее дело (лава/горю лечит самозащита, ночью еда и вернутся),
+    // а после добавления остальных дел решаем, чем заняться
+    if (!dirtyRoad) {
+      const act = s.goSafe
+        ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec }, 'иду на базу осторожно (go_safe)')
+        : body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec }, 'иду на базу');
+      add(45 + Math.min(25, (s.baseDist - s.base.r) / 8) + (duskSoon ? 20 : 0), act);
+    }
   }
   // цель мозга (строка «Автопилот:» в notes.md); проваленная с теми же параметрами не повторяется (goalFailed) — следующее дело
   if (s.goal && !s.goalDone && !s.goalFailed) {
@@ -406,6 +429,8 @@ function gather(ctx, ap) {
     logs: sum(/_(log|stem)$/) + Math.floor(sum(/_planks$/) / 4), cobble: sum(/^(cobblestone|cobbled_deepslate)$/),
     phase: ti.phase, isNight: ti.isNight, nightIn: ti.nightIn, sheltered,
     inLava: [feet, head].some(b => b && b.name === 'lava'),
+    // снимок «горю» (заявка учителя, день 21): флаг «on fire» из метадаты — так же, как lib/perception.js и lib/danger.js
+    onFire: (v => typeof v === 'number' && (v & 1) === 1)((bot.entity.metadata || [])[0]),
     suffocating: !!head && A.isSolid(head) && head.boundingBox === 'block',
     stuck: ap.stuckSince > 0 && now - ap.stuckSince > T.stuckMs,
     underWater: ap.wetSince > 0 && now - ap.wetSince > T.underWaterMs,
@@ -419,7 +444,9 @@ function gather(ctx, ap) {
     // цель мозга уже провалилась (с теми же параметрами) — ждём новой строки «Автопилот:» или явного enable
     goalFailed: !!(ap.goalFail && ap.goal && ap.goalFail.sig === ap.goal.sig),
     crashed: crashList(ap, now),
-    base: ap.base || null, baseDist: ap.base && baseDimOk(bot) ? Math.hypot(ap.base.x - p.x, ap.base.z - p.z) : null
+    base: ap.base || null, baseDist: ap.base && baseDimOk(bot) ? Math.hypot(ap.base.x - p.x, ap.base.z - p.z) : null,
+    // go_safe включён у исполнителя? — дорогу к базе ведёт он (заявка учителя, день 21); не проверили/выключен — нет
+    goSafe: !!ap.goSafe
   };
 }
 
@@ -428,6 +455,7 @@ function create(ctx) {
   const ap = {
     on: true, lastBrainCmd: Date.now(), lastBusy: 0, running: null, runnerOther: false,
     goal: null, goalDone: null, goalMtime: -1, base: null, baseSig: '', goalSkills: { t: 0, names: new Set(), enabled: {} },
+    goSafe: false, goSafeT: 0, // go_safe включён у исполнителя? — раз в 30 с узнаём (дорогу к базе ведёт он, заявка 21.10)
     goalFail: null,   // проваленная цель мозга: {sig, name, reason, at} — с теми же параметрами не повторяем
     goalFailNote: null, // что написать в журнал про проваленную цель (сразу после строки о провале)
     codeCrash: {},    // навыки, упавшие со сбоем кода: {навык: {reason, at}} — автопилот их не зовёт
@@ -527,6 +555,16 @@ function create(ctx) {
 
   // цель мозга из notes.md (кэш по mtime); learned — если такой навык есть в исполнителе, иначе навык тела
   async function refreshGoal() {
+    // go_safe включён у исполнителя? (заявка учителя, день 21) — раз в 30 с; не проверили (исполнитель молчит) — нет
+    if (Date.now() - ap.goSafeT > 30000) {
+      ap.goSafeT = Date.now();
+      ap.goSafe = false;
+      try {
+        const r = await httpJson('GET', RUNNER + '/skills', undefined, 1500);
+        const s = (r && r.skills || []).find(x => x.name === 'go_safe');
+        ap.goSafe = !!(s && s.enabled !== false);
+      } catch (e) {}
+    }
     let mt = 0; try { mt = fs.statSync(NOTES).mtimeMs; } catch (e) { ap.goal = null; ap.base = null; return; }
     if (mt !== ap.goalMtime) {
       ap.goalMtime = mt;
@@ -723,7 +761,7 @@ function create(ctx) {
     if (act.key === 'recover' && ctx.lastDeath) ap.recoverFor = ctx.lastDeath.ts;
     note(act.why, true);
     const p = act.kind === 'learned'
-      ? runnerGo(act.name, act.params, act.name === 'day_routine' ? 720 : 900)
+      ? runnerGo(act.name, act.params, act.name === 'day_routine' ? 720 : act.name === 'go_safe' ? T.goSafeMaxSec + 60 : 900)
       : act.name === 'goto' // не навык из SKILLS: переход на базу — свой Task (source autopilot)
         ? ctx.tasks.start('goto', act.params, t => baseTravel(ctx, t, act.params), { source: 'autopilot', wait: true })
         : ctx.runSkill(act.name, act.params, { source: 'autopilot', wait: true });
@@ -795,7 +833,7 @@ function attach(api) {
   if (!ap || ap._mod !== MOD) {
     const prev = ap;
     ap = create(ctx);
-    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; }
+    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; ap.goSafe = !!prev.goSafe; ap.goSafeT = prev.goSafeT || 0; }
     ctx.autopilot = ap;
   }
   api.on(bot, 'death', () => { ap.yieldAll('смерть').catch(() => {}); });
