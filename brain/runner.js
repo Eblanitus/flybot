@@ -280,7 +280,7 @@ async function doRun(name, params, timeoutSec) {
   if (r.output) out.output = r.output.slice(0, 1500);
   if (!ok) {
     const s = stats[name] || {};
-    out.note = `Счёт версии "${name}": успешно ${s.ok || 0} из ${s.runs || 0}, провалов подряд ${s.consecutiveFails || 0}. Решаешь ты: повторить, взять другую версию (GET /catalog?name=${V.baseOf(name)}), выключить эту (/disable) или заявка инженеру. Причину разбери: правило в notes.md / правка навыка / заявка в core_bugs.md (см. README.md).`;
+    out.note = `Счёт версии "${name}": успешно ${s.ok || 0} из ${s.runs || 0}, провалов подряд ${s.consecutiveFails || 0}.`;
   }
   return out;
 }
