@@ -170,6 +170,7 @@ const link = new Link(ctx, {
     ctx.blackbox.attach(session); // чёрный ящик: кадры раз в секунду и на важных событиях
     ctx.ledger.attach(session); // учёт ресурсов: приход/расход предметов
     try { require('./lib/daylog').attach(ctx, session); require('./lib/owner').attach(ctx, session); } catch (e) { console.log('[daylog/owner] не подключились:', e.message); } // итог дня + приказы хозяина без LLM
+    try { require('./lib/ownblocks').attach(ctx, session); } catch (e) { console.log('[ownblocks] не подключились:', e.message); } // свои блоки: факт own_block_broken
     try { require('./lib/worldmem').attach(ctx, bot, session); } catch (e) { console.log('[worldmem] не подключилась:', e.message); } // постоянная память мира (data/world.json)
   },
   spawn(session, first) {
