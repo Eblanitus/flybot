@@ -10,8 +10,8 @@
 param(
   [string]$Log,
   [int]$SilenceMin = 10,
-  [int]$EngTimeoutMin = 15,
-  [int]$TeachTimeoutMin = 20,
+  [int]$EngTimeoutMin = 10,     # снимать инженера, только если его журнал молчит столько минут (жёсткого предела нет)
+  [int]$TeachTimeoutMin = 10,   # то же для учителя
   [int]$LoopPid = 0   # перезапуск сторожа вручную: pid окна night.cmd (иначе петля — родительский процесс)
 )
 $fb   = 'C:\Users\user\flybot'
@@ -56,6 +56,15 @@ function LimitStuck([string]$model, [datetime]$since) {
   ($t -ge $since.ToUniversalTime()) -and (([DateTime]::UtcNow - $t).TotalSeconds -ge 45)
 }
 function LimitPause([int]$hits) { $Backoff[[Math]::Min($hits, $Backoff.Count - 1)] }
+
+$seen = @{}
+function IdleMin([string]$path, [datetime]$since) {   # сколько минут журнал роли не растёт (размер — настоящий, как в LogSize)
+  $len = try { $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite'); try { $fs.Length } finally { $fs.Close() } } catch { -1 }
+  $s = $seen[$path]
+  if (-not $s -or $s.since -ne $since) { $s = @{ len = $len; at = $since; since = $since }; $seen[$path] = $s }
+  if ($len -ne $s.len) { $s.len = $len; $s.at = Get-Date }
+  ((Get-Date) - $s.at).TotalMinutes
+}
 
 function LogSize {   # настоящий размер: у открытого на запись файла дата/размер в каталоге отстают
   try { $fs = [IO.File]::Open($Log, 'Open', 'Read', 'ReadWrite'); try { $fs.Length } finally { $fs.Close() } } catch { -1 }
@@ -107,11 +116,11 @@ while ($true) {
   }
   if ($eng) {
     $done = "$req\$($eng.name).done.md"
-    $over = ((Get-Date) - $eng.started).TotalMinutes -ge $EngTimeoutMin
+    $over = (IdleMin $eng.log $eng.started) -ge $EngTimeoutMin
     if ($eng.proc.HasExited -or $over) {
-      if (-not $eng.proc.HasExited) { taskkill /PID $eng.proc.Id /T /F | Out-Null; GLog "инженер: $($eng.name) — тайм-аут $EngTimeoutMin мин" }
+      if (-not $eng.proc.HasExited) { taskkill /PID $eng.proc.Id /T /F | Out-Null; GLog "инженер: $($eng.name) — завис: журнал молчит $EngTimeoutMin мин" }
       if (-not (Test-Path $done) -or (Get-Item $done).LastWriteTime -lt $eng.started) {
-        Set-Content $done "# $($eng.name): не готово`r`nИнженер не ответил (упал или тайм-аут $EngTimeoutMin мин). Журнал: data\engineer-$($eng.name).log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова." -Encoding UTF8
+        Set-Content $done "# $($eng.name): не готово`r`nИнженер не ответил (упал или завис: журнал молчал $EngTimeoutMin мин). Журнал: data\engineer-$($eng.name).log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова." -Encoding UTF8
       }
       Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue
       GLog "инженер: $($eng.name) — закончил"
@@ -132,7 +141,7 @@ while ($true) {
       # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет); проектный opencode.json не подмешивать
       $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" >> `"$elog`" 2>&1" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
-      $eng = @{ proc = $p; name = $name; started = Get-Date; model = $engModel }
+      $eng = @{ proc = $p; name = $name; started = Get-Date; model = $engModel; log = $elog }
       GLog "инженер: взял заявку $name (pid $($p.Id), модель $engModel)"
       break
     }
@@ -148,10 +157,10 @@ while ($true) {
     $tch = $null
   }
   if ($tch) {
-    $over = ((Get-Date) - $tch.started).TotalMinutes -ge $TeachTimeoutMin
+    $over = (IdleMin $tch.log $tch.started) -ge $TeachTimeoutMin
     if ($tch.proc.HasExited -or $over) {
       $how = 'ok'
-      if (-not $tch.proc.HasExited) { taskkill /PID $tch.proc.Id /T /F | Out-Null; $how = 'timeout'; GLog "учитель: $($tch.id) — тайм-аут $TeachTimeoutMin мин" }
+      if (-not $tch.proc.HasExited) { taskkill /PID $tch.proc.Id /T /F | Out-Null; $how = 'timeout'; GLog "учитель: $($tch.id) — завис: журнал молчит $TeachTimeoutMin мин" }
       $r = Teach @('finish', $tch.id, $how)
       GLog "учитель: $($tch.id) — закончил ($($r.status))"
       $tch = $null; $tchHits = 0
@@ -166,7 +175,7 @@ while ($true) {
       # у учителя свой конфиг opencode (пишет только учебник, журнал уроков, заявки и отчёты; без /do); проектный не подмешивать
       $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $teachModel `"$prompt`" >> `"$tlog`" 2>&1" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
-      $tch = @{ proc = $p; id = $c.id; started = Get-Date; model = $teachModel }
+      $tch = @{ proc = $p; id = $c.id; started = Get-Date; model = $teachModel; log = $tlog }
       GLog "учитель: взял случай $($c.id) ($($c.type), pid $($p.Id), модель $teachModel)"
     }
   }
