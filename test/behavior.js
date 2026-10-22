@@ -255,7 +255,7 @@ async function waterTests() {
   }
   // блок под водой: клетка с водой — не помеха для place_at
   {
-    const bot = waterBot({ gen: sea, pos: new Vec3(5.5, 55, 5.5) });
+    const bot = waterBot({ gen: sea, pos: new Vec3(2.5, 54, 2.5) });
     let placed = null;
     bot.inventory = { items: () => [{ name: 'cobblestone', count: 8 }] };
     bot.heldItem = null;
