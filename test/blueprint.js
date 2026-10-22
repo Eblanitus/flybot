@@ -163,7 +163,7 @@ module.exports = async () => {
   assert(list.blueprints.every(b => !b.error), 'ошибка в чертеже: ' + JSON.stringify(list.blueprints.filter(b => b.error)));
   await rejects(Promise.resolve().then(() => BP.loadBlueprint({ bot: { registry: reg } }, '../etc/passwd')), /имя чертежа/, 'путь вне каталога');
   await rejects(Promise.resolve().then(() => BP.loadBlueprint({ bot: { registry: reg } }, 'нет_такого')), /имя чертежа/, 'кириллица');
-  await rejects(Promise.resolve().then(() => BP.loadBlueprint({ bot: { registry: reg } }, 'no_such')), /нет чертежа no_such; есть: bridge_segment/, 'нет файла');
+  await rejects(Promise.resolve().then(() => BP.loadBlueprint({ bot: { registry: reg } }, 'no_such')), /нет чертежа no_such; есть: (.+, )?bridge_segment/, 'нет файла');
 
   // ---- dry: смета против мира, уже стоящие блоки учтены ----
   {
@@ -217,7 +217,9 @@ module.exports = async () => {
     assert(res.ok, JSON.stringify(res)); assert.deepStrictEqual(res.failed, []);
     assert.strictEqual(res.matched, 245); assert.strictEqual(res.total, 245);
     assert(res.removed >= 2, 'вырезано/заменено: ' + res.removed);
-    assert(res.skipped >= 1 + 150, 'пропущено готовых (в т.ч. воздух): ' + res.skipped);
+    // готовые: воздух чертежа (кроме вырезанного камня q1) + стоявшая стена q3; число воздуха — из самого чертежа (brain/blueprints меняет мозг)
+    const airN = BP.instantiate(hut, 0, 64, 0, rot).cells.filter(k => k.kind === 'air').length;
+    assert(res.skipped >= airN - 1, `пропущено готовых (в т.ч. воздух): ${res.skipped}, воздуха в чертеже ${airN}`);
     assert.strictEqual(w.ctx.stats.blocksPlaced, res.placed);
     // состав: ровно то, что нужно (+ вернули подпорки, если были)
     const chk = BP.blueprintCheck(w.ctx, { name: 'hut_west', x: 0, y: 64, z: 0, rot });
@@ -335,10 +337,17 @@ module.exports = async () => {
     assert.strictEqual(e.extra.failed.length, 1); assert(/чужим/.test(e.extra.failed[0].why)); assert.strictEqual(w.get(q.x, q.y, q.z).name, 'chest', 'сундук цел');
     assert.strictEqual(e.extra.matched, 244);
     const e2 = await rejects(BP.buildBlueprint(w2.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }), /не достроено/, 'сундук на месте пола');
-    assert.strictEqual(w2.get(q2.x, q2.y, q2.z).name, 'chest'); assert(e2.extra.failed.length === 1);
+    assert.strictEqual(w2.get(q2.x, q2.y, q2.z).name, 'chest'); assert(e2.extra.failed.length === 1, JSON.stringify(e2.extra.failed));
     const w3 = mkWorld({ inv: FULL, unloadedFromX: 3 });
     const d3 = await BP.buildBlueprint(w3.ctx, null, { name: 'hut_west', x: 0, y: 64, z: 0, dry: 1 });
     assert(d3.plan.unloaded > 0 && d3.warnings.some(s => /не загружены/.test(s)), JSON.stringify(d3.plan));
+  }
+
+  // ---- бревно: опора только по оси (боковая грань повернёт бревно) ----
+  for (const ax of ['x', 'y', 'z']) {
+    const ai = { x: 0, y: 1, z: 2 }[ax];
+    const cands = BP.buildCandidates({ block: 'oak_log', props: { axis: ax } });
+    assert.strictEqual(cands.length, 2, 'две грани по оси ' + ax); assert(cands.every(c => c.off[ai] !== 0), JSON.stringify(cands));
   }
 
   // ---- прерывание через TaskManager и dispatch (только чтение не занимает тело) ----
@@ -353,7 +362,7 @@ module.exports = async () => {
     const ck = await dispatch({ action: 'blueprint_check', params: { name: 'fence_post_lamp', x: 0, y: 64, z: 0 } });
     assert(ck.ok && ck.total === 5);
     const d = await dispatch({ action: 'build_blueprint', params: { name: 'fence_post_lamp', x: 0, y: 64, z: 0, dry: 1 } });
-    assert(d.ok && d.dry && d.missing.torch === 1, JSON.stringify(d));
+    assert(d.ok && d.dry && d.missing.spruce_fence === 3 && !d.missing.torch, JSON.stringify(d)); // в FULL есть факелы, заборов нет
     assert.strictEqual(ctxd.tasks.current, null, 'dry не занимает тело');
     let started = await dispatch({ action: 'build_blueprint', params: { name: 'hut_west', x: 0, y: 64, z: 0 } });
     assert(started.ok && started.started === 'build_blueprint', JSON.stringify(started));
