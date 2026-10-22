@@ -72,7 +72,7 @@ function mkWorld({ inv = {}, blocks = {}, unloadedFromX = null, invertStairs = f
     }
   };
   bot.placeBlock = bot._placeBlockWithOptions;
-  const ctx = { bot, stats, statsDirty: false, bpFast: true };
+  const ctx = { bot, stats, statsDirty: false, bpFast: true, blueprintDir: BP_DIR };
   return { bot, ctx, set, get, stock, log, map };
 }
 // goto подменён: «телепорт» на 2 блока восточнее цели
@@ -85,6 +85,8 @@ A.goto = async (ctx, t, goal) => {
 A.pickupDrops = async () => {};
 const task = () => new Task(1, 'build_blueprint', {}, 'brain');
 const tmpBp = (files) => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flybot-bp-')); for (const [n, t] of Object.entries(files)) fs.writeFileSync(path.join(dir, n + '.txt'), t); return dir; };
+// копия brain/blueprints: мозг правит легенду живых чертежей (в hut_west стёкла W заменил на забор) — тест держит исходную
+const BP_DIR = (() => { const src = require('../lib/skills/blueprint').BLUEPRINT_DIR, files = {}; for (const n of fs.readdirSync(src)) if (n.endsWith('.txt')) files[n.slice(0, -4)] = fs.readFileSync(path.join(src, n), 'utf8'); files.hut_west = files.hut_west.replace(/^W = .*$/m, 'W = glass_pane'); return tmpBp(files); })();
 const rejects = async (p, re, msg) => { let err = null; try { await p; } catch (e) { err = e; } assert(err, 'ожидалась ошибка: ' + msg); assert(re.test(err.message), `${msg}: ${err.message}`); return err; };
 
 module.exports = async () => {
@@ -151,7 +153,7 @@ module.exports = async () => {
   const dir0 = BP.BLUEPRINT_DIR;
   for (const f of ['hut_west', 'fence_post_lamp', 'bridge_segment']) assert(fs.existsSync(path.join(dir0, f + '.txt')), 'нет примера ' + f);
   assert(fs.existsSync(path.join(dir0, 'README.md')));
-  const hut = BP.loadBlueprint({ bot: { registry: reg } }, 'hut_west');
+  const hut = BP.loadBlueprint({ bot: { registry: reg }, blueprintDir: BP_DIR }, 'hut_west');
   assert.deepStrictEqual([hut.W, hut.D, hut.H], [7, 7, 5]);
   assert.deepStrictEqual(hut.materials, { cobblestone: 102, spruce_log: 12, spruce_door: 1, glass_pane: 5, torch: 2, spruce_planks: 49 });
   const bridge = BP.loadBlueprint({ bot: { registry: reg } }, 'bridge_segment');
@@ -193,14 +195,17 @@ module.exports = async () => {
     assert.deepStrictEqual(ck.size, { x: 7, y: 5, z: 7 });
     assert(ck.matched > 0 && ck.matched < ck.total, 'воздух совпадает с «.»: ' + ck.matched);
   }
-  // ---- нехватка материалов: ошибка с точным списком, мир нетронут ----
+  // ---- нехватка материалов: строю частью, в итоге — что не хватило; нет ни одного нужного предмета — отказ, мир нетронут ----
   {
     const w = mkWorld({ inv: { cobblestone: 100, spruce_log: 12, spruce_planks: 49, spruce_door: 1, glass_pane: 2, torch: 2 } });
     const dry = await BP.buildBlueprint(w.ctx, null, { name: 'hut_west', x: 0, y: 64, z: 0, dry: 1 });
     assert.deepStrictEqual(dry.missing, { cobblestone: 2, glass_pane: 3 });
-    const e = await rejects(BP.buildBlueprint(w.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }), /не хватает: cobblestone ×2, glass_pane ×3/, 'нехватка');
-    assert.strictEqual(e.extra.ok, false); assert.deepStrictEqual(e.extra.missing, { cobblestone: 2, glass_pane: 3 }); assert(e.extra.error);
-    assert.strictEqual(w.log.placed, 0); assert.strictEqual(w.log.dug, 0);
+    const e = await rejects(BP.buildBlueprint(w.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }), /не достроено: .*не хватило: .*cobblestone ×2.*glass_pane ×3|не достроено: .*не хватило: .*glass_pane ×3.*cobblestone ×2/, 'частичная стройка');
+    assert.strictEqual(e.extra.ok, false); assert(e.extra.placed > 100, 'поставлено: ' + e.extra.placed); assert(e.extra.missing.cobblestone && e.extra.missing.glass_pane);
+    assert(w.log.placed > 100);
+    const w0 = mkWorld({ inv: { dirt: 5 } });
+    const e0 = await rejects(BP.buildBlueprint(w0.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }), /не хватает: cobblestone ×102/, 'пустая сумка');
+    assert.strictEqual(e0.extra.ok, false); assert.strictEqual(w0.log.placed, 0); assert.strictEqual(w0.log.dug, 0);
   }
 
   // ---- полная стройка хижины с препятствиями, повтор, поворот ----
