@@ -302,6 +302,72 @@ function attach(api) {
     await startDefense(ctx, plan);
   });
 
+  // ---- Новый: проактивная защита от сближающегося моба (ДО удара) ----
+  // Проверяем каждые 2 с: есть ли hostile моб рядом, ближе ли он порога действия,
+  // и если тело занято задачей — прерываем её и запускаем защиту.
+  // Это покрывает случаи: крипер идёт к испуганной мухе, зомби подходит во время сбора,
+  // муха стоит в пещере и не двигается — рефлекс выбирает escape/shelter.
+  (async () => {
+    let lastCheck = 0;
+    api.every(2000, async () => {
+      const now = Date.now();
+      if (now - lastCheck < 1500) return; // мини- débounce
+      lastCheck = now;
+      if (ctx.manualControl) return;
+      const bot = ctx.bot;
+      if (!bot.entity || !bot.entity.position) return;
+      const cur0 = ctx.tasks.current;
+      if (cur0 && ['fight', 'defend', 'escape', 'shelter'].includes(cur0.name)) return; // защита уже идёт — не дёргать её каждые 2 с
+      if (inShelter(ctx)) return; // L043: в укрытии стоим — побег вытащил бы в открытое место
+      const p = bot.entity.position;
+      // Находим ближайшего hostile моба
+      const hostiles = Object.values(bot.entities).filter(
+        e => e && e !== bot.entity && isHostile(e)
+      );
+      if (hostiles.length === 0) return;
+      hostiles.sort((a, b) => F.posOf(a).distanceTo(p) - F.posOf(b).distanceTo(p));
+      const nearest = hostiles[0];
+      const dist = F.posOf(nearest).distanceTo(p);
+      // Если моб дальше порога защитного действия — не трогаем
+      if (dist > T.defenseFightDist) return;
+      // Если у тела нет активной задачи — всё равно проверяем и начинаем защиту,
+      // чтобы прерывать состояние «жду» при сближающемся мобе
+      // (рефлекс инициирует защиту сам, а не ждет task_started или mob_hurt)
+      // Определяем, угрожает ли моб (крипер ближе 16 м, зомби ближе 12 м)
+      const isCreeper = nearest.name === 'creeper';
+      const closeEnough = isCreeper ? dist < 16 : dist < 12;
+      if (!closeEnough) return;
+      // Определяем outlook (пойдёт ли бой)
+      const o = outlookOf(ctx, nearest);
+      const losing = o ? !o.win : bot.health < T.defenseLowHp;
+      // Выбираем skill: для крепера всегда уклонение/укрытие,
+      // для остальных — по outlook/LowHP
+      let skill, params, why;
+      const canFight = !!nearest && F.distTo(bot, nearest) <= T.defenseFightDist && isAutoTarget(nearest);
+      if (isCreeper || losing || bot.health <= T.swatMinHp) {
+        skill = 'escape';
+        params = {};
+        why = `моб ${nearest.name} ${dist.toFixed(1)} м — уклонение от ${isCreeper ? 'взрыва' : 'урона'}`;
+      } else if (canFight) {
+        skill = 'fight';
+        params = { targetId: nearest.id, radius: T.fightRadius };
+        why = `моб ${nearest.name} ${dist.toFixed(1)} м — бой`;
+      } else {
+        skill = 'shelter';
+        params = {};
+        why = `моб ${nearest.name} ${dist.toFixed(1)} м — укрытие`;
+      }
+      if (bannedActions(ctx)[skill]) return; // это действие только что не вышло — не повторяем его каждые 2 с
+      // Прерываем текущую задачу тела (если есть), чтобы сделать место защите
+      const curTask = ctx.tasks.current;
+      if (curTask && typeof ctx.tasks.stop === 'function') {
+        try { await ctx.tasks.stop('моб сближается — рефлекс прерывает'); } catch (e) {}
+      }
+      // Запускаем защиту с force:true, чтобы перебить чужую работу
+      await startDefense(ctx, { skill, params, why, options: [skill] });
+    });
+  })();
+
   // ---- Респаун ночью среди мобов: голыми руками не воевать, сразу укрыться (иначе — смерть по кругу на спавне) ----
   api.on(bot, 'spawn', () => {
     api.after(T.respawnDelayMs, () => {

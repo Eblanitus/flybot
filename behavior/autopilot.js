@@ -87,8 +87,19 @@ const MOD = {}; // метка этой версии модуля: после п�
 // ---------- Решение (чистая функция) ----------
 // А: «мало HP» по последствию (lib/danger.js outlook в s.outlook): бой проигран и, не отбиваясь, муха умрёт раньше apReactSec
 function lowHpOf(s) {
+  if (s.sheltered && !s.hitRecent && s.hp >= T.apLowHp) return false;
   const o = s.outlook;
-  return o ? !o.win && o.passiveTtdSec != null && o.passiveTtdSec < T.apReactSec : s.hp < T.apLowHp;
+  if (!o) return s.hp < T.apLowHp;
+  // если муха укрыта иRecent ударов нет — outlook не должен учитывать мобов,
+  // которых не могут достать (в яме/укрытии). Считаем только реальную угрозу.
+  if (s.sheltered && !s.hitRecent) {
+    // outlook считает встречу выигрышной, если enough HP и weapon against mobs
+    // если outlook проигрышный но мобов снаружи не достучаться — не ставим «мало HP»
+    const relevantMobs = o.mobs ? o.mobs.filter(m => m.d <= T.apReactSec + 4) : [];
+    const hasRelevantThreat = relevantMobs.length > 0 && !o.win;
+    if (!hasRelevantThreat) return false;
+  }
+  return !o.win && o.passiveTtdSec < T.apReactSec;
 }
 // s: {on, idle, task:{name,source}|null, running:{key,name,kind}|null, runnerOther, hp, food, hasFood, hasWeapon, hasPickaxe,
 //     blocks, logs, cobble, phase, isNight, nightIn, sheltered, inLava, suffocating, stuck, underWater,
@@ -199,6 +210,19 @@ function decide(s) {
     const a = job();
     if (a && ok(a.key)) return { ...a, why: a.why + ' — прерываю ожидание ночи', preempt: true };
   }
+  // Safety: interrupt own collection task if hostile mob appears nearby
+  // Exception to the general "don't interrupt own task" rule (like go_base escape for fire/lava)
+  if (run === 'collect_stone' && s.hostilesNear > 0) {
+    const mob = (s.hostilesNear > 0 && s.hostile) ? s.hostile : null;
+    if (mob && mob.d < T.hostileR) {
+      if (s.hasWeapon && s.hp >= T.apFightHp) {
+        return body('fight', 'fight', { target: mob.name, radius: T.fightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout },
+          `безопасность: ${mob.name} рядом (${mob.d} м) — драюсь, а не собираю`);
+      }
+      return body('escape', 'escape', { distance: T.apEscapeDist, shelter: true },
+        `безопасность: ${mob.name} рядом (${mob.d} m) — прекращаю сбор, отхожу в сторону`);
+    }
+  }
   if (run || s.task) return null; // свой навык идёт — не дёргать
   if (!s.idle) return null;       // мозг недавно командовал — ждём
 
@@ -210,6 +234,11 @@ function decide(s) {
   if (lowHpOf(s)) {
     const crit = (o ? o.hitsToDie != null && o.hitsToDie <= 1 : s.hp <= T.apCritHp) && !s.hasFood; // еле жива и есть нечего — наружу не ходим
     const dark = s.isNight || s.nightIn < T.nightSoonSec;   // ночью в поле не выходим: стены и ждать утра
+    const waitLimitMs = 300000; // 5 мин ограничения ожидания
+    const waitCount = (s.failInfo && s.failInfo.lowhp_waitCount) || 0;
+    const shouldWait = waitCount * T.tickMs < waitLimitMs;
+    // инкрементируем счетчик ожидания каждые ticks
+    if (s.failInfo) s.failInfo.lowhp_waitCount = waitCount + 1;
     const fi = s.failInfo || {};
     const bad = k => !!(fi[k] && fi[k].count >= T.failSameCount); // эта тактика уже провалилась одинаково
     const need = T.apLowHpBlocks;                 // блоков надо на стены укрытия
@@ -234,7 +263,22 @@ function decide(s) {
       if (!crit && !(dark && s.hostilesNear > 0) && (bad('lowhp_dirt') || bad('lowhp_shelter') || bad('lowhp_escape')) && ok('lowhp_move'))
         return body('lowhp_move', 'explore', { distance: T.apLowHpMoveDist }, `мало HP (${s.hp}) — ${last} — отхожу в сторону`);
     }
-    return null; // ждём (ест рефлекс) — в укрытии восстанавливаемся, наружу не идём
+    if (s.build && !crit) {
+      // есть задача от мозга постройки — берем её, а не ждём низкого HP
+      const buildT = buildAct();
+      if (buildT) return buildT;
+    }
+    if (crit) {
+      return null; // еле жива и есть нечего — наружу не ходим, ждём
+    } else if (s.food < T.goBaseMinFood) {
+      // еда меньше порога регенерации (REGEN_FOOD=18) — ждать бессмысленно, HP не вырастет
+      // fall through to task selection below
+    } else if (!shouldWait) {
+      // время ожидания истекло (более 5 мин) — не ждать, а выбирать другое дело
+      // fall through to task selection below
+    } else {
+      return null; // ждём (ест рефлекс) — в укрытии восстанавливаемся, наружу не идём
+    }
   }
   const night = nightSoon;
   // L052 (смерть 23): ночью моб в hostileR или по муху били — «укрытие объявлено» ≠ «безопасно ждать»:
@@ -271,7 +315,8 @@ function decide(s) {
     if (s.phase === 'ночь' || s.phase === 'закат') add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью')); // упал со сбоем кода — его нет в выборе
     if (s.isNight && s.freeBed) add(Math.max(0, 45 + (s.hp < 20 || s.food < T.huntFood ? 10 : 0) - press), body('sleep', 'sleep', {}, 'сплю в кровати')); // ранена или голодна — сон полезнее
     // v0.2: цель мозга ночью — только у базы (без «База:» или вне радиуса — нет: ночью в поле не строим)
-    if (job && atBase) add(50 + press, job());
+// Гейт: ночью с мобами рядом не начинаем дело — сначала укрытие/ожидание
+    if (job && atBase && s.hostilesNear === 0) add(50 + press, job());
     // L052: wait_night только без врагов рядом и без свежих ударов (иначе выше сработала ночная защита)
     if (s.isNight) add(Math.max(0, 20 - press), body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь'));
     return pick();
@@ -290,7 +335,7 @@ function decide(s) {
     // переход на базу только сейчас не вышел — дальше от базы не уходим (только за вещами), ждём следующей попытки
     if (!ok('go_base')) return pick();
     const nightRoad = s.isNight || (s.nightIn != null && s.nightIn < T.apDuskSec);
-    const dirtyRoad = s.onFire || s.inLava || (nightRoad && (s.hp < T.goBaseMinHp || s.food < T.goBaseMinFood));
+    const dirtyRoad = s.onFire || s.inLava || (nightRoad && (s.hp < T.goBaseMinHp || s.food < T.goBaseMinFood) || (nightRoad && s.hostilesNear > 0));
     // дорогу не начинаем — тела не отдаём ей, берём следующее дело (лава/горю лечит самозащита, ночью еда и вернутся),
     // а после добавления остальных дел решаем, чем заняться
     if (!dirtyRoad) {
@@ -307,11 +352,20 @@ function decide(s) {
   add(35 - (s.nightIn != null && s.nightIn < T.dayRoutineSec ? 10 : 0), learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)'));
   // голод: чем меньше сытость (а еды нет), тем важнее охота — голодная муха охотится раньше цели мозга
   if (s.food < T.huntFood && !s.hasFood && s.animals > 0) add(20 + (T.huntFood - s.food) * 3, body('hunt', 'hunt', { count: T.huntCount }, 'охочусь: нечего есть'));
-  if (!s.hasPickaxe && s.logs >= T.pickLogs) add(30, body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку'));
-  if (!s.hasPickaxe && s.logs < T.needLogs) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, ...(tried('collect_log') ? { radius: wider('collect_log', 48) } : {}) }, 'рублю дерево'));
-  // сброс сбору при опасном обрыве: если под ногами пустота — не копим
+  // золото: сначала собираем бревно, потом кнущим кирку, потом камень
+  // когда нет кирки — сначала собрать logs, а не сразу идти к камню
+  if (!s.hasPickaxe) {
+    if (s.logs < T.needLogs) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, ...(tried('collect_log') ? { radius: wider('collect_log', 48) } : {}) }, 'рублю дерево'));
+    if (s.logs >= T.pickLogs) add(30, body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку'));
+  }
+  // если кирка есть — собираем камень
   const edgeHazard = s.snapshot?.hazards?.includes('обрыв') || s.survey?.edges?.some(e => e.drop >= 3);
-  if (s.hasPickaxe && s.cobble < T.cobbleWant && !edgeHazard) add(26, body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount, ...(tried('collect_stone') ? { radius: wider('collect_stone', 48) } : {}) }, 'добиваю камень'));
+  const duskNoWeapon = duskSoon && !s.hasWeapon; // на закате без оружия за камнем далеко не идём
+  if (s.hasPickaxe && s.cobble < T.cobbleWant && !edgeHazard && !duskNoWeapon) {
+    const far = tried('collect_stone') ? { radius: wider('collect_stone', 48) } : {};
+    add(26, body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount, ...far },
+      duskSoon && !s.hasWeapon ? 'сбор на закате без оружия отложен' : 'добиваю камень'));
+  }
   // если обрыв — сбор не начинаем, оставляем следующий кандидат или тихо ждем
   if (edgeHazard && s.snapshot?.hazards?.includes('обрыв') && !s.running) add(0, body('explore', 'explore', { distance: 8 }, 'обрыв рядом — не начинаю сбор, исследую другое место'));
   // разведка — когда больше нечего; перед ночью — ближе
