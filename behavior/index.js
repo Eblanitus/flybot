@@ -1,4 +1,4 @@
-// Поведение мухи: всё, что решает «как и когда» (автопилот, рефлексы, выбор способа боя, пороги, запретные зоны).
+// Поведение мухи: всё, что решает «как и когда» (автопилот, рефлексы, выбор способа боя, пороги).
 // Ядро (lib/behavior_host.js) загружает этот файл, проверяет (selfTest) и только потом включает; сломанную или
 // зависшую версию откатывает на последнюю рабочую (data/behavior_versions/). Контракт — behavior/README.md.
 'use strict';
@@ -6,7 +6,6 @@ const autopilot = require('./autopilot');
 const reflexes = require('./reflexes');
 const { chooseMelee } = require('./combat');
 const thresholds = require('./thresholds');
-const zones = require('./zones');
 
 const API = 1; // версия интерфейса ядро↔поведение
 
@@ -23,4 +22,4 @@ function attach(api) {
 // Быстрая офлайн-проверка перед включением (без бота и сервера)
 function selfTest() { return require('./test')(); }
 
-module.exports = { API, name: 'учебные колёса', attach, selfTest, chooseMelee, thresholds, zones };
+module.exports = { API, name: 'учебные колёса', attach, selfTest, chooseMelee, thresholds };

@@ -5,13 +5,10 @@ const assert = require('assert');
 const { decide, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList } = require('./autopilot');
 const R = require('./reflexes');
 const T = require('./thresholds');
-const zones = require('./zones');
 
 module.exports = async function selfTest() {
   // пороги — числа
   for (const [k, v] of Object.entries(T)) assert(typeof v === 'number' && Number.isFinite(v), 'порог ' + k + ' не число');
-  // запретные зоны — список коробок/шаров
-  assert(Array.isArray(zones), 'zones — не список');
   // автопилот: день без забот -> дневная работа; враг-агрессор -> драка; мало HP -> укрытие; мозг занял тело -> ничего
   const base = { on: true, idle: true, task: null, running: null, runnerOther: false, hp: 20, food: 20, hasFood: true, hasWeapon: true, hasPickaxe: true,
     blocks: 20, logs: 8, cobble: 30, phase: 'день', isNight: false, nightIn: 500, sheltered: false, hostilesNear: 0, enemies: [], alone: true,

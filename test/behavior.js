@@ -1,5 +1,5 @@
 // Офлайн-проверки разделения «ядро / поведение»: загрузка behavior/, сломанная версия не включается,
-// бросающая или зависшая — откатывается на рабочую; события ядра доходят до поведения; запретные зоны;
+// бросающая или зависшая — откатывается на рабочую; события ядра доходят до поведения;
 // законы игры (блок danger: время до смерти); руки для воды (swim_to, dive, блок под водой).
 'use strict';
 const assert = require('assert');
@@ -7,7 +7,6 @@ const os = require('os'), fs = require('fs'), path = require('path');
 const EventEmitter = require('events');
 const { Vec3 } = require('../lib/util');
 const { BehaviorHost, check } = require('../lib/behavior_host');
-const zones = require('../lib/zones');
 const D = require('../lib/danger');
 const water = require('../lib/skills/water');
 const A = require('../lib/actions');
@@ -39,7 +38,7 @@ async function hostTests() {
   // настоящая behavior/ проходит проверку (загрузка + selfTest)
   const real = await check(path.join(__dirname, '..', 'behavior'));
   assert.ok(real.ok, 'behavior/ не прошла проверку: ' + real.error);
-  assert.ok(typeof real.mod.chooseMelee === 'function' && Array.isArray(real.mod.zones));
+  assert.ok(typeof real.mod.chooseMelee === 'function');
   console.log('  behavior/ selfTest: OK (' + real.ms + ' мс)');
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'flybeh-'));
@@ -48,11 +47,10 @@ async function hostTests() {
   const host = new BehaviorHost(ctx, { dir, versionsDir, limits: { CHECK_MS: 300, HANG_MS: 150, FAULT_N: 3, FAULT_WINDOW_MS: 5000, GOOD_MS: 80, WATCH_MS: 30, RESTART_GAP_MS: 0 } });
   const session = { bot: ctx.bot };
   try {
-    // рабочая версия: таймер считает, событие mob_hurt доходит, зона из поведения
+    // рабочая версия: таймер считает, событие mob_hurt доходит
     writeVersion(dir, {
       attach: `api.ctx.ticks = 0; api.every(10, () => { api.ctx.ticks++; }, 'счёт'); api.handle('mob_hurt', p => { api.ctx.hurtBy = p.att; });
-               api.on(api.bot, 'death', () => { api.ctx.died = (api.ctx.died || 0) + 1; }); return { detach() { api.ctx.detached = (api.ctx.detached || 0) + 1; } };`,
-      extra: `zones: [{ name: 'дом', min: [10, 60, 10], max: [12, 70, 12] }]`
+               api.on(api.bot, 'death', () => { api.ctx.died = (api.ctx.died || 0) + 1; }); return { detach() { api.ctx.detached = (api.ctx.detached || 0) + 1; } };`
     });
     const r0 = await host.init();
     assert.ok(r0.ok, r0.error);
@@ -62,14 +60,10 @@ async function hostTests() {
     assert.strictEqual(ctx.hurtBy, 'зомби');
     ctx.bot.emit('death');
     assert.strictEqual(ctx.died, 1);
-    assert.ok(zones.forbidden(ctx, new Vec3(11, 65, 11)), 'зона из поведения не работает');
-    assert.strictEqual(zones.forbidden(ctx, new Vec3(13, 65, 11)), null);
-    assert.strictEqual(zones.forbidden(ctx, [11, 65, 11], 'the_nether') && true, true, 'зона без dim — во всех измерениях');
-    assert.strictEqual(zones.breakExclusion(ctx)({ position: new Vec3(10, 60, 10) }), 100);
     await until(() => host.lastGood(null), 2000, 'версия стала рабочей');
     const good = host.active;
     assert.ok(fs.existsSync(path.join(versionsDir, good.id, 'index.js')), 'копия версии не сохранена');
-    console.log('  загрузка, события, зоны, рабочая версия: OK');
+    console.log('  загрузка, события, рабочая версия: OK');
 
     // сломанные версии не включаются, активной остаётся рабочая
     const broken = [
@@ -77,8 +71,7 @@ async function hostTests() {
       ['нет selfTest', { raw: `module.exports = { API: 1, attach() {} };` }],
       ['не тот API', { raw: `module.exports = { API: 2, attach() {}, selfTest: async () => 1 };` }],
       ['selfTest падает', { selfTest: `async () => { throw new Error('порог не число'); }` }],
-      ['selfTest висит', { selfTest: `() => new Promise(() => {})` }],
-      ['зоны неверные', { extra: `zones: [{ name: 'x', min: [1, 2] }]` }]
+      ['selfTest висит', { selfTest: `() => new Promise(() => {})` }]
     ];
     for (const [what, v] of broken) {
       writeVersion(dir, v);
