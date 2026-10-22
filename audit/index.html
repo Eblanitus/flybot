@@ -730,16 +730,13 @@ async function saveModel(role) {
 // ---------- Учитель ----------
 let openRep = null;
 const TST = { pending: 'warn', working: 'blue', done: 'ok', failed: 'bad', dropped: 'dim' };
-const LST = { 'проверяется': 'warn', 'подтверждён': 'ok', 'не помог': 'bad', 'записано': 'dim' };
-const VERD_RU = { brain: 'урок мозгу', code: 'заявка инженеру', sensor: 'датчик (ядро)', luck: 'не повезло' };
 function renderTeacher(d) {
   const q = d.queue || {};
-  let h = '<h2>Учитель</h2><div class="box small dim">Учитель (модель сейчас: <b>' + esc(d.model || '—') + '</b>) разбирает смерти, почти-смерти, провалы, застревания, итоги дней и подсказки хозяина. Он не управляет мухой и не пишет код: пишет уроки в учебник мозга и заявки инженеру. Один случай за раз. <button class="btn2" data-con="teacher">Журнал учителя в консоли</button></div>';
+  let h = '<h2>Учитель</h2><div class="box small dim">Учитель (модель сейчас: <b>' + esc(d.model || '—') + '</b>) разбирает простой мухи (главное), дорогие смерти, провалы, застревания и подсказки хозяина. Он не управляет мухой и не пишет код: пишет заявки инженеру и на правку ядра. Один случай за раз. <button class="btn2" data-con="teacher">Журнал учителя в консоли</button></div>';
   if (!q.exists) h += '<div class="box warn">Очереди ещё нет: сторож с учителем не запускался (data/teacher_queue.json).</div>';
   h += `<div class="grid" style="margin-top:12px">
     <div class="card"><div class="t">Ждут разбора</div><div class="v">${q.pending || 0}</div></div>
     <div class="card"><div class="t">Сейчас разбирает</div><div class="v small">${esc(q.working || '—')}</div></div>
-    <div class="card"><div class="t">Уроков в журнале</div><div class="v">${(d.lessons || []).length}</div></div>
     <div class="card"><div class="t">Пропущено повторов / выброшено</div><div class="v">${q.suppressed || 0} / ${q.dropped || 0}</div></div></div>`;
   h += '<h2>Очередь случаев</h2>';
   if (!d.cases.length) h += '<div class="box dim">Случаев нет.</div>';
@@ -761,19 +758,6 @@ function renderTeacher(d) {
     }
     h += '</table>';
   }
-  h += '<h2>Журнал уроков <span class="dim small">(brain/lessons.json)</span></h2>';
-  if (d.lessonsError) h += `<div class="box bad">${esc(d.lessonsError)}</div>`;
-  if (!d.lessons.length) h += '<div class="box dim">Уроков пока нет.</div>';
-  else {
-    h += '<table><tr><th>Урок</th><th>Подпись: причина / обстановка / кто решал</th><th>Что изменено и где</th><th>Статус</th></tr>';
-    for (const l of d.lessons) {
-      const sg = l.signature || {};
-      h += `<tr><td><b>${esc(l.id)}</b><div class="dim small">${esc(l.date || '')}</div><div class="small">${esc(VERD_RU[l.verdict] || l.verdict || '')}</div></td><td class="small">${esc(sg.cause || '—')}<div class="dim">${esc(sg.situation || '')}</div><div>${esc(sg.by ? byRu(sg.by) : '')}</div></td><td class="small">${esc(l.change || '')}<div class="dim">${esc(l.where || '')}</div></td><td><span class="tag ${LST[l.status] || ''}">${esc(l.status || '?')}</span>${l.cases.length ? `<div class="dim small">случаев: ${l.cases.length}</div>` : ''}</td></tr>`;
-    }
-    h += '</table>';
-  }
-  h += `<h2>Учебник мозга <span class="dim small">(brain/lessons.md${d.bookLines != null ? ', строк: ' + d.bookLines : ''}${d.bookMtime ? ', изменён ' + tm(d.bookMtime) : ''})</span></h2>`;
-  h += d.book == null ? '<div class="box dim">Учебника ещё нет.</div>' : `<div class="box"><pre>${esc(d.book)}</pre></div>`;
   h += '<h2>Запросы на правку ядра</h2><div class="box small dim">Запросы на правку ядра и кнопка «Разрешить» — во вкладке «Инженер».</div>';
   return h;
 }

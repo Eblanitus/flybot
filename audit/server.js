@@ -482,9 +482,9 @@ function engineerDetail(cfg, name) {
 }
 
 // ======================= учитель =======================
-// Только диск: очередь data/teacher_queue.json, отчёты data/teacher/*.md, журнал уроков brain/lessons.json, учебник brain/lessons.md.
+// Только диск: очередь data/teacher_queue.json, отчёты data/teacher/*.md (учебника и журнала уроков больше нет).
 // Тело для этого не нужно — работает и со старым телом.
-const TEACH_TYPE_RU = { death: 'смерть', near: 'почти-смерть', owner: 'сообщение хозяина', stuck: 'застряла', fail: 'провал', day: 'итог дня', neighbor: 'новое у соседа', migrate: 'разовая: перенос правил' };
+const TEACH_TYPE_RU = { idle: 'простой', death: 'смерть', near: 'почти-смерть', owner: 'сообщение хозяина', stuck: 'застряла', fail: 'провал', day: 'итог дня', neighbor: 'новое у соседа', migrate: 'разовая: перенос правил' };
 const TEACH_STATUS_RU = { pending: 'ждёт', working: 'разбирает', done: 'разобран', failed: 'не вышло', dropped: 'выброшен (очередь полна)' };
 const REPORT_RE = /^[\w.-]+\.md$/;
 function readText(file, max) { try { return fs.readFileSync(file, 'utf8').slice(0, max || 60000); } catch (e) { return null; } }
@@ -505,18 +505,10 @@ function loadTeacher(cfg) {
     const verdict = ((/^\s*Вердикт:\s*(.*)$/m.exec(text) || [])[1] || '').slice(0, 200);
     return { name: n, ts: st ? st.mtimeMs : null, title, verdict };
   }).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 80);
-  let lessons = null, lessonsError = null;
-  const lj = readText(path.join(cfg.brainDir, 'lessons.json'), 400000);
-  if (lj != null) { try { const o = JSON.parse(lj); lessons = Array.isArray(o) ? o : Array.isArray(o.lessons) ? o.lessons : []; } catch (e) { lessonsError = 'brain/lessons.json не читается: ' + e.message; } }
-  const lmFile = path.join(cfg.brainDir, 'lessons.md');
-  let lmMtime = null; try { lmMtime = fs.statSync(lmFile).mtimeMs; } catch (e) {}
-  const book = readText(lmFile, 30000);
   const core = readText(path.join(cfg.brainDir, 'core_requests.md'), 30000);
   return {
     queue: { exists: !!q, created: q ? q.created : null, pending: cases.filter(c => c.status === 'pending').length, working: (cases.find(c => c.status === 'working') || {}).id || null, suppressed: q ? q.suppressed || 0 : 0, dropped: q ? q.dropped || 0 : 0 },
-    cases, reports,
-    lessons: (lessons || []).map(l => ({ id: l.id, date: l.date, signature: l.signature || {}, verdict: l.verdict, change: l.change, where: l.where, status: l.status, cases: l.cases || [], note: l.note })).reverse(),
-    lessonsError, book, bookMtime: lmMtime, bookLines: book == null ? null : book.split(/\r?\n/).filter(l => l.trim()).length, coreRequests: core,
+    cases, reports, coreRequests: core,
     core: loadCore(cfg)
   };
 }

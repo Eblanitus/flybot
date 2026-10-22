@@ -3,7 +3,7 @@
 #    Так 21.10 DeepSeek провисел 40 мин: процесс жив, модель не отвечает, петля не перезапускала.
 # 2) Инженер: мозг кладёт заявку brain\skill_requests\<имя>.md — сторож запускает отдельную модель (EngModel),
 #    она пишет brain\learned\<имя>.js, проверяет через :3200/check и отвечает в <имя>.done.md.
-# 3) Учитель: lib\teacher_triggers.js находит случаи (смерть, почти-смерть, провал дважды, застряла, итог дня, хозяин) и
+# 3) Учитель: lib\teacher_triggers.js находит случаи (простой стройки — главный, смерть, почти-смерть, провал дважды, застряла, хозяин) и
 #    склеивает всплески; сторож запускает учителя на один случай за раз, отчёт — data\teacher\<id>-<тип>.md.
 # 4) Правка ядра: запрос из brain\core_requests.md, который хозяин разрешил в аудите, берёт инженер (lib\core_requests.js:
 #    снимок файлов и тесты «до» → инженер правит со своим конфигом brain\opencode.core.json → тесты «после»; стало хуже — откат
@@ -203,7 +203,7 @@ while ($true) {
       $teachModel = RoleModel 'teacher'   # заново для каждого случая: смена в аудите подхватывается со следующего
       $prompt = "You are the teacher of the Minecraft bot FlyBot_01. Read brain/TEACHER_PROMPT.md and follow it exactly. Case file: $($c.caseFile)"
       $tlog = "$fb\data\teacher-$($c.id).log"
-      # у учителя свой конфиг opencode (пишет только учебник, журнал уроков, заявки и отчёты; без /do); проектный не подмешивать
+      # у учителя свой конфиг opencode (пишет только заявки и отчёты; без /do); проектный не подмешивать
       $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.teacher.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $teachModel `"$prompt`" 2>&1 | node `"$fb\tools\tstamp.js`" >> `"$tlog`"" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
       $tch = @{ proc = $p; id = $c.id; started = Get-Date; model = $teachModel; log = $tlog }

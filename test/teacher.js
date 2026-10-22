@@ -1,13 +1,11 @@
-// Офлайн-проверка учителя: очередь и склейка случаев (lib/teacher_triggers.js), событие lessons_updated (lib/lessons_watch.js,
-// тихое в EventHub, но уходит в /wait вместе с важным), вкладка «Учитель» программы «Аудит» на фальшивых данных. Без тела и без моделей.
+// Офлайн-проверка учителя: очередь и склейка случаев (lib/teacher_triggers.js), простой стройки (progress_idle) как главный случай,
+// вкладка «Учитель» программы «Аудит» на фальшивых данных, права ролей. Без тела и без моделей.
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const T = require('../lib/teacher_triggers');
-const { lessonsWatch } = require('../lib/lessons_watch');
-const { EventHub } = require('../lib/events');
 const A = require('../audit/server');
 
 function mkdirs() {
@@ -29,21 +27,12 @@ function testQueue() {
   const bb = (name, summary) => fs.writeFileSync(path.join(D.dataDir, 'blackbox', name), JSON.stringify({ kind: name.split('-')[0], savedAt: new Date(now).toISOString(), summary, frames: [{}] }));
   const st = () => T.loadState(T.paths(cfg));
 
-  // старая смерть до первого запуска — не разбираем; первый запуск = разовая задача migrate
+  // старая смерть до первого запуска — не разбираем; разовых задач (migrate) больше нет — очередь пуста
   bb('death-20261021-110000.json', { cause: 'zombie' });
   let r = T.scan(cfg); assert(r.init);
-  assert.deepStrictEqual(st().cases.map(c => c.type), ['migrate']);
-  r = T.take(cfg); assert.strictEqual(r.type, 'migrate', 'migrate сразу');
-  assert(fs.existsSync(path.join(D.dataDir, 'teacher_cases', r.id + '.json')));
-  assert.deepStrictEqual(T.take(cfg), { busy: r.id }, 'один учитель за раз');
-  // без отчёта — «не вышло»; с отчётом — «разобран»
-  const mig = r.id;
-  assert.strictEqual(T.finish(cfg, mig, 'crash').status, 'pending', 'разовая задача повторяется');
-  assert.strictEqual(T.take(cfg).id, mig);
+  assert.deepStrictEqual(st().cases.map(c => c.type), [], 'первый запуск — пустая очередь');
+  assert(T.take(cfg).none);
   fs.mkdirSync(path.join(D.dataDir, 'teacher'), { recursive: true });
-  fs.writeFileSync(path.join(D.dataDir, 'teacher', mig + '-migrate.md'), '# migrate\n');
-  assert.strictEqual(T.finish(cfg, mig, 'ok').status, 'done');
-  fs.unlinkSync(path.join(D.dataDir, 'teacher', mig + '-migrate.md'));
 
   // всплеск: смерть в ящике + событие death + провал дважды подряд -> ОДИН случай типа death
   bb('death-20261021-120000.json', { cause: 'drowning', lastTask: { name: 'goto', by: 'brain' }, worst: { kind: 'air', ttdSec: 2 } });
@@ -62,6 +51,8 @@ function testQueue() {
   now += 30000; T.scan(cfg); assert(T.take(cfg).none, 'ждём тишины');
   now += 70000; T.scan(cfg);
   r = T.take(cfg); assert.strictEqual(r.type, 'death');
+  assert(fs.existsSync(path.join(D.dataDir, 'teacher_cases', r.id + '.json')));
+  assert.deepStrictEqual(T.take(cfg), { busy: r.id }, 'один учитель за раз');
   // лимит запросов модели: случай обратно в очередь без штрафа; release — после перезапуска сторожа
   assert.strictEqual(T.finish(cfg, r.id, 'limit').status, 'pending', 'limit — обратно в очередь');
   assert.strictEqual(T.take(cfg).id, r.id, 'тот же случай снова');
@@ -100,25 +91,24 @@ function testQueue() {
   assert.strictEqual(pend.length, 1); assert.strictEqual(pend[0].type, 'fail');
   assert.strictEqual(pend[0].items[0].by, 'skill:build_hut');
 
-  // сообщение хозяина (игра и аудит) и итог дня — отдельные случаи; хозяин склеивается сам с собой
+  // сообщение хозяина (игра и аудит) — отдельный случай, склеивается сам с собой; итог дня случаем больше не заводится
   ev({ id: 20, type: 'chat', from: 'eblanitus228', text: 'ягоды можно сорвать и съесть' });
   ev({ id: 21, type: 'chat', from: 'someone', text: 'привет' });
   ev({ id: 22, type: 'owner_msg', from: 'eblanitus228 (из программы)', text: 'и пей воду' });
   ev({ id: 23, type: 'day_report', day: 41, line: 'День 41: построено 0 блоков' });
   T.scan(cfg);
   pend = st().cases.filter(c => c.status === 'pending');
-  assert.deepStrictEqual(pend.map(c => c.type).sort(), ['day', 'fail', 'owner']);
+  assert.deepStrictEqual(pend.map(c => c.type).sort(), ['fail', 'owner'], 'итог дня — не случай');
   assert.strictEqual(pend.find(c => c.type === 'owner').items.length, 2, 'хозяин: две реплики в одном случае, чужие не считаются');
-  // порядок взятия: хозяин раньше провала и итога дня
+  // порядок взятия: хозяин раньше провала
   now += 100000; T.scan(cfg);
   r = T.take(cfg); assert.strictEqual(r.type, 'owner');
   T.finish(cfg, r.id, 'ok');
   r = T.take(cfg); assert.strictEqual(r.type, 'fail');
-  // потерянный учитель (сторож перезапустился) — через 40 мин случай закрывается и очередь идёт дальше
+  // потерянный учитель (сторож перезапустился) — через 40 мин случай закрывается и не держит очередь
   now += 41 * 60000;
-  r = T.take(cfg); assert.strictEqual(r.type, 'day', 'зависший случай не держит очередь');
+  assert(T.take(cfg).none, 'зависший случай не держит очередь');
   assert(st().cases.some(c => c.status === 'failed' && /потерян/.test(c.result)));
-  T.finish(cfg, r.id, 'timeout');
 
   // застряла: 6 провалов разных задач за 10 мин, ни одного успеха (мелочи вроде eat не в счёт)
   now += 60 * 60000;
@@ -151,7 +141,7 @@ function testNeighbor() {
   fs.writeFileSync(path.join(nb, 'lib', 'skills', 'combat.js'), '// бой\n');
   const cfg = { dataDir: D.dataDir, brainDir: D.brainDir, now: () => now, neighborDir: nb };
   const st = () => T.loadState(T.paths(cfg));
-  T.scan(cfg);                                    // первый запуск: migrate
+  T.scan(cfg);                                    // первый запуск: пустая очередь
   T.scan(cfg);
   let nbc = st().cases.filter(c => c.type === 'neighbor');
   assert.strictEqual(nbc.length, 1, 'первый взгляд на соседа — случай'); assert(/combat/.test(nbc[0].items[0].text));
@@ -175,44 +165,50 @@ function testHelpers() {
   assert.strictEqual(T.eventTime('23:59:00', now), Date.UTC(2026, 9, 20, 23, 59, 0), 'вчера');
 }
 
-async function testLessonsEvent() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lessons-'));
-  const file = path.join(dir, 'lessons.md');
-  fs.writeFileSync(file, '# Учебник\n');
-  const hub = new EventHub(50);
-  const w = lessonsWatch(file, (t, d) => hub.push(t, d));
-  assert.strictEqual(w.check(), null, 'при старте события нет');
-  fs.writeFileSync(file, '# Учебник\n- перед ручной работой проверь навык\n');
-  fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
-  const ev = w.check();
-  assert(ev && ev.type === 'lessons_updated' && ev.lines === 2);
-  assert.strictEqual(w.check(), null, 'одна правка — одно событие');
-  // тихое: /wait не просыпается от него...
-  let r = await hub.wait(0, 300);
-  assert(r.timedOut, 'lessons_updated не будит');
-  // ...но приходит вместе со следующим важным событием
-  hub.push('task_done', { name: 'collect' });
-  r = await hub.wait(0, 1000);
-  assert(!r.timedOut && r.events.some(e => e.type === 'lessons_updated') && r.events.some(e => e.type === 'task_done'), 'приходит вместе с важным');
-  // удаление файла — не событие, появление — событие
-  fs.unlinkSync(file); assert.strictEqual(w.check(), null);
-  fs.writeFileSync(file, 'x\n'); assert(w.check());
-  console.log('lessons_updated: OK');
+// простой стройки (progress_idle) — главный случай: порог, приоритет выше смерти, свой cooldown
+function testIdle() {
+  const D = mkdirs();
+  let now = Date.UTC(2026, 9, 22, 12, 0, 0);
+  const cfg = { dataDir: D.dataDir, brainDir: D.brainDir, now: () => now, neighborDir: null };
+  const ev = (o) => fs.appendFileSync(path.join(D.dataDir, 'events.log'), JSON.stringify({ t: hms(now), ...o }) + '\n');
+  const st = () => T.loadState(T.paths(cfg));
+  const idle = () => st().cases.filter(c => c.type === 'idle' && c.status === 'pending');
+  T.scan(cfg);
+  ev({ id: 2, type: 'progress_idle', min: 20 }); T.scan(cfg);
+  assert.strictEqual(idle().length, 0, 'простой меньше порога — не случай');
+  ev({ id: 3, type: 'progress_idle', min: T.DEFAULTS.IDLE_MIN }); T.scan(cfg);
+  assert.strictEqual(idle().length, 1, 'простой от порога — случай'); assert(/30 мин/.test(idle()[0].items[0].text));
+  // пока ждёт — следующая отметка в тот же случай
+  now += 10 * 60000; ev({ id: 4, type: 'progress_idle', min: 40 }); T.scan(cfg);
+  assert.strictEqual(idle().length, 1); assert.strictEqual(idle()[0].items.length, 2);
+  // смерть рядом — отдельный случай (не склеивается с простоем), но простой берётся первым
+  ev({ id: 5, type: 'death', cause: 'zombie' }); T.scan(cfg);
+  assert.strictEqual(st().cases.filter(c => c.status === 'pending').length, 2);
+  now += 100000; T.scan(cfg);
+  const r = T.take(cfg); assert.strictEqual(r.type, 'idle', 'простой важнее смерти');
+  fs.mkdirSync(path.join(D.dataDir, 'teacher'), { recursive: true });
+  const rep = path.join(D.dataDir, 'teacher', r.id + '-idle.md');
+  fs.writeFileSync(rep, '# простой\n'); fs.utimesSync(rep, new Date(now), new Date(now));
+  assert.strictEqual(T.finish(cfg, r.id, 'ok').status, 'done');
+  // в cooldown (60 мин) новый простой не заводится
+  now += 10 * 60000; ev({ id: 6, type: 'progress_idle', min: 50 }); T.scan(cfg);
+  assert.strictEqual(idle().length, 0, 'повтор в cooldown подавляется'); assert(st().suppressed >= 1);
+  // чужой cooldown (застревание, провал) на простой не влияет; после часа — снова случай
+  now += 61 * 60000; const s0 = st(); s0.cooldown.stuck = now + 3600000; s0.cooldown['fail:x:y'] = now + 3600000; fs.writeFileSync(T.paths(cfg).state, JSON.stringify(s0));
+  ev({ id: 7, type: 'progress_idle', min: 120 }); T.scan(cfg);
+  assert.strictEqual(idle().length, 1, 'после cooldown — снова случай');
+  console.log('teacher idle: OK');
 }
 
 async function testAudit(D) {
-  fs.writeFileSync(path.join(D.brainDir, 'lessons.md'), '# Учебник мозга\n- одно действие больше 20 раз — закажи навык (L001)\n');
-  fs.writeFileSync(path.join(D.brainDir, 'lessons.json'), JSON.stringify({ lessons: [
-    { id: 'L001', date: '2026-10-21', signature: { cause: 'утонула', situation: 'ночь, вода', by: 'brain' }, verdict: 'brain', change: 'урок про воздух', where: 'brain/lessons.md', status: 'проверяется', cases: ['x'] },
-    { id: 'L002', signature: { cause: 'зомби', by: 'autopilot' }, verdict: 'code', status: 'не помог', cases: [] }] }));
   fs.writeFileSync(path.join(D.brainDir, 'core_requests.md'), '# Заявки на датчики\n## [2026-10-21] не видно глубину воды\n');
   const cfg = { ...A.DEFAULTS, dataDir: D.dataDir, brainDir: D.brainDir, bodyUrl: 'http://127.0.0.1:9', runnerUrl: 'http://127.0.0.1:9' };
   const d = await A.api(cfg, 'teacher', new URLSearchParams());
-  assert(d.queue.exists && d.cases.length >= 5);
+  assert(d.queue.exists && d.cases.length >= 4);
   assert(d.cases.some(c => c.status === 'done' && c.typeRu === 'смерть'));
   assert(d.cases.some(c => c.status === 'failed' && c.statusRu === 'не вышло'));
-  assert.strictEqual(d.lessons[0].id, 'L002', 'новые уроки сверху'); assert.strictEqual(d.lessons[1].status, 'проверяется');
-  assert(/закажи навык/.test(d.book) && d.bookLines === 2 && /глубину/.test(d.coreRequests));
+  assert(!('lessons' in d) && !('book' in d) && !('lessonsError' in d), 'учебника и журнала уроков во вкладке больше нет');
+  assert(/глубину/.test(d.coreRequests));
   assert.strictEqual(d.reports.length, 1); assert(/утонула/.test(d.reports[0].title) && /решал мозг/.test(d.reports[0].verdict));
   // отчёт и журнал учителя; чужие пути не читаются
   const id = d.reports[0].name.replace(/-[a-z]+\.md$/, '');
@@ -220,11 +216,10 @@ async function testAudit(D) {
   const rep = await A.api(cfg, 'teacher_report', new URLSearchParams({ name: d.reports[0].name }));
   assert(rep.ok && /Вердикт/.test(rep.text) && rep.logMtime);
   for (const bad of ['../brain/notes.md', '..\\x.md', 'a/b.md', 'x.txt', '']) assert(!(await A.api(cfg, 'teacher_report', new URLSearchParams({ name: bad }))).ok, 'плохое имя ' + bad);
-  // пустая папка (сторож ещё не запускался) и битый журнал уроков — без падения
+  // пустая папка (сторож ещё не запускался) — без падения
   const E = mkdirs();
-  fs.writeFileSync(path.join(E.brainDir, 'lessons.json'), '{битый');
   const e = await A.api({ ...cfg, dataDir: E.dataDir, brainDir: E.brainDir }, 'teacher', new URLSearchParams());
-  assert(!e.queue.exists && e.cases.length === 0 && e.reports.length === 0 && e.book === null && /не читается/.test(e.lessonsError));
+  assert(!e.queue.exists && e.cases.length === 0 && e.reports.length === 0);
   // страница знает вкладку
   const html = fs.readFileSync(path.join(__dirname, '..', 'audit', 'index.html'), 'utf8');
   assert(/\['teacher', 'Учитель'\]/.test(html) && /id="p-teacher"/.test(html) && /\/api\/teacher_report/.test(html));
@@ -236,13 +231,28 @@ async function testConfigs() {
   const tc = JSON.parse(fs.readFileSync(path.join(root, 'brain', 'opencode.teacher.json'), 'utf8'));
   assert(!('model' in tc), 'модель учителя — в data/models.json, сторож передаёт её флагом -m; в конфиге она не задаётся');
   const allowEdit = Object.keys(tc.permission.edit).filter(k => tc.permission.edit[k] === 'allow');
-  for (const k of allowEdit) assert(/(brain\/lessons\.md|brain\/lessons\.json|brain\/core_requests\.md|brain\/skill_requests\/\*|data\/teacher\/\*)$/.test(k), 'учителю лишнее: ' + k);
+  for (const k of allowEdit) assert(/(brain\/core_requests\.md|brain\/skill_requests\/\*|data\/teacher\/\*)$/.test(k), 'учителю лишнее: ' + k);
   assert.strictEqual(tc.permission.edit['*'], 'deny'); assert.strictEqual(tc.permission.webfetch, 'deny'); assert.strictEqual(tc.permission.bash['*'], 'deny');
   for (const k of ['*/do*', '*/cmd*', '*/go*', '*/run*', '* -d*', '* -X*']) assert.strictEqual(tc.permission.bash[k], 'deny', k);
-  // мозгу нельзя писать учебник, журнал уроков и поведение; запросы на правку ядра — можно (их разрешает хозяин в аудите)
+  // мозг — архитектор: пишет только блокнот, чертежи и ready.flag; заявки (ядро, навыки) пишет учитель; телу команд не отдаёт
   const bc = JSON.parse(fs.readFileSync(path.join(root, 'opencode.json'), 'utf8'));
-  for (const k of Object.keys(bc.permission.edit)) if (bc.permission.edit[k] === 'allow') assert(!/lessons|behavior|teacher/.test(k), 'мозгу лишнее: ' + k);
-  assert.strictEqual(bc.permission.edit['brain/core_requests.md'], 'allow', 'мозг пишет запросы на правку ядра');
+  for (const k of Object.keys(bc.permission.edit)) if (bc.permission.edit[k] === 'allow') {
+    assert(!/lessons|behavior|teacher/.test(k), 'мозгу лишнее: ' + k);
+    assert(/(brain\/notes\.md|brain\/blueprints\/\*|brain\/ready\.flag)$/.test(k), 'мозгу лишнее: ' + k);
+  }
+  assert.notStrictEqual(bc.permission.edit['brain/core_requests.md'], 'allow', 'запросы на правку ядра пишет учитель, не мозг');
+  assert.strictEqual(bc.permission.bash['*'], 'deny');
+  assert(!('curl *' in bc.permission.bash) && !('curl.exe *' in bc.permission.bash), 'мозгу — только чтение, без любого curl');
+  for (const k of ['*/do*', '*/cmd*', '*/go*', '*/run*', '* -d*', '* -X*']) assert.strictEqual(bc.permission.bash[k], 'deny', 'мозгу: ' + k);
+  // как opencode: шаблон — glob (* — что угодно, ? — один знак), побеждает последнее совпадение
+  const perm = (rules, cmd) => { let res = null; for (const [pat, act] of Object.entries(rules)) { const re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 's'); if (re.test(cmd)) res = act; } return res; };
+  for (const c of ['curl.exe -s http://127.0.0.1:3199/snapshot', 'curl.exe -s http://127.0.0.1:3199/wait?timeout=240', 'curl.exe -s http://127.0.0.1:3199/events?limit=40',
+    'curl.exe -s http://127.0.0.1:3199/autopilot', 'curl.exe -s http://127.0.0.1:3200/catalog?name=build_hut', 'curl.exe -s "http://127.0.0.1:3200/log"', 'curl.exe -s http://127.0.0.1:3199/memory?kind=iron_ore'])
+    assert.strictEqual(perm(bc.permission.bash, c), 'allow', 'мозгу можно: ' + c);
+  for (const c of ['curl.exe -s http://127.0.0.1:3199/do?action=chat', 'curl.exe -s http://127.0.0.1:3200/go?name=build_hut', 'curl.exe -s http://127.0.0.1:3199/autopilot?on=0',
+    'curl.exe -s -X POST http://127.0.0.1:3199/cmd', 'curl.exe -s http://127.0.0.1:3200/run -d @x.json', 'curl.exe -s -H "Content-Type: application/json" http://127.0.0.1:3200/disable',
+    'curl.exe -s http://127.0.0.1:3199/behavior/rollback', 'curl.exe -s http://127.0.0.1:3200/abort', 'curl.exe -s http://127.0.0.1:3099/showcase', 'curl.exe -s http://example.com/', 'curl.exe -s http://127.0.0.1:3199/snapshot > f'])
+    assert.notStrictEqual(perm(bc.permission.bash, c), 'allow', 'мозгу нельзя: ' + c);
   // правка ядра по разрешённому запросу: всё, кроме судьи
   const cc = JSON.parse(fs.readFileSync(path.join(root, 'brain', 'opencode.core.json'), 'utf8'));
   assert.strictEqual(cc.permission.edit['lib/referee.js'], 'deny'); assert.strictEqual(cc.permission.edit['*/lib/referee.js'], 'deny');
@@ -253,7 +263,7 @@ module.exports = async function () {
   testHelpers();
   const D = testQueue();
   testNeighbor();
-  await testLessonsEvent();
+  testIdle();
   await testAudit(D);
   await testConfigs();
 };

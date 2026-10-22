@@ -3,10 +3,6 @@
   "permission": {
     "edit": {
       "*": "deny",
-      "*/brain/lessons.md": "allow",
-      "brain/lessons.md": "allow",
-      "*/brain/lessons.json": "allow",
-      "brain/lessons.json": "allow",
       "*/brain/core_requests.md": "allow",
       "brain/core_requests.md": "allow",
       "*/brain/skill_requests/*": "allow",
