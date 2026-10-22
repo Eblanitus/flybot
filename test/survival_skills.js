@@ -231,7 +231,8 @@ async function testCookFood() {
   h = mk({ inv: { coal: 2 }, handlers: { hunt() { throw fail('hunt', 'не вижу животных'); } } });
   r = await skill.run(h.api, { min: 4 });
   assert(!r.ok && r.missing.food === 4 && /не вижу животных/.test(r.error), JSON.stringify(r));
-  assert(h.has('explore'));
+  // вторая охота — только после смены места (навык brain/learned, правка 22.10: шаг по survey, разведка — запасной путь)
+  assert(r.attempts && r.attempts.relocate >= 1 && (h.has('explore') || h.has('survey')), JSON.stringify(r));
   console.log('  cook_food: OK');
 }
 

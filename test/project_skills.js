@@ -186,16 +186,16 @@ async function testHut() {
   const full = { cobblestone: 100, spruce_log: 10, spruce_planks: 60, spruce_door: 1 };
   let w = mkWorld(full);
   let r = await L('build_hut').run(w, { x: -397, z: 29, y: 66, dry: 1 });
-  // пол 25 (трава -> булыжник) + стены 69 - 8 брёвен = 61 -> 86 булыжника; 8 брёвен; крыша 49; дверь
+  // пол — трава, навык (brain/learned, правка 22.10) считает его стоящим; стены 69 - 8 брёвен = 61 булыжник; 8 брёвен; крыша 49; дверь
   assert(r.ok && r.dry, JSON.stringify(r));
-  assert.deepStrictEqual(r.need, { cobblestone: 86, spruce_log: 8, spruce_planks: 49, spruce_door: 1 }, JSON.stringify(r.need));
+  assert.deepStrictEqual(r.need, { cobblestone: 61, spruce_log: 8, spruce_planks: 49, spruce_door: 1 }, JSON.stringify(r.need));
   assert.deepStrictEqual(r.door, { x: -398, y: 67, z: 31 });
   assert.strictEqual(Object.keys(r.missing).length, 0);
-  // нет двери и мало досок — не начинает
+  // нет двери и мало досок — навык (brain/learned, правка 22.10) строит из того, что есть, и честно говорит, чего не хватило; копки нет
   w = mkWorld({ cobblestone: 100, spruce_log: 10, spruce_planks: 20 });
   r = await L('build_hut').run(w, { x: -397, z: 29, y: 66 });
-  assert(!r.ok && r.missing.spruce_door === 1 && r.missing.spruce_planks === 29, JSON.stringify(r));
-  assert.strictEqual(acts(w, 'place_at').length + acts(w, 'dig_at').length, 0, 'без материалов ничего не трогает');
+  assert(!r.ok && r.missing.spruce_planks === 29 && !r.doorOk && /spruce_door/.test(r.doorWhy), JSON.stringify(r));
+  assert.strictEqual(acts(w, 'dig_at').length, 0, 'без материалов не копает');
   // основной путь
   w = mkWorld(full);
   r = await L('build_hut').run(w, { x: -397, z: 29, y: 66 });
