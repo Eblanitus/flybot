@@ -44,6 +44,7 @@ const { cellKey } = require('./lib/skills/gather');
 const { ChatLog } = require('./lib/chatlog');
 const critic = require('./lib/critic');
 const showcaseLib = require('./lib/showcase'); // витрина навыков (этап H): только чтение
+const { Link } = require('./lib/link'); // связь с игровым сервером: честное состояние и бесконечное переподключение
 
 const HOST = process.argv[2] || process.env.MC_HOST || 'localhost';
 const PORT = parseInt(process.argv[3] || process.env.MC_PORT || '25565', 10);
@@ -154,80 +155,41 @@ async function fromBrainOrAutopilot(req, cmd, srcParam) {
 }
 
 // ---------- Подключение с переподключением ----------
-let backoff = 2000;
-let reconnectTimer = null;
-
-function connect() {
-  reconnectTimer = null;
-  console.log(`[bot] connecting to ${HOST}:${PORT} as ${USER}`);
-  let bot;
-  try {
-    bot = mineflayer.createBot({ host: HOST, port: PORT, username: USER, version: process.env.MC_VERSION || '26.1' });
-  } catch (e) {
-    ctx.lastError = String(e); scheduleReconnect(); return;
-  }
-  const session = { bot, timers: [], ended: false, spawned: false };
-  ctx.bot = bot; ctx.ready = false;
-  bot.loadPlugin(pathfinder);
-  bodyEvents.attach(ctx, session); // один раз на экземпляр бота: урон, смерть, сигналы, чат (ядро)
-  behavior.attachSession(session); // рефлексы и автопилот (behavior/) — через хост
-  critic.attach(ctx, session); // критик: затупы мозга/тела -> событие advice
-  vision.attach(ctx, bot, session); // честное зрение: память увиденного + периодический просмотр
-  ctx.blackbox.attach(session); // чёрный ящик: кадры раз в секунду и на важных событиях
-  ctx.ledger.attach(session); // учёт ресурсов: приход/расход предметов
-  try { require('./lib/daylog').attach(ctx, session); require('./lib/owner').attach(ctx, session); } catch (e) { console.log('[daylog/owner] не подключились:', e.message); } // итог дня + приказы хозяина без LLM
-  try { require('./lib/worldmem').attach(ctx, bot, session); } catch (e) { console.log('[worldmem] не подключилась:', e.message); } // постоянная память мира (data/world.json)
-
-  let firstSpawn = true;
-  bot.on('spawn', () => {
-    ctx.ready = true; ctx.lastError = null; backoff = 2000; session.spawned = true;
+// Цикл связи — в lib/link.js: честное состояние (в мире / подключаюсь / нет связи), бесконечные попытки с паузой
+// 2 → 60 с, сторож зависшего входа, событие reconnected. Здесь — только что подключить к новому боту.
+const link = new Link(ctx, {
+  host: HOST, port: PORT, user: USER,
+  createBot: () => mineflayer.createBot({ host: HOST, port: PORT, username: USER, version: process.env.MC_VERSION || '26.1' }),
+  attach(session) {
+    const bot = session.bot;
+    bot.loadPlugin(pathfinder);
+    bodyEvents.attach(ctx, session); // один раз на экземпляр бота: урон, смерть, сигналы, чат (ядро)
+    behavior.attachSession(session); // рефлексы и автопилот (behavior/) — через хост
+    critic.attach(ctx, session); // критик: затупы мозга/тела -> событие advice
+    vision.attach(ctx, bot, session); // честное зрение: память увиденного + периодический просмотр
+    ctx.blackbox.attach(session); // чёрный ящик: кадры раз в секунду и на важных событиях
+    ctx.ledger.attach(session); // учёт ресурсов: приход/расход предметов
+    try { require('./lib/daylog').attach(ctx, session); require('./lib/owner').attach(ctx, session); } catch (e) { console.log('[daylog/owner] не подключились:', e.message); } // итог дня + приказы хозяина без LLM
+    try { require('./lib/worldmem').attach(ctx, bot, session); } catch (e) { console.log('[worldmem] не подключилась:', e.message); } // постоянная память мира (data/world.json)
+  },
+  spawn(session, first) {
+    const bot = session.bot;
     ctx.aliveSince = Date.now(); ctx.lastPos = null;
-    if (firstSpawn) {
-      firstSpawn = false;
-      try {
-        ctx.movements = makeMovements(bot, { ctx });
-        ctx.sprintMovements = makeMovements(bot, { sprint: true, ctx });
-        bot.pathfinder.setMovements(ctx.movements);
-        bot.pathfinder.thinkTimeout = 8000;
-      } catch (e) { console.log('[pf] movements err', e); }
-      // попытка включить выживание (сработает только с правами оператора)
-      session.timers.push(setTimeout(() => { try { if (bot.game && bot.game.gameMode !== 'survival') bot.chat('/gamemode survival ' + bot.username); } catch (e) {} }, 2000));
-      ctx.events.push('spawn', { msg: 'вошёл в мир' });
-    } else {
-      ctx.events.push('spawn', { msg: 'респавн' });
-    }
-    console.log('[bot] spawned');
-  });
-
-  const onEnd = (reason) => {
-    if (session.ended) return;
-    session.ended = true;
-    ctx.ready = false;
-    for (const tm of session.timers) { clearInterval(tm); clearTimeout(tm); }
-    session.timers = [];
+    if (!first) return;
+    try {
+      ctx.movements = makeMovements(bot, { ctx });
+      ctx.sprintMovements = makeMovements(bot, { sprint: true, ctx });
+      bot.pathfinder.setMovements(ctx.movements);
+      bot.pathfinder.thinkTimeout = 8000;
+    } catch (e) { console.log('[pf] movements err', e); }
+    // попытка включить выживание (сработает только с правами оператора)
+    session.timers.push(setTimeout(() => { try { if (bot.game && bot.game.gameMode !== 'survival') bot.chat('/gamemode survival ' + bot.username); } catch (e) {} }, 2000));
+  },
+  ended(session) {
     behavior.sessionEnded(session);
     if (ctx.tasks.current) ctx.tasks.current.abort('отключение');
-    try { bot.removeAllListeners(); bot.on('error', () => {}); } catch (e) {}
-    console.log('[bot] ended:', reason);
-    ctx.events.push(session.spawned ? 'disconnect' : 'info', { reason: String(reason || ctx.lastError || 'unknown'), retryInSec: Math.round(backoff / 1000) });
-    scheduleReconnect();
-  };
-  bot.on('end', onEnd);
-  bot.on('kicked', (reason) => { ctx.lastError = 'kicked: ' + (typeof reason === 'string' ? reason : JSON.stringify(reason)); console.log('[bot] kicked:', ctx.lastError); });
-  bot.on('error', (e) => {
-    ctx.lastError = String((e && (e.code || e.message)) || e); console.log('[bot] error:', ctx.lastError);
-    // если соединение так и не установилось и 'end' не пришёл — закрыть сами
-    if (!ctx.ready) session.timers.push(setTimeout(() => { if (!session.ended) { try { bot.end(); } catch (er) {} onEnd('error: ' + ctx.lastError); } }, 5000));
-  });
-}
-
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  const wait = backoff;
-  backoff = Math.min(backoff * 2, 60000);
-  console.log(`[bot] reconnect in ${Math.round(wait / 1000)}s`);
-  reconnectTimer = setTimeout(connect, wait);
-}
+  }
+}); // ctx.link = link — состояние связи для снимка и команд
 
 // ---------- HTTP API ----------
 const MAX_BODY = 64 * 1024;
@@ -266,7 +228,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET') {
       switch (url.pathname) {
-        case '/health': return send(res, 200, { ready: ctx.ready, error: ctx.lastError, host: HOST, port: PORT, user: USER, task: ctx.tasks.info() });
+        case '/health': return send(res, 200, { ready: ctx.ready, connected: link.online, error: ctx.lastError, host: HOST, port: PORT, user: USER, link: link.info(), task: ctx.tasks.info() });
         case '/do': {
           // быстрая команда без JSON-файла: /do?action=collect&block=log&count=8&wait=1
           if (fromBrowser(req)) return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' });
@@ -318,7 +280,7 @@ const server = http.createServer(async (req, res) => {
           const r = await ctx.events.wait(since, timeout);
           let summary = null;
           try { if (ctx.ready && ctx.bot && ctx.bot.entity) summary = eyes(ctx).summary; } catch (e) {}
-          return send(res, 200, { ok: true, ...r, task: ctx.tasks.info(), summary });
+          return send(res, 200, { ok: true, ...r, task: ctx.tasks.info(), summary, ...(ctx.ready ? {} : { link: link.info() }) });
         }
       }
       return send(res, 404, { ok: false, error: 'not found' });
@@ -389,5 +351,5 @@ server.listen(CONTROL, '127.0.0.1', () => {
   console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior /blackbox /ledger /showcase   POST /cmd /owner_msg /behavior/reload');
   try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
   behavior.init().catch(e => console.log('[behavior] init:', e && e.message)); // проверка behavior/ и включение (к боту подключится, когда он будет)
-  connect();
+  link.start();
 });
