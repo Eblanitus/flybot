@@ -363,5 +363,31 @@ module.exports = async function selfTest() {
   GA(apg, { sig: 's60', name: 'collect' }, 'ok', null, t0 + 5 * T.goalRetryMs, false);
   assert.strictEqual(GS(apg, t0 + 50 * T.goalRetryMs).goalDone, true, 'успех без нового блока — до новой строки не повторяем');
   assert.strictEqual(GS({ goal: { ...g60, sig: 'new' }, goalDone: 's60', goalEmpty: 's60' }, t0).goalDone, false, 'новая строка — снова');
+  // ---- behavior_autopilot_build_gather: цель добора — ИТОГ (need), не дельта (missing) ----
+  const { lackOf: LO, buildState: BS, buildAfter: BA, newBuildSt: NBS } = require('./autopilot');
+  const now2 = 1e9;
+  // build_blueprint вернул missing=37, have=64, need=101 → цель добора 101
+  const bpResult = { missing: { cobblestone: 37 }, have: { cobblestone: 64 }, need: { cobblestone: 101 } };
+  const apBuild = { build: { name: 'hut_west', x: 0, y: 64, z: 0, rot: 0, sig: 'S' }, buildSt: NBS('S') };
+  let r2 = BA(apBuild, { key: 'build', sig: 'S' }, 'провал', 'не хватает: cobblestone ×37', bpResult, now2, false);
+  assert.ok(r2 && /добираю до/.test(r2.note) && /cobblestone ×101/.test(r2.note), 'цель добора — итог 101: ' + r2.note);
+  assert.deepStrictEqual(apBuild.buildSt.need, { cobblestone: 101 }, 'st.need = итог (need), не дельта');
+  // пустой добор (ok, но collected/crafted пусты) → пауза с причиной, need не сбрасывается
+  r2 = BA(apBuild, { key: 'build_gather', sig: 'S' }, 'ok', null, { ok: true, collected: {}, crafted: {}, have: { cobblestone: 64 } }, now2, false);
+  assert.ok(/добор ничего не дал/.test(r2.note), 'пустой добор → пауза с причиной: ' + r2.note);
+  assert.deepStrictEqual(apBuild.buildSt.need, { cobblestone: 101 }, 'need не сброшен после пустого dobroра');
+  // добор с реальной прибавкой → need сбрасывается, строим снова (используем время после паузы)
+  const afterPause = now2 + T.buildRetryMs + 1;
+  r2 = BA(apBuild, { key: 'build_gather', sig: 'S' }, 'ok', null, { ok: true, collected: { cobblestone: 37 }, crafted: {}, have: { cobblestone: 101 } }, afterPause, false);
+  assert.ok(/добор сделал.*строю снова/.test(r2.note), 'реальный добор → строю снова: ' + r2.note);
+  assert.strictEqual(apBuild.buildSt.need, null, 'need сброшен после реального dobroра');
+  // ночной добор не начинается (buildAct возвращает null)
+  const { decide: D } = require('./autopilot');
+  const nightBase = { on: true, idle: true, task: null, running: null, runnerOther: false, hp: 20, food: 20, hasFood: true, hasWeapon: true, hasPickaxe: true,
+    blocks: 20, logs: 8, cobble: 30, phase: 'ночь', isNight: true, nightIn: 10, sheltered: false, hostilesNear: 0, enemies: [], alone: true,
+    freeBed: false, animals: 0, recoverable: false, blocked: {}, goal: null, goalDone: false, base: { x: 0, y: 64, z: 0, r: 96 }, baseDist: 5,
+    build: { name: 'hut', x: 0, y: 64, z: 0, rot: 0, sig: 'S', need: { cobblestone: 10 } }, buildDist: 3, outlook: null, crashed: {}, idleBuildMin: 0 };
+  const nightAct = D(nightBase);
+  assert.ok(!nightAct || nightAct.key !== 'build_gather', 'ночью с need — не вызывается build_gather (вернулось: ' + (nightAct ? nightAct.key : 'null') + ')');
   return { ok: true };
 };

@@ -187,10 +187,14 @@ function decide(s) {
     const why = `продолжаю цель мозга: ${g.name}${Object.keys(g.params).length ? ' ' + JSON.stringify(g.params) : ''}${press ? ` (простой ${Math.round(idleMin)} мин)` : ''}`;
     return g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why); // упала со сбоем кода — её нет
   };
-  // v0.2 постройка: не хватает материала — добор ровно недостающего; далеко — к месту; иначе — строю по чертежу
+// v0.2 постройка: не хватает материала — добор до ИТОГА (need из ответа build_blueprint); далеко — к месту; иначе — строю по чертежу
   const buildAct = () => {
     const tail = press ? ` (простой ${Math.round(idleMin)} мин)` : '';
     const need = b.need && Object.keys(b.need).length ? b.need : null;
+    // не начинаем добор ночью (здесь isNight = phase === 'ночь'; nightIn — секунд до ночи)
+    if (need && (s.isNight || (s.nightIn != null && s.nightIn < T.nightSoonSec))) {
+      return null; // ночью не добираем — ждём утра или укрытия
+    }
     if (need) {
       const items = Object.entries(need).map(([k, n]) => `${k}:${n}`).join(',');
       return learned('build_gather', 'gather_list', { items, max_sec: T.buildGatherSec }, `добираю для постройки ${b.name}: ${items.replace(/,/g, ', ')}${tail}`);
@@ -575,14 +579,28 @@ function buildAfter(ap, run, verdict, err, result, now, progressed) {
     const lack = lackOf(err, result);
     if (Object.keys(lack).length) {
       if (st.gathers >= T.buildGatherMax) return pause(`добор не помогает (${st.gathers} раз без нового блока), не хватает ${lackStr(lack)}`);
-      st.need = lack; st.reason = null;
-      return { note: `постройка ${b.name}: не хватает ${lackStr(lack)} — добираю ровно это` };
+      // ИТОГ для добора — need из ответа build_blueprint (сколько всего нужно в сумке), а не дельта missing
+      const totalNeed = result && result.need && typeof result.need === 'object' ? result.need : lack;
+      st.need = totalNeed; st.reason = null;
+      return { note: `постройка ${b.name}: не хватает ${lackStr(lack)} — добираю до ${lackStr(totalNeed)}` };
     }
     return pause(`провал (${why})`);
   }
   if (run.key === 'build_gather') {
-    st.gathers++; st.need = null;
-    return verdict === 'ok' ? { note: `постройка ${b.name}: добор сделан — строю снова` } : pause(`добор не вышел (${why})`);
+    st.gathers++;
+    const hasResult = result && typeof result === 'object' && ('collected' in result || 'crafted' in result);
+    const got = hasResult && (Object.keys(result.collected || {}).length || Object.keys(result.crafted || {}).length);
+    if (verdict === 'ok' && (!hasResult || got)) {
+      st.need = null;
+      const added = hasResult ? Object.entries({ ...result.collected, ...result.crafted }).map(([k, n]) => `${k}+${n}`).join(', ') : 'предметы добавлены';
+      return { note: `постройка ${b.name}: добор сделал (${added}) — строю снова` };
+    }
+    // пустой добор: честная пауза с причиной, не повторяем тот же вызов — оставляем need, чтобы перестройка вернула тот же список
+    const haveStr = hasResult && result.have ? lackStr(result.have) : '?';
+    const needStr = st.need ? lackStr(st.need) : '?';
+    // st.need НЕ сбрасываем — перестройка после паузы вернёт тот же итог, gather не вызовется повторно до прогресса или buildGatherMax
+    st.pauseUntil = now + T.buildRetryMs; st.reason = `добор ничего не дал (${haveStr}, нужно ${needStr}) — смена тактики`; // st.need не трогаем, st.gathers не сбрасываем
+    return { note: `постройка ${b.name}: ${st.reason} — повтор через ${Math.round(T.buildRetryMs / 1000)} с` };
   }
   if (run.key === 'build_go') return verdict === 'ok' ? null : pause(`не дошла до места (${why})`);
   return null;
@@ -1075,4 +1093,5 @@ function attach(api) {
   return { detach: reason => ap.yieldAll(reason || 'поведение выгружено') };
 }
 
+// версия: как 20261022-225845-1e05a2, но цель добора — ИТОГ (need из ответа build_blueprint), а не дельта (missing); «добор сделан» только по факту прибавки в сумке; после пустого добора — пауза с причиной и смена тактики, не повтор того же вызова; добор ночью не начинать; шаг build_gather в коде; по заявке учителя
 module.exports = { attach, decide, lowHpOf, gather, create, goalState, goalAfter, buildState, buildAfter, buildStatus, lackOf, newBuildSt, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };
