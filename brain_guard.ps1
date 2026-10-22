@@ -61,6 +61,12 @@ function LimitStuck([string]$model, [datetime]$since) {
 function LimitPause([int]$hits) { $Backoff[[Math]::Min($hits, $Backoff.Count - 1)] }
 
 $seen = @{}
+function TechErr([string]$path, [long]$from) {   # технический сбой в журнале роли (с позиции from): модель недоступна или упала
+  try { $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite') } catch { return $null }
+  try { $at = [Math]::Max($from, $fs.Length - 2MB); $n = [int]($fs.Length - $at); if ($n -le 0) { return $null }; [void]$fs.Seek($at, 'Begin'); $buf = New-Object byte[] $n; [void]$fs.Read($buf, 0, $n) } finally { $fs.Close() }
+  $m = [regex]::Match([Text.Encoding]::UTF8.GetString($buf), 'UnknownError|Unexpected server error|ProviderModelNotFound|Model not found')
+  if ($m.Success) { $m.Value } else { $null }
+}
 function IdleMin([string]$path, [datetime]$since) {   # сколько минут журнал роли не растёт (размер — настоящий, как в LogSize)
   $len = try { $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite'); try { $fs.Length } finally { $fs.Close() } } catch { -1 }
   $s = $seen[$path]
@@ -137,11 +143,17 @@ while ($true) {
     $over = (IdleMin $eng.log $eng.started) -ge $EngTimeoutMin
     if ($eng.proc.HasExited -or $over) {
       if (-not $eng.proc.HasExited) { taskkill /PID $eng.proc.Id /T /F | Out-Null; GLog "инженер: $($eng.name) — завис: журнал молчит $EngTimeoutMin мин" }
+      # технический сбой (модель упала или недоступна, завис) — это не ответ инженера: заявка снова в очередь, до 3 раз подряд
+      $tf = "$req\$($eng.name).tech"; $retry = $false
       if (-not (Test-Path $done) -or (Get-Item $done).LastWriteTime -lt $eng.started) {
-        Set-Content $done "# $($eng.name): не готово`r`nИнженер не ответил (упал или завис: журнал молчал $EngTimeoutMin мин). Журнал: data\engineer-$($eng.name).log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова." -Encoding UTF8
+        $tech = if ($over) { 'завис' } else { TechErr $eng.log $eng.logAt }
+        $tries = 0; if (Test-Path $tf) { $tries = [int](Get-Content $tf -TotalCount 1) }
+        if ($tech -and $tries -lt 3) { Set-Content $tf ($tries + 1); $retry = $true; GLog "инженер: $($eng.name) — техсбой ($tech), заявка в очереди, повтор $($tries + 1) из 3" }
+        else { Set-Content $done "# $($eng.name): не готово`r`nИнженер не ответил (упал или завис: журнал молчал $EngTimeoutMin мин). Журнал: data\engineer-$($eng.name).log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова." -Encoding UTF8 }
       }
+      if (-not $retry) { Remove-Item $tf -Force -ErrorAction SilentlyContinue }
       Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue
-      GLog "инженер: $($eng.name) — закончил"
+      if (-not $retry) { GLog "инженер: $($eng.name) — закончил" }
       $eng = $null; $engHits = 0
     }
   }
@@ -169,10 +181,11 @@ while ($true) {
       $engModel = RoleModel 'engineer'   # заново для каждой заявки: смена в аудите подхватывается со следующей
       $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
       $elog = "$fb\data\engineer-$name.log"
+      $elAt = try { (Get-Item $elog -ErrorAction Stop).Length } catch { 0 }   # журнал дописывается: техсбой ищем только в этом запуске
       # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет); проектный opencode.json не подмешивать
       $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" 2>&1 | node `"$fb\tools\tstamp.js`" >> `"$elog`"" `
              -WorkingDirectory $fb -WindowStyle Hidden -PassThru
-      $eng = @{ proc = $p; name = $name; started = Get-Date; model = $engModel; log = $elog }
+      $eng = @{ proc = $p; name = $name; started = Get-Date; model = $engModel; log = $elog; logAt = $elAt }
       GLog "инженер: взял заявку $name (pid $($p.Id), модель $engModel)"
       break
     }
