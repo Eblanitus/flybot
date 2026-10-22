@@ -14,7 +14,8 @@
 //   POST /enable | /disable {name}       — включить / выключить
 //   POST /abort                          — убить текущий запуск и отправить телу stop
 // POST — только с Content-Type: application/json, тело до 64 КБ.
-// Версии (brain/versions.js): build_hut, build_hut_v2, build_hut_v3… — отдельные файлы, отдельный счёт и автовыключение.
+// Версии (brain/versions.js): build_hut, build_hut_v2, build_hut_v3… — отдельные файлы, отдельный счёт.
+// Версию исполнитель сам не выключает: провалы и успехи каждой версии считаются и видны мозгу, решает мозг (/disable).
 // Всё, что попало в .history (правка на месте), само становится новой версией — ничего не теряется.
 'use strict';
 const fs = require('fs');
@@ -39,7 +40,6 @@ const WORKER = path.join(DIR, 'worker.js');
 
 const DEFAULT_TIMEOUT = 300, MAX_TIMEOUT = 1800, CHECK_TIMEOUT = 10;
 const MAX_BODY = 64 * 1024;
-const MAX_FAILS = 3;          // провалов подряд до автоотключения
 const HISTORY_KEEP = 20;      // версий навыка в истории
 const LOG_RING = 500;
 const NAME_RE = /^[a-z][a-z0-9_]{1,39}$/;
@@ -209,24 +209,14 @@ async function checkFile(name, { force = false } = {}) {
   return res;
 }
 
-// ---------- Запись результата, автоотключение ----------
+// ---------- Запись результата (счёт версии; выключает только мозг — /disable) ----------
 function recordResult(name, ok, error, runId) {
   const s = stat(name);
   s.runs++; s.lastRun = nowIso();
-  let autoDisabled = false;
   if (ok) { s.ok++; s.consecutiveFails = 0; s.lastOk = s.lastRun; }
-  else {
-    s.fail++; s.consecutiveFails++; s.lastError = String(error || 'неизвестная ошибка').slice(0, 2000);
-    if (s.consecutiveFails >= MAX_FAILS && s.enabled !== false) {
-      s.enabled = false; autoDisabled = true;
-      s.disabledReason = `авто: ${MAX_FAILS} провала подряд (выключена только эта версия); последняя ошибка: ${String(error || '').split('\n')[0].slice(0, 300)}`;
-      s.disabledAt = s.lastRun;
-      logAdd('auto_disable', { name, runId, reason: s.disabledReason });
-    }
-  }
+  else { s.fail++; s.consecutiveFails++; s.lastError = String(error || 'неизвестная ошибка').slice(0, 2000); }
   saveStats();
   if (ok) { try { snapshotVersion(name); } catch (e) { console.log('[runner] история:', e.message); } }
-  return autoDisabled;
 }
 
 // ---------- Запуск навыка ----------
@@ -256,8 +246,8 @@ async function doRun(name, params, timeoutSec) {
       onMessage: m => {
         if (m.type === 'log') { if (logs.length < 500) logs.push(m.msg); logAdd('log', { runId, name, msg: m.msg }); }
         else if (m.type === 'nested') {
-          const auto = recordResult(m.name, m.ok, m.error, runId);
-          logAdd('nested', { runId, name: m.name, ok: m.ok, ...(m.ok ? {} : { error: String(m.error).split('\n')[0] }), ...(auto ? { autoDisabled: true } : {}) });
+          recordResult(m.name, m.ok, m.error, runId);
+          logAdd('nested', { runId, name: m.name, ok: m.ok, ...(m.ok ? {} : { error: String(m.error).split('\n')[0] }) });
         }
       }
     }
@@ -278,7 +268,7 @@ async function doRun(name, params, timeoutSec) {
     error = 'процесс навыка завершился без результата: ' + (r.spawnError || `код ${r.exitCode}${r.signal ? ', сигнал ' + r.signal : ''}`) + (r.output ? '\n' + r.output.slice(0, 1000) : '');
   }
 
-  const autoDisabled = recordResult(name, ok, error, runId);
+  recordResult(name, ok, error, runId);
   logAdd('run_end', { runId, name, ok, sec, ...(ok ? {} : { error: String(error).split('\n')[0].slice(0, 300) }), ...(stopSent ? { stop: stopSent } : {}) });
   active = null;
 
@@ -288,11 +278,9 @@ async function doRun(name, params, timeoutSec) {
   if (stopSent) out.stop = stopSent;
   if (logs.length) out.logs = logs.length > 40 ? ['... (показаны последние 40)', ...logs.slice(-40)] : logs;
   if (r.output) out.output = r.output.slice(0, 1500);
-  if (autoDisabled) {
-    out.autoDisabled = true;
-    out.note = `версия "${name}" выключена: ${MAX_FAILS} провала подряд (другие версии навыка работают — GET /catalog?name=${V.baseOf(name)}). Новая версия — заявкой инженеру; вернуть эту — /enable.`;
-  } else if (!ok) {
-    out.note = 'Разбери причину: правило в notes.md / правка навыка / заявка в core_bugs.md (см. README.md).';
+  if (!ok) {
+    const s = stats[name] || {};
+    out.note = `Счёт версии "${name}": успешно ${s.ok || 0} из ${s.runs || 0}, провалов подряд ${s.consecutiveFails || 0}. Решаешь ты: повторить, взять другую версию (GET /catalog?name=${V.baseOf(name)}), выключить эту (/disable) или заявка инженеру. Причину разбери: правило в notes.md / правка навыка / заявка в core_bugs.md (см. README.md).`;
   }
   return out;
 }

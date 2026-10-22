@@ -122,14 +122,14 @@ const clip = (s, n) => { s = String(s == null ? '' : s).replace(/\s+/g, ' ').tri
 function catalogText(groups, { full = false } = {}) {
   const nv = groups.reduce((a, g) => a + g.versions.length, 0), nb = groups.reduce((a, g) => a + g.broken.length, 0);
   const lines = [`Выученные навыки: ${groups.length}, рабочих версий: ${nv}` + (nb ? `, не проходят проверку: ${nb} (скрыты, видны в /skills)` : '') + '.',
-    'Навык: что делает | params. Под ним версии, лучшие по счёту сверху: имя ok/запусков — когда подходит / чем отличается. Запуск версии — /go?name=<имя версии>. [выкл] — выключена.'];
+    'Навык: что делает | params. Под ним версии, лучшие по счёту сверху: имя ok/запусков (провалов подряд) — когда подходит / чем отличается. Запуск версии — /go?name=<имя версии>. [выкл] — выключена мозгом (сама версия не выключается, решаешь по счёту).'];
   for (const g of groups) {
     lines.push('');
     lines.push(`${g.base} — ${clip(g.description || 'без описания', full ? 600 : 150)}` + (g.params.length ? ` | ${g.params.join(' ')}` : ''));
     for (const v of g.versions) {
       const st = v.stats || {};
       const note = v.note || (g.versions.length + g.broken.length > 1 ? NO_NOTE : 'единственная версия');
-      lines.push(`  ${v.name} ${st.ok || 0}/${st.runs || 0}${v.enabled === false ? ' [выкл]' : ''} — ${full ? note : clip(note, 110)}`);
+      lines.push(`  ${v.name} ${st.ok || 0}/${st.runs || 0}${st.consecutiveFails ? ` (провалов подряд ${st.consecutiveFails})` : ''}${v.enabled === false ? ' [выкл]' : ''} — ${full ? note : clip(note, 110)}`);
     }
     if (g.broken.length) lines.push(`  не проходят проверку: ${g.broken.map(v => v.name).join(', ')}`);
     if (full) lines.push(`  новая версия будет: ${g.next}`);

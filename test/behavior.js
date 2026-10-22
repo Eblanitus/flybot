@@ -1,5 +1,6 @@
 // Офлайн-проверки разделения «ядро / поведение»: загрузка behavior/, сломанная версия не включается,
-// бросающая или зависшая — откатывается на рабочую; события ядра доходят до поведения;
+// бросающая или зависшая — сама НЕ откатывается: счёт версии и событие behavior_trouble мозгу, откат — POST /behavior/rollback;
+// события ядра доходят до поведения;
 // законы игры (блок danger: время до смерти); руки для воды (swim_to, dive, блок под водой).
 'use strict';
 const assert = require('assert');
@@ -83,30 +84,45 @@ async function hostTests() {
     assert.strictEqual(refused, broken.length);
     console.log('  сломанные версии не включаются (' + broken.length + ' видов): OK');
 
-    // версия, которая бросает исключения в таймере -> откат на рабочую
+    // версия, которая бросает исключения в таймере -> сама не откатывается: счёт и событие мозгу; откатывает мозг
+    const troubles = () => ctx.ev.filter(e => e.type === 'behavior_trouble');
     writeVersion(dir, { attach: `api.every(10, () => { throw new Error('бум'); }, 'бомба');` });
     const r1 = await host.reload('тест: бросает');
     assert.ok(r1.ok, r1.error);
-    assert.notStrictEqual(host.active.hash, good.hash);
-    await until(() => host.active.hash === good.hash && !host.busy, 3000, 'откат после исключений');
-    assert.ok(ctx.ev.some(e => e.type === 'behavior' && e.what === 'откат' && e.to === good.id), 'нет события отката');
+    const bomb = host.active;
+    assert.notStrictEqual(bomb.hash, good.hash);
+    await until(() => troubles().length >= 1, 3000, 'событие мозгу после исключений');
+    await wait(100);
+    assert.strictEqual(host.active.hash, bomb.hash, 'ядро откатило само — нельзя, решает мозг');
+    assert.ok(!ctx.ev.some(e => e.type === 'behavior' && e.what === 'откат'), 'был автооткат');
+    const t1 = troubles()[0];
+    assert.ok(t1.kind === 'исключения' && t1.score.faults >= 3 && t1.lastGood === good.id && /rollback/.test(t1.how), JSON.stringify(t1));
+    assert.ok(host.status().versions.find(v => v.id === bomb.id).faults >= 3, 'счёт сбоев версии не виден в GET /behavior');
+    const rb = await host.rollback('мозг: тест');
+    assert.ok(rb.ok && rb.to === good.id && host.active.hash === good.hash, 'откат по решению мозга: ' + JSON.stringify(rb));
     const n = ctx.ticks; await until(() => ctx.ticks > n + 2, 2000, 'рабочая версия снова тикает');
-    console.log('  исключения -> откат на рабочую: OK');
+    console.log('  исключения -> счёт и событие мозгу, откат по решению мозга: OK');
 
-    // версия, которая зависает (promise не отвечает) -> откат
+    // версия, которая зависает (promise не отвечает) -> счёт зависаний и событие, без отката
     writeVersion(dir, { attach: `api.every(1000, () => new Promise(() => {}), 'вечное ожидание'); api.after(5, () => new Promise(() => {}), 'зависание');` });
     const r2 = await host.reload('тест: висит');
     assert.ok(r2.ok, r2.error);
-    await until(() => host.active.hash === good.hash && !host.busy, 3000, 'откат после зависания');
-    assert.ok(ctx.ev.some(e => e.type === 'behavior' && e.what === 'откат' && /завис/.test(e.why)), 'нет отката по зависанию');
-    console.log('  зависание -> откат на рабочую: OK');
+    const hang = host.active;
+    await until(() => troubles().some(e => e.kind === 'завис'), 3000, 'событие мозгу о зависании');
+    assert.strictEqual(host.active.hash, hang.hash, 'зависшую ядро не откатывает само');
+    assert.ok(host.status().versions.find(v => v.id === hang.id).hangs >= 1, 'зависание не в счёте версии');
+    assert.ok((await host.rollback('мозг: висит', good.id)).ok && host.active.hash === good.hash, 'откат на выбранную версию');
+    console.log('  зависание -> счёт и событие мозгу, откат на выбранную версию: OK');
 
-    // attach падает -> откат
+    // attach падает -> событие сразу (fatal), без отката
     writeVersion(dir, { attach: `throw new Error('attach сломан');` });
     const r3 = await host.reload('тест: attach падает');
     assert.ok(r3.ok);
-    await until(() => host.active.hash === good.hash && !host.busy, 3000, 'откат после падения attach');
-    console.log('  падение attach -> откат: OK');
+    await until(() => troubles().some(e => e.kind === 'упал'), 3000, 'событие мозгу о падении attach');
+    assert.notStrictEqual(host.active.hash, good.hash, 'упавшую ядро не откатывает само');
+    assert.ok((await host.rollback('мозг: attach')).ok && host.active.hash === good.hash);
+    assert.strictEqual((await host.rollback('мозг', 'нет-такой')).ok, false, 'откат на несуществующую версию — отказ');
+    console.log('  падение attach -> событие мозгу, откат по решению: OK');
 
     // call: поведение даёт решение, упало — решение ядра
     writeVersion(dir, { extra: `chooseMelee: (a) => { if (a === 'бум') throw new Error('x'); return 'поведение'; }` });

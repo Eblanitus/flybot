@@ -19,6 +19,7 @@
 //   GET  /ledger                — учёт ресурсов: приход/расход предметов по причинам, дням и источникам
 //   GET  /showcase              — витрина навыков со статистикой (формат — SHOWCASE.md), кэш 1 мин; /showcase/code?name=.. — исходник навыка
 //   POST /behavior/reload       — перечитать behavior/ без перезапуска тела (сломанная версия не включится)
+//   POST /behavior/rollback     — откат поведения по решению мозга {to?, why?} (само ядро не откатывает; беда — событие behavior_trouble)
 //   POST /cmd {"action":"...","params":{...}}  (Content-Type: application/json)
 'use strict';
 const fs = require('fs');
@@ -318,6 +319,20 @@ const server = http.createServer(async (req, res) => {
       const r = await behavior.reload('POST /behavior/reload');
       return send(res, 200, { ...r, behavior: behavior.status() });
     }
+    if (req.method === 'POST' && url.pathname === '/behavior/rollback') {
+      // откат поведения — решение мозга (ядро само не откатывает): {to?: id версии, why?}; без to — на последнюю рабочую
+      if (fromBrowser(req)) { req.resume(); return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); }
+      const ct = String(req.headers['content-type'] || '').toLowerCase();
+      if (!ct.startsWith('application/json')) { req.resume(); return send(res, 415, { ok: false, error: 'нужен Content-Type: application/json' }); }
+      let body = '';
+      req.on('data', c => { if (body.length < 4096) body += c; });
+      req.on('end', async () => {
+        let b = {}; try { b = JSON.parse(body || '{}') || {}; } catch (e) { return send(res, 400, { ok: false, error: 'bad json' }); }
+        const r = await behavior.rollback('мозг: ' + String(b.why || 'POST /behavior/rollback').slice(0, 200), b.to ? String(b.to) : null);
+        send(res, 200, { ...r, behavior: behavior.status() });
+      });
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/owner_msg') {
       // сообщение хозяина мозгу из программы «Аудит»: событие owner_msg в ленте (мозг видит в /wait, /events); в игровой чат НЕ идёт
       if (fromBrowser(req)) { req.resume(); return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' }); }
@@ -349,7 +364,7 @@ process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 server.on('error', (e) => { console.log('[http] error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
 server.listen(CONTROL, '127.0.0.1', () => {
   console.log(`[http] control API on http://127.0.0.1:${CONTROL}`);
-  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior /blackbox /ledger /showcase   POST /cmd /owner_msg /behavior/reload');
+  console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior /blackbox /ledger /showcase   POST /cmd /owner_msg /behavior/reload /behavior/rollback');
   try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
   behavior.init().catch(e => console.log('[behavior] init:', e && e.message)); // проверка behavior/ и включение (к боту подключится, когда он будет)
   link.start();

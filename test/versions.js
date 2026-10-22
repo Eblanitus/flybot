@@ -1,6 +1,6 @@
 // Офлайн-проверка версий выученных навыков: brain/versions.js (имена, строка «// версия:», вытаскивание из .history без дублей,
 // сжатый каталог для мозга) и настоящий brain/runner.js на временной папке (RUNNER_DATA) и свободном порту: запуск по имени версии,
-// свой счёт у каждой версии, автовыключение только версии, /catalog, /rollback не теряет код. Тело не нужно (BODY_URL — закрытый порт).
+// свой счёт у каждой версии, версию сам исполнитель не выключает (решает мозг по счёту), /catalog, /rollback не теряет код. Тело не нужно (BODY_URL — закрытый порт).
 // Запуск: node test/versions.js
 'use strict';
 const assert = require('assert');
@@ -105,25 +105,30 @@ async function testRunner() {
     assert.strictEqual(by('hut_v2').valid, false, 'сломанная версия помечена');
     assert.strictEqual(by('hut').note, 'текущая');
 
-    // запуск по имени версии, свой счёт; 3 провала подряд выключают только эту версию
-    for (let i = 1; i <= 3; i++) {
+    // запуск по имени версии, свой счёт; провалы подряд версию НЕ выключают — счёт виден мозгу, решает он
+    for (let i = 1; i <= 4; i++) {
       r = await req(port, 'POST', '/run', { name: 'hut_v1' });
       assert.strictEqual(r.json.ok, false); assert(/старая ломается/.test(r.json.error));
-      assert.strictEqual(!!r.json.autoDisabled, i === 3);
+      assert.strictEqual(r.json.autoDisabled, undefined, 'исполнитель версию не выключает');
+      assert.strictEqual(r.json.stats.consecutiveFails, i, 'провалы подряд в ответе');
     }
-    assert(/версия "hut_v1" выключена/.test(r.json.note) && /catalog\?name=hut/.test(r.json.note), r.json.note);
+    assert(/успешно 0 из 4, провалов подряд 4/.test(r.json.note) && /catalog\?name=hut/.test(r.json.note) && /\/disable/.test(r.json.note), r.json.note);
     r = await req(port, 'POST', '/run', { name: 'hut' });
     assert.strictEqual(r.json.ok, true, 'другая версия того же навыка работает: ' + JSON.stringify(r.json));
+    let st = JSON.parse(fs.readFileSync(path.join(data, 'skills_stats.json'), 'utf8'));
+    assert.strictEqual(st.hut_v1.runs, 4); assert.strictEqual(st.hut_v1.fail, 4); assert.notStrictEqual(st.hut_v1.enabled, false, 'после 4 провалов версия включена');
+    // мозг решил выключить — выключена, запуск отказан
+    r = await req(port, 'POST', '/disable', { name: 'hut_v1', reason: 'мозг: 4 провала' });
+    assert(r.json.ok, r.text);
     r = await req(port, 'GET', '/go?name=hut_v1');
     assert(r.json.ok === false && /выключена/.test(r.json.error) && /catalog/.test(r.json.error), r.text);
-    const st = JSON.parse(fs.readFileSync(path.join(data, 'skills_stats.json'), 'utf8'));
-    assert.strictEqual(st.hut_v1.runs, 3); assert.strictEqual(st.hut_v1.fail, 3); assert.strictEqual(st.hut_v1.enabled, false);
+    st = JSON.parse(fs.readFileSync(path.join(data, 'skills_stats.json'), 'utf8'));
     assert.strictEqual(st.hut.runs, 1); assert.strictEqual(st.hut.ok, 1); assert.notStrictEqual(st.hut.enabled, false);
 
     // каталог для мозга
     r = await req(port, 'GET', '/catalog');
     assert.strictEqual(r.status, 200);
-    assert(/\nhut — проверочный hut\n {2}hut 1\/1 — текущая\n {2}hut_v1 0\/3 \[выкл\] — из истории/.test(r.text), r.text);
+    assert(/\nhut — проверочный hut\n {2}hut 1\/1 — текущая\n {2}hut_v1 0\/4 \(провалов подряд 4\) \[выкл\] — из истории/.test(r.text), r.text);
     assert(/не проходят проверку: hut_v2/.test(r.text) && !/\n {2}hut_v2 /.test(r.text));
     assert(/wall 0\/0 — единственная версия/.test(r.text));
     r = await req(port, 'GET', '/catalog?name=hut_v1');
