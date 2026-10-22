@@ -1,7 +1,8 @@
 // Офлайн-проверка текста инвентаря для мозга (invSummary): слияние стеков, порядок, инструменты не режутся
 'use strict';
 const assert = require('assert');
-const { invSummary } = require('../lib/perception');
+const { invSummary, shelterInfo } = require('../lib/perception');
+const { Vec3 } = require('../lib/util');
 
 module.exports = async () => {
   // живой случай: кирка и булыжник не должны теряться; стеки сливаются
@@ -20,5 +21,11 @@ module.exports = async () => {
   assert(/…и ещё \d+ видов$/.test(s), s);
   assert(s.indexOf('bread') < s.indexOf('raw_copper') && s.indexOf('copper_pickaxe') < s.indexOf('bread'), 'порядок: ' + s);
   assert(s.split(' ').length <= 30, 'длина');
+  // «в укрытии»: крыша + 8 клеток стен; открытые стороны названы
+  const box = new Set(['0,66,0']); for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const h of [64, 65]) box.add(`${dx},${h},${dz}`);
+  const mk = set => ({ bot: { entity: { position: new Vec3(0.5, 64, 0.5) }, blockAt: p => ({ name: set.has(`${p.x},${p.y},${p.z}`) || p.y < 64 ? 'stone' : 'air', boundingBox: set.has(`${p.x},${p.y},${p.z}`) || p.y < 64 ? 'block' : 'empty' }) } });
+  let sh = shelterInfo(mk(box)); assert(sh.closed && sh.roof && sh.walls === 8 && !sh.open.length && sh.skill === false, JSON.stringify(sh));
+  box.delete('0,66,0'); box.delete('0,65,-1');
+  sh = shelterInfo(mk(box)); assert(!sh.closed && !sh.roof && sh.walls === 7 && sh.open[0] === 'север (голова)', JSON.stringify(sh));
   console.log('perception: OK');
 };
