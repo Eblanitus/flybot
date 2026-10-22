@@ -28,6 +28,8 @@ $loop  = "$fb\data\night-$stamp.cmd"
 $body  = [IO.File]::ReadAllText("$fb\night.cmd").Replace('%~dp0', "$fb\").Replace('data\night.log', "data\night-$stamp.log")
 [IO.File]::WriteAllText($loop, $body, [Text.Encoding]::Default)
 Get-ChildItem "$fb\data\night-*.cmd" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Force
+# v0.2: курсор будильника (tools\brain_wake.js) убрать — новый мозг стартует сразу (повод «старт»), а не ждёт повода
+Remove-Item "$fb\data\brain_wake.json" -Force -ErrorAction SilentlyContinue
 Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
   CommandLine = "cmd.exe /c start `"flybot-night-brain`" /min cmd /c `"$loop`""; CurrentDirectory = $fb } | Out-Null
 Log "журнал нового мозга: data\night-$stamp.log"

@@ -15,7 +15,7 @@ foreach ($port in 3199, 3200) {
 
 $dataFiles = 'world.json','waypoints.json','own_blocks.json','daylog.json','days.log','deaths.log','stats.json','killers.json','ledger.json',
   'critic.json','critic_report.md','handover.md','handover.log','ask_brain.md','todo_next.md','teacher_queue.json','notes.md.bak',
-  'events.log','guard.log','night.log','flybot.out.log','runner.out.log'
+  'events.log','guard.log','night.log','flybot.out.log','runner.out.log','brain_wake.json','wake.md'
 $dataGlobs = 'night-*.log','night-*.cmd','teacher-*.log','engineer-*.log','flytest*.log'
 $dataDirs = 'blackbox','teacher_cases','teacher'
 
@@ -52,6 +52,8 @@ $notes = @"
 Всё построенное исчезло, инвентарь пустой, меток и базы нет. Старый блокнот — $arch\brain\notes.md.
 
 ## Текущая цель
+Постройка: (нет — мозг выберет чертёж и место)
+База: (нет — мозг выберет место)
 "@
 [IO.File]::WriteAllText("$root\brain\notes.md", $notes, (New-Object Text.UTF8Encoding $false))
 

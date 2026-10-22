@@ -32,6 +32,12 @@
 // угрозы у базы — прерываем ради цели. Угроза (враг, лава, мало HP, моб ночью) — всегда раньше давления.
 // Цель: провал — повтор через goalRetryMs с count/n вдвое меньше; успех с прогрессом — следующий шаг через goalRepeatMs;
 // успех без нового блока — до новой строки «Автопилот:» не повторяем (иначе пустой круг).
+// v0.2 «Постройка:» (мозг — архитектор, только «что и где»): строка «Постройка: <чертёж> x y z rot=…» в notes.md —
+// дело мухи целиком: далеко — идёт к месту (build_go), строит build_blueprint (build), не хватило материала — добирает
+// ровно недостающее выученным gather_list (build_gather) и строит снова; другой провал — пауза goalRetryMs и повтор
+// (не бросает до новой строки); всё стоит — событие build_done один раз на эту строку, дальше её не строит.
+// «Постройка:» главнее «Автопилот:». Счёт и ночь — как у цели мозга (давление простоя, ночью только у базы);
+// угрозы, рефлексы, мало HP — всегда раньше. Мозг на провалы и простой не будится — это дело мухи.
 'use strict';
 const http = require('http');
 const fs = require('fs');
@@ -43,7 +49,7 @@ const { timeInfo } = L('perception');
 const threats = L('threats');
 const AG = L('aggressors');
 const vision = L('vision');
-const { parseGoal, parseBase, baseTravel } = L('basegoal');
+const { parseGoal, parseBuild, parseBase, baseTravel } = L('basegoal');
 const T = require('./thresholds');
 const D = L('danger');
 
@@ -95,7 +101,9 @@ function lowHpOf(s) {
 //     (навыки, упавшие со сбоем кода: автопилот их не повторяет),
 //     base:{x,y,z,r}|null (строка «База:» из notes.md), baseDist (горизонтальная дистанция до базы, null если не считается),
 //     outlook (А, lib/danger.js outlook: {win, ttdSec, passiveTtdSec, hitsToDie, mobs…}; нет — пороги HP),
-//     idleBuildMin (v0.2: минуты без блока стройки; нет поля — давления нет, всё как раньше)}
+//     idleBuildMin (v0.2: минуты без блока стройки; нет поля — давления нет, всё как раньше),
+//     build:{name,x,y,z,rot,sig,need:{предмет:n}|null}|null (v0.2: «Постройка:» в работе — не готова и не на паузе),
+//     buildDist (горизонтальная дистанция до места постройки)}
 // -> null | {key, kind:'body'|'learned', name, params, why, preempt?, score?, others?} (score/others — В: счёт выбранного дела и следующих)
 function decide(s) {
   if (!s.on) return null;
@@ -161,20 +169,35 @@ function decide(s) {
   const threat = s.hostilesNear > 0 || s.hitRecent;
   const idleMin = Math.max(0, Number(s.idleBuildMin) || 0);
   const press = T.idlePerMin * Math.min(idleMin, T.idleCapMin);
-  const g = s.goal && !s.goalDone && !s.goalFailed ? s.goal : null;
+  // v0.2: «Постройка:» главнее «Автопилот:» — при постройке старая микроцель не берётся
+  const b = s.build || null;
+  const g = !b && s.goal && !s.goalDone && !s.goalFailed ? s.goal : null;
   const goalAct = () => {
     const why = `продолжаю цель мозга: ${g.name}${Object.keys(g.params).length ? ' ' + JSON.stringify(g.params) : ''}${press ? ` (простой ${Math.round(idleMin)} мин)` : ''}`;
     return g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why); // упала со сбоем кода — её нет
   };
+  // v0.2 постройка: не хватает материала — добор ровно недостающего; далеко — к месту; иначе — строю по чертежу
+  const buildAct = () => {
+    const tail = press ? ` (простой ${Math.round(idleMin)} мин)` : '';
+    const need = b.need && Object.keys(b.need).length ? b.need : null;
+    if (need) {
+      const items = Object.entries(need).map(([k, n]) => `${k}:${n}`).join(',');
+      return learned('build_gather', 'gather_list', { items, max_sec: T.buildGatherSec }, `добираю для постройки ${b.name}: ${items.replace(/,/g, ', ')}${tail}`);
+    }
+    if (s.buildDist != null && s.buildDist > T.buildNearDist)
+      return body('build_go', 'goto', { x: b.x, y: b.y, z: b.z, r: T.buildNearDist / 2, timeout: T.baseTimeoutSec, label: 'к постройке', fail: 'до постройки не дошла' }, `иду к постройке ${b.name} (${Math.round(s.buildDist)} м)${tail}`);
+    return body('build', 'build_blueprint', { name: b.name, x: b.x, y: b.y, z: b.z, rot: b.rot }, `строю ${b.name} у ${b.x} ${b.y} ${b.z}${b.rot ? ' rot=' + b.rot : ''}${tail}`);
+  };
+  const job = b ? buildAct : g ? goalAct : null; // дело от мозга: постройка или старая цель
   const inBase = (x, z) => Math.hypot(x - s.base.x, z - s.base.z) <= s.base.r;
-  const gp = g && g.params || {};
+  const gp = b ? { x: b.x, z: b.z } : g && g.params || {};
   const atBase = !!(s.base && s.baseDist != null && s.baseDist <= s.base.r &&
     !(Number.isFinite(gp.x) && Number.isFinite(gp.z) && !inBase(gp.x, gp.z))); // ночная стройка — у базы, не в поле
   // идущий wait_night: простой давно, угрозы нет, у базы — будим ради цели (после угроз и go_base_escape, мозг молчит)
-  if (run === 'wait_night' && s.idle && g && atBase && !threat && idleMin >= T.idleBreakWaitMin && ok('goal') && !lowHpOf(s)
+  if (run === 'wait_night' && s.idle && job && atBase && !threat && idleMin >= T.idleBreakWaitMin && !lowHpOf(s)
       && !(s.inLava || s.suffocating || s.stuck || s.underWater)) {
-    const a = goalAct();
-    if (a) return { ...a, why: a.why + ' — прерываю ожидание ночи', preempt: true };
+    const a = job();
+    if (a && ok(a.key)) return { ...a, why: a.why + ' — прерываю ожидание ночи', preempt: true };
   }
   if (run || s.task) return null; // свой навык идёт — не дёргать
   if (!s.idle) return null;       // мозг недавно командовал — ждём
@@ -248,7 +271,7 @@ function decide(s) {
     if (s.phase === 'ночь' || s.phase === 'закат') add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью')); // упал со сбоем кода — его нет в выборе
     if (s.isNight && s.freeBed) add(Math.max(0, 45 + (s.hp < 20 || s.food < T.huntFood ? 10 : 0) - press), body('sleep', 'sleep', {}, 'сплю в кровати')); // ранена или голодна — сон полезнее
     // v0.2: цель мозга ночью — только у базы (без «База:» или вне радиуса — нет: ночью в поле не строим)
-    if (g && atBase) add(50 + press, goalAct());
+    if (job && atBase) add(50 + press, job());
     // L052: wait_night только без врагов рядом и без свежих ударов (иначе выше сработала ночная защита)
     if (s.isNight) add(Math.max(0, 20 - press), body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь'));
     return pick();
@@ -278,7 +301,8 @@ function decide(s) {
     }
   }
   // цель мозга (строка «Автопилот:» в notes.md); провал — пауза goalRetryMs (goalFailed), выполнена — goalDone; v0.2: + давление простоя
-  if (g) add(50 + press, goalAct());
+  // v0.2: «Постройка:» — на том же месте в выборе, что цель мозга (и главнее строки «Автопилот:»)
+  if (job) add(50 + press, job());
   // длинная дневная работа: до ночи не успеет — счёт ниже
   add(35 - (s.nightIn != null && s.nightIn < T.dayRoutineSec ? 10 : 0), learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)'));
   // голод: чем меньше сытость (а еды нет), тем важнее охота — голодная муха охотится раньше цели мозга
@@ -450,6 +474,75 @@ function goalAfter(ap, run, verdict, reason, now, progressed) {
   }
   return null;
 }
+
+// ---------- v0.2 «Постройка:» — муха строит сама ----------
+// ap.build — строка из notes.md {name,x,y,z,rot,sig}; ap.buildSt — как идёт эта строка:
+// {sig, need:{предмет:n}|null (добрать), gathers (доборов без нового блока), pauseUntil, reason, done, doneAt}
+const BUILD_KEYS = new Set(['build', 'build_go', 'build_gather']);
+const newBuildSt = sig => ({ sig, need: null, gathers: 0, pauseUntil: 0, reason: null, done: false, doneAt: 0 });
+const lackStr = m => Object.entries(m || {}).map(([k, n]) => `${k} ×${n}`).join(', ');
+// недостающий материал из итога build_blueprint: поле missing (оно точнее), иначе текст «не хватает: a ×n, b ×m»
+// (смета до стройки) или «не достроено: … не хватило: a ×n» (кончилось по ходу)
+function lackOf(err, result) {
+  const out = {};
+  const m = result && result.missing;
+  if (m && typeof m === 'object') for (const [k, n] of Object.entries(m)) if (Number(n) > 0) out[k] = Math.ceil(Number(n));
+  if (Object.keys(out).length) return out;
+  const t = /не (?:хватает|хватило):\s*([^;\n]+)/.exec(String(err || ''));
+  if (t) for (const q of t[1].matchAll(/([a-z0-9_]+)\s*[×x]\s*(\d+)/gi)) out[q[1]] = Number(q[2]);
+  return out;
+}
+// постройка для decide: готова или на паузе — её нет (в выборе другие дела); иначе со списком добора
+function buildState(ap, now) {
+  const b = ap.build, st = ap.buildSt;
+  if (!b || !st || st.sig !== b.sig || st.done || now < (st.pauseUntil || 0)) return { build: null };
+  return { build: { ...b, need: st.need && Object.keys(st.need).length ? { ...st.need } : null } };
+}
+// итог запуска дела постройки (verdict 'ok' | 'провал'): -> {note, done?} | null. Мозг тут не будится — всё решает муха.
+function buildAfter(ap, run, verdict, err, result, now, progressed) {
+  const st = ap.buildSt, b = ap.build;
+  // строка сменилась, пока шёл навык, или постройка уже готова (build_done был) — ничего не меняем
+  if (!st || !b || st.done || st.sig !== run.sig || (verdict !== 'ok' && verdict !== 'провал')) return null;
+  const why = String(err || 'провал').split('\n')[0].slice(0, 120);
+  const pause = text => {
+    st.pauseUntil = now + T.buildRetryMs; st.reason = text; st.need = null; st.gathers = 0;
+    return { note: `постройка ${b.name}: ${text} — повтор через ${Math.round(T.buildRetryMs / 1000)} с` };
+  };
+  if (progressed) st.gathers = 0;
+  if (run.key === 'build') {
+    if (verdict === 'ok') {
+      st.done = true; st.doneAt = now; st.need = null; st.reason = null;
+      return { note: `постройка ${b.name}: готово — все клетки стоят`, done: true };
+    }
+    const lack = lackOf(err, result);
+    if (Object.keys(lack).length) {
+      if (st.gathers >= T.buildGatherMax) return pause(`добор не помогает (${st.gathers} раз без нового блока), не хватает ${lackStr(lack)}`);
+      st.need = lack; st.reason = null;
+      return { note: `постройка ${b.name}: не хватает ${lackStr(lack)} — добираю ровно это` };
+    }
+    return pause(`провал (${why})`);
+  }
+  if (run.key === 'build_gather') {
+    st.gathers++; st.need = null;
+    return verdict === 'ok' ? { note: `постройка ${b.name}: добор сделан — строю снова` } : pause(`добор не вышел (${why})`);
+  }
+  if (run.key === 'build_go') return verdict === 'ok' ? null : pause(`не дошла до места (${why})`);
+  return null;
+}
+// состояние постройки для /snapshot → autopilot (видят аудит и учитель)
+function buildStatus(ap, now) {
+  const b = ap.build; if (!b) return null;
+  const st = ap.buildSt && ap.buildSt.sig === b.sig ? ap.buildSt : newBuildSt(b.sig);
+  const run = ap.running && BUILD_KEYS.has(ap.running.key) ? ap.running.key : null;
+  let status;
+  if (st.done) status = 'готово';
+  else if (now < (st.pauseUntil || 0)) status = `пауза до ${new Date(st.pauseUntil).toTimeString().slice(0, 8)} (${st.reason})`;
+  else if (run === 'build_go') status = 'иду к месту';
+  else if (st.need && Object.keys(st.need).length) status = 'добираю ' + lackStr(st.need);
+  else status = run === 'build' ? 'строю' : 'строю (сейчас другое дело)';
+  return { name: b.name, at: [b.x, b.y, b.z], rot: b.rot, status };
+}
+
 function gather(ctx, ap) {
   const bot = ctx.bot;
   const now = Date.now();
@@ -502,6 +595,8 @@ function gather(ctx, ap) {
     recoverable: !!(ld && ld.at && now - ld.ts < T.recoverMs && ap.recoverFor !== ld.ts),
     blocked, failInfo: failInfoOf(ap, now),
     ...goalState(ap, now), // цель мозга: пауза после провала/успеха, шаг после провала (v0.2)
+    ...buildState(ap, now), // v0.2 «Постройка:»: в работе (не готова, не на паузе) и что добрать
+    buildDist: ap.build ? Math.hypot(ap.build.x - p.x, ap.build.z - p.z) : null,
     idleBuildMin: ctx.daylog && ctx.daylog.idleMin ? ctx.daylog.idleMin() : 0, // v0.2: минуты без блока стройки
     crashed: crashList(ap, now),
     base: ap.base || null, baseDist: ap.base && baseDimOk(bot) ? Math.hypot(ap.base.x - p.x, ap.base.z - p.z) : null,
@@ -520,6 +615,7 @@ function create(ctx) {
     goalDiv: 1, goalDivSig: null, // шаг цели после провалов: count/n делим на goalDiv
     goalDoneAt: 0, goalEmpty: null, // выполнена когда; выполнена без прогресса (sig) — не повторяем
     goalFailNote: null, // что написать в журнал про проваленную цель (сразу после строки о провале)
+    build: null, buildSt: null, // v0.2 «Постройка:» из notes.md и как она идёт (newBuildSt)
     codeCrash: {},    // навыки, упавшие со сбоем кода: {навык: {reason, at}} — автопилот их не зовёт
     _mod: MOD, fails: {}, failInfo: {}, until: {}, lastChat: 0, recoverFor: 0, stuckSince: 0, wetSince: 0, lastPos: null, ticking: false, history: [],
     lastHp: null, // HP на прошлом тике: упало — по муху били (ap.lastHit), ночью тогда не wait_night (L052)
@@ -627,11 +723,18 @@ function create(ctx) {
         ap.goSafe = !!(s && s.enabled !== false);
       } catch (e) {}
     }
-    let mt = 0; try { mt = fs.statSync(NOTES).mtimeMs; } catch (e) { ap.goal = null; ap.base = null; return; }
+    let mt = 0; try { mt = fs.statSync(NOTES).mtimeMs; } catch (e) { ap.goal = null; ap.base = null; ap.build = null; return; }
     if (mt !== ap.goalMtime) {
       ap.goalMtime = mt;
       let g = null, txt = ''; try { txt = fs.readFileSync(NOTES, 'utf8'); g = parseGoal(txt); } catch (e) {}
       ap.base = parseBase(txt);
+      // v0.2: новая строка «Постройка:» — всё сначала (пауза, добор, «готово» — про прежнюю строку)
+      const bl = parseBuild(txt);
+      if (bl && (!ap.buildSt || ap.buildSt.sig !== bl.sig)) {
+        ap.buildSt = newBuildSt(bl.sig);
+        for (const k of BUILD_KEYS) { delete ap.until[k]; delete ap.failInfo[k]; ap.fails[k] = 0; }
+      }
+      ap.build = bl;
       const bsig = ap.base ? `${ap.base.x} ${ap.base.y} ${ap.base.z} ${ap.base.r}` : '';
       if (bsig !== ap.baseSig) { ap.baseSig = bsig; delete ap.until.go_base; ap.fails.go_base = 0; } // новая база — пауза не действует
       // новая строка «Автопилот:» — новая попытка: проваленную цель можно пробовать снова
@@ -723,6 +826,7 @@ function create(ctx) {
     ...(ap.running ? { skill: ap.running.name, kind: ap.running.kind, sec: Math.round((Date.now() - ap.running.started) / 1000) } : {}),
     idleSec: Math.round((Date.now() - Math.max(ap.lastBrainCmd, ap.lastBusy)) / 1000),
     yields: ap.yields || 0,
+    build: buildStatus(ap, Date.now()), // v0.2 «Постройка:»: имя, место, статус (строю / добираю / пауза до … / готово)
     ...(ap.goalFail ? { goalFailed: `${ap.goalFail.name}: повтор через ${Math.max(0, Math.round((ap.goalFail.at + T.goalRetryMs - Date.now()) / 1000))} с (${ap.goalFail.reason})` } : {}),
     paused: Object.entries(ap.until).filter(([, t]) => t > Date.now()).map(([k, t]) => `${k} ${Math.round((t - Date.now()) / 1000)}с`)
   });
@@ -798,6 +902,17 @@ function create(ctx) {
         ap.until.goal = Math.max(ap.until.goal || 0, now + BACKOFF_MS); // прерванная/выключенная цель — тоже пауза (L013)
       }
     }
+    if (BUILD_KEYS.has(run.key)) {
+      if (verdict === 'ok' || verdict === 'провал') {
+        // v0.2 постройка: готово — build_done один раз на строку; не хватило — добор; другое — пауза и повтор (мозг не будим)
+        const r = buildAfter(ap, run, verdict, err, res && res.result, now, (ctx.lastProgressAt || 0) >= run.started);
+        if (r && run.key === 'build' && ap.buildSt && ap.buildSt.need) { delete ap.until.build; delete ap.failInfo.build; ap.fails.build = 0; } // нехватка — шаг, а не провал
+        if (r && r.done) ctx.events.push('build_done', { name: ap.build.name, at: [ap.build.x, ap.build.y, ap.build.z], rot: ap.build.rot });
+        if (r && r.note) ap.goalFailNote = r.note;
+      } else {
+        ap.until[run.key] = Math.max(ap.until[run.key] || 0, now + BACKOFF_MS); // прервана/выключена — пауза (L013)
+      }
+    }
     // намеренное прерывание (уступка мозгу или своё) — не вина навыка: счётчик провалов обнуляем
     // (иначе три уступки подряд выключат исправный навык)
     if ((byBrain || byUs) && run.kind === 'learned' && run.name) {
@@ -815,7 +930,7 @@ function create(ctx) {
   }
 
   function start(act) {
-    const run = { ...act, started: Date.now(), aborting: null, ...(act.key === 'goal' && ap.goal ? { sig: ap.goal.sig } : {}) };
+    const run = { ...act, started: Date.now(), aborting: null, ...(act.key === 'goal' && ap.goal ? { sig: ap.goal.sig } : {}), ...(BUILD_KEYS.has(act.key) && ap.build ? { sig: ap.build.sig } : {}) };
     if (act.name === 'escape') run.enemyD0 = hostileD(); // сколько было до врага — чтобы честно оценить побег
     ap.running = run;
     if (act.key === 'recover' && ctx.lastDeath) ap.recoverFor = ctx.lastDeath.ts;
@@ -828,6 +943,7 @@ function create(ctx) {
     run.promise = Promise.resolve(p).then(r => finish(run, r), e => finish(run, { ok: false, error: e && e.message ? e.message : String(e) }));
   }
 
+  ap._start = start; // для офлайн-проверки (test/build_goal.js): запуск дела без тика
   ap.tick = async () => {
     const bot = ctx.bot;
     if (ap.ticking || !ctx.ready || !bot || !bot.entity || bot.health <= 0) return;
@@ -893,7 +1009,7 @@ function attach(api) {
   if (!ap || ap._mod !== MOD) {
     const prev = ap;
     ap = create(ctx);
-    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.goalDiv = prev.goalDiv || 1; ap.goalDivSig = prev.goalDivSig || null; ap.goalDone = prev.goalDone || null; ap.goalDoneAt = prev.goalDoneAt || 0; ap.goalEmpty = prev.goalEmpty || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; ap.goSafe = !!prev.goSafe; ap.goSafeT = prev.goSafeT || 0; }
+    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.goalDiv = prev.goalDiv || 1; ap.goalDivSig = prev.goalDivSig || null; ap.goalDone = prev.goalDone || null; ap.goalDoneAt = prev.goalDoneAt || 0; ap.goalEmpty = prev.goalEmpty || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; ap.goSafe = !!prev.goSafe; ap.goSafeT = prev.goSafeT || 0; ap.buildSt = prev.buildSt || null; }
     ctx.autopilot = ap;
   }
   api.on(bot, 'death', () => { ap.yieldAll('смерть').catch(() => {}); });
@@ -901,4 +1017,4 @@ function attach(api) {
   return { detach: reason => ap.yieldAll(reason || 'поведение выгружено') };
 }
 
-module.exports = { attach, decide, lowHpOf, gather, create, goalState, goalAfter, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };
+module.exports = { attach, decide, lowHpOf, gather, create, goalState, goalAfter, buildState, buildAfter, buildStatus, lackOf, newBuildSt, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };
