@@ -49,6 +49,11 @@ async function testTasks() {
   assert(events.find(e => e.type === 'task_done' && e.name === 'viaskill' && e.by === 'skill:miner' && e.source === 'brain'), 'by в task_done');
   // старые простые команды
   assert.strictEqual((await tm.body(async () => ({ ok: true }))).ok, true);
+  // простая команда мозга вытесняет автопилот и остаётся командой мозга (by сохраняется)
+  await run('ap3', 2000, { source: 'autopilot', wait: false });
+  let who = null;
+  r = await tm.body(async () => { who = tm.legacy && tm.legacy.by; return { ok: true }; }, { source: 'brain', by: 'skill:miner', name: 'move' });
+  assert(r.ok && who === 'skill:miner', 'вытеснившая автопилот команда — от мозга: ' + who);
   console.log('tasks: OK');
 }
 
