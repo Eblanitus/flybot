@@ -5,6 +5,9 @@
 #    она пишет brain\learned\<имя>.js, проверяет через :3200/check и отвечает в <имя>.done.md.
 # 3) Учитель: lib\teacher_triggers.js находит случаи (смерть, почти-смерть, провал дважды, застряла, итог дня, хозяин) и
 #    склеивает всплески; сторож запускает учителя на один случай за раз, отчёт — data\teacher\<id>-<тип>.md.
+# 4) Правка ядра: запрос из brain\core_requests.md, который хозяин разрешил в аудите, берёт инженер (lib\core_requests.js:
+#    снимок файлов и тесты «до» → инженер правит со своим конфигом brain\opencode.core.json → тесты «после»; стало хуже — откат
+#    его правки и запись почему в data\core_tasks\<id>.result.md). Разрешённые запросы идут раньше заявок на навыки, инженер один.
 # Модели учителя и инженера берутся из data\models.json (вкладка «Модели» в аудите) ПРИ КАЖДОМ запуске — через models_config.js.
 # Параметров вроде -EngModel/-TeachModel больше нет: источник один.
 param(
@@ -87,6 +90,10 @@ function Teach([string[]]$a) {   # lib\teacher_triggers.js: ответ — од�
   try { $out = & node "$fb\lib\teacher_triggers.js" @a 2>$null | Select-Object -Last 1; if ($out) { $out | ConvertFrom-Json } } catch { GLog "учитель: очередь не ответила: $($_.Exception.Message)"; $null }
 }
 $r = Teach @('release'); if ($r -and @($r.released).Count) { GLog "учитель: вернул в очередь $(@($r.released) -join ', ') (от прошлого сторожа)" }
+function Core([string[]]$a) {   # lib\core_requests.js: ответ — одна строка JSON (ASCII)
+  try { $out = & node "$fb\lib\core_requests.js" @a 2>$null | Select-Object -Last 1; if ($out) { $out | ConvertFrom-Json } } catch { GLog "ядро: lib\core_requests.js не ответил: $($_.Exception.Message)"; $null }
+}
+$r = Core @('release'); if ($r -and @($r.released).Count) { GLog "ядро: правка от прошлого сторожа $(@($r.released) -join ', ') — $(@($r.results) -join ', ')" }
 
 while ($true) {
   Start-Sleep 30
@@ -109,12 +116,23 @@ while ($true) {
   # --- 2. инженер ---
   if ($eng -and -not $eng.proc.HasExited -and (LimitStuck $eng.model $eng.started)) {
     taskkill /PID $eng.proc.Id /T /F | Out-Null
+    if ($eng.core) { $r = Core @('finish', $eng.name, 'limit'); GLog "ядро: $($eng.name) — $($r.status)" }
     Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue   # заявка без ответа — возьмётся снова
     $min = LimitPause $engHits; $engHits++; $engWait = (Get-Date).AddMinutes($min)
     GLog "инженер: $($eng.name) — лимит запросов модели, повтор через $min мин"
     $eng = $null
   }
-  if ($eng) {
+  if ($eng -and $eng.core) {   # правка ядра: итог решают тесты (lib\core_requests.js finish)
+    $over = (IdleMin $eng.log $eng.started) -ge $EngTimeoutMin
+    if ($eng.proc.HasExited -or $over) {
+      $how = 'ok'
+      if (-not $eng.proc.HasExited) { taskkill /PID $eng.proc.Id /T /F | Out-Null; $how = 'timeout'; GLog "ядро: $($eng.name) — завис: журнал молчит $EngTimeoutMin мин" }
+      $r = Core @('finish', $eng.name, $how)
+      GLog "ядро: $($eng.name) — $($r.status) (изменено файлов: $($r.changed); новые падения тестов: $(@($r.worse) -join ', '))"
+      $eng = $null; $engHits = 0
+    }
+  }
+  elseif ($eng) {
     $done = "$req\$($eng.name).done.md"
     $over = (IdleMin $eng.log $eng.started) -ge $EngTimeoutMin
     if ($eng.proc.HasExited -or $over) {
@@ -125,6 +143,19 @@ while ($true) {
       Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue
       GLog "инженер: $($eng.name) — закончил"
       $eng = $null; $engHits = 0
+    }
+  }
+  if (-not $eng -and (Get-Date) -ge $engWait) {
+    $c = Core @('take')   # сначала разрешённые хозяином правки ядра (снимок и тесты «до» — около минуты)
+    if ($c -and $c.id) {
+      $engModel = RoleModel 'engineer'
+      $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly (section about core edits). Core task file: $($c.taskFile)"
+      $elog = "$fb\data\engineer-core-$($c.id).log"
+      # свой конфиг: правка ядра разрешена (кроме судьи lib\referee.js), node и npm test для проверки; проектный не подмешивать
+      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.core.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" >> `"$elog`" 2>&1" `
+             -WorkingDirectory $fb -WindowStyle Hidden -PassThru
+      $eng = @{ proc = $p; name = $c.id; core = $true; started = Get-Date; model = $engModel; log = $elog }
+      GLog "ядро: инженер взял разрешённый запрос $($c.id) (pid $($p.Id), модель $engModel)"
     }
   }
   if (-not $eng -and (Get-Date) -ge $engWait) {

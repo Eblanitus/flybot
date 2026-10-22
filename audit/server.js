@@ -1,6 +1,7 @@
 // «Аудит»: локальная страница, где видно, что делает каждая роль мухи (тело, автопилот и рефлексы, мозг, инженер, учитель, сторож),
 // и можно написать мозгу. Голый Node (http, fs), без npm-зависимостей. Порт 3300, только 127.0.0.1.
-// Файлы мухи только читает. Две записи: POST /owner_msg в тело (через его HTTP-API) и вкладка «Модели» — файл data/models.json (модель мозга, учителя, инженера).
+// Файлы мухи только читает. Три записи: POST /owner_msg в тело (через его HTTP-API), вкладка «Модели» — файл data/models.json (модель мозга, учителя, инженера)
+// и кнопка «Разрешить» у запроса на правку ядра — файл data/core_requests_state.json (lib/core_requests.js; сам brain/core_requests.md не меняется).
 // Все запросы к телу и исполнителю идут с заголовком X-Observer: 1 — тело не считает их признаком «мозг жив».
 // Запуск: node audit/server.js   (или audit.cmd в корне проекта)
 'use strict';
@@ -12,7 +13,8 @@ const modelsCfg = require('../models_config'); // data/models.json: какая �
 const { checkOwnerText } = require('../lib/audit_api');
 const bbFiles = require('../lib/blackbox_files'); // файлы чёрного ящика (без зависимостей): запасной путь, когда тело не отвечает
 const ledgerSummary = require('../lib/ledger_summary');
-const showcaseLib = require('../lib/showcase'); // витрина навыков (без зависимостей): запасной путь, когда тело старое или не отвечает
+const showcaseLib = require('../lib/showcase');
+const coreReq = require('../lib/core_requests'); // запросы на правку ядра: список с состоянием и «Разрешить» (только data/core_requests_state.json) // витрина навыков (без зависимостей): запасной путь, когда тело старое или не отвечает
 
 const ROOT = path.join(__dirname, '..');
 const DEFAULTS = {
@@ -464,7 +466,7 @@ function engineerDetail(cfg, name) {
 // ======================= учитель =======================
 // Только диск: очередь data/teacher_queue.json, отчёты data/teacher/*.md, журнал уроков brain/lessons.json, учебник brain/lessons.md.
 // Тело для этого не нужно — работает и со старым телом.
-const TEACH_TYPE_RU = { death: 'смерть', near: 'почти-смерть', owner: 'сообщение хозяина', stuck: 'застряла', fail: 'провал дважды', day: 'итог дня', migrate: 'разовая: перенос правил' };
+const TEACH_TYPE_RU = { death: 'смерть', near: 'почти-смерть', owner: 'сообщение хозяина', stuck: 'застряла', fail: 'провал', day: 'итог дня', neighbor: 'новое у соседа', migrate: 'разовая: перенос правил' };
 const TEACH_STATUS_RU = { pending: 'ждёт', working: 'разбирает', done: 'разобран', failed: 'не вышло', dropped: 'выброшен (очередь полна)' };
 const REPORT_RE = /^[\w.-]+\.md$/;
 function readText(file, max) { try { return fs.readFileSync(file, 'utf8').slice(0, max || 60000); } catch (e) { return null; } }
@@ -496,8 +498,18 @@ function loadTeacher(cfg) {
     queue: { exists: !!q, created: q ? q.created : null, pending: cases.filter(c => c.status === 'pending').length, working: (cases.find(c => c.status === 'working') || {}).id || null, suppressed: q ? q.suppressed || 0 : 0, dropped: q ? q.dropped || 0 : 0 },
     cases, reports,
     lessons: (lessons || []).map(l => ({ id: l.id, date: l.date, signature: l.signature || {}, verdict: l.verdict, change: l.change, where: l.where, status: l.status, cases: l.cases || [], note: l.note })).reverse(),
-    lessonsError, book, bookMtime: lmMtime, bookLines: book == null ? null : book.split(/\r?\n/).filter(l => l.trim()).length, coreRequests: core
+    lessonsError, book, bookMtime: lmMtime, bookLines: book == null ? null : book.split(/\r?\n/).filter(l => l.trim()).length, coreRequests: core,
+    core: loadCore(cfg)
   };
+}
+// Запросы на правку ядра с состоянием (ждёт разрешения / разрешён / инженер правит / сделано / откат) и записью итога
+const coreCfg = cfg => ({ dataDir: cfg.dataDir, brainDir: cfg.brainDir, root: cfg.root });
+function loadCore(cfg) {
+  try {
+    const l = coreReq.list(coreCfg(cfg));
+    for (const it of l.items) it.result = readText(path.join(cfg.dataDir, 'core_tasks', it.id + '.result.md'), 6000);
+    return { ok: true, ...l };
+  } catch (e) { return { ok: false, error: String(e.message || e), items: [] }; }
 }
 function teacherReport(cfg, name) {
   if (typeof name !== 'string' || !REPORT_RE.test(name) || name !== path.basename(name)) return { ok: false, error: 'плохое имя отчёта' };
@@ -840,6 +852,7 @@ async function api(cfg, name, q) {
     case 'showcase': return { now, ...(await loadShowcase(cfg)) };
     case 'teacher': return { now, ...loadTeacher(cfg) };
     case 'teacher_report': return teacherReport(cfg, q.get('name'));
+    case 'core_requests': return { now, ...loadCore(cfg) };
     case 'models': return apiModels(cfg, q);
   }
   return null;
@@ -873,6 +886,21 @@ function createServer(opts) {
           let b; try { b = JSON.parse(s || '{}'); } catch (e) { return sendJson(res, 400, { ok: false, error: 'bad json' }); }
           if (!b || typeof b !== 'object' || Array.isArray(b)) return sendJson(res, 400, { ok: false, error: 'нужен объект {роль: модель}' });
           const r = saveModels(cfg, b);
+          return sendJson(res, r.ok ? 200 : 400, r);
+        });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/core_requests/approve') {
+        const origin = req.headers.origin;
+        if (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) { req.resume(); return sendJson(res, 403, { ok: false, error: 'чужой сайт' }); }
+        if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) { req.resume(); return sendJson(res, 415, { ok: false, error: 'нужен Content-Type: application/json' }); }
+        let s = ''; let big = false;
+        req.on('data', c => { if (big) return; s += c; if (s.length > 2000) { big = true; req.resume(); sendJson(res, 413, { ok: false, error: 'слишком большой запрос' }); } });
+        req.on('end', () => {
+          if (big) return;
+          let b; try { b = JSON.parse(s || '{}'); } catch (e) { return sendJson(res, 400, { ok: false, error: 'bad json' }); }
+          if (!b || typeof b.id !== 'string' || !/^[0-9a-f]{10}$/.test(b.id)) return sendJson(res, 400, { ok: false, error: 'нужен id запроса' });
+          const r = coreReq.approve(coreCfg(cfg), b.id);
           return sendJson(res, r.ok ? 200 : 400, r);
         });
         return;
@@ -914,7 +942,7 @@ module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
   parseVerboseModels, parsePlainFree, parseOpencodeProcs, loadFreeModels, apiModels, saveModels,
-  engineerList, engineerDetail, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, api, taskRu
+  engineerList, engineerDetail, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, loadCore, api, taskRu
 };
 
 if (require.main === module) {

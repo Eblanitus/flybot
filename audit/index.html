@@ -522,8 +522,33 @@ function renderTeacher(d) {
   }
   h += `<h2>Учебник мозга <span class="dim small">(brain/lessons.md${d.bookLines != null ? ', строк: ' + d.bookLines : ''}${d.bookMtime ? ', изменён ' + tm(d.bookMtime) : ''})</span></h2>`;
   h += d.book == null ? '<div class="box dim">Учебника ещё нет.</div>' : `<div class="box"><pre>${esc(d.book)}</pre></div>`;
-  if (d.coreRequests) h += `<h2>Заявки на датчики <span class="dim small">(brain/core_requests.md — делает только хозяин)</span></h2><div class="box"><pre>${esc(d.coreRequests)}</pre></div>`;
+  h += renderCore(d.core);
   return h;
+}
+// Запросы на правку ядра: пишут мозг и учитель, хозяин разрешает кнопкой, инженер правит с тестами (иначе откат)
+const CST = { new: 'warn', approved: 'blue', working: 'blue', done: 'ok', reverted: 'bad', failed: 'bad' };
+let openCore = null;
+function renderCore(c) {
+  let h = '<h2>Запросы на правку ядра <span class="dim small">(brain/core_requests.md; «Разрешить» — инженер возьмёт его через сторожа и поправит ядро с тестами; тесты стали хуже — его правка откатывается)</span></h2>';
+  if (!c || !c.ok) return h + `<div class="box bad">${esc((c && c.error) || 'нет данных')}</div>`;
+  if (!c.items.length) return h + '<div class="box dim">Запросов нет.</div>';
+  h += '<table><tr><th>Запрос</th><th>Статус</th><th></th></tr>';
+  for (const it of c.items) {
+    const can = it.status !== 'working' && it.status !== 'approved';
+    const btn = can ? `<button data-approve="${esc(it.id)}">${it.status === 'new' ? 'Разрешить' : 'Разрешить снова'}</button>` : '';
+    h += `<tr class="click" data-core="${esc(it.id)}"><td><b>${esc(it.title)}</b><div class="dim small">${esc(it.id)}</div></td><td><span class="tag ${CST[it.status] || ''}">${esc(it.statusRu)}</span>${it.note ? `<div class="small">${esc(clipS(it.note, 300))}</div>` : ''}</td><td>${btn}</td></tr>`;
+    if (openCore === it.id) h += `<tr><td colspan="3"><div class="detail"><pre>${esc(it.text)}</pre>${it.result ? `<h2>Итог</h2><pre>${esc(it.result)}</pre>` : ''}</div></td></tr>`;
+  }
+  return h + '</table>';
+}
+async function approveCore(id, btn) {
+  btn.disabled = true; btn.textContent = 'сохраняю…';
+  try {
+    const r = await fetch('/api/core_requests/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+    const j = await r.json();
+    if (!j.ok) alert('Не разрешено: ' + (j.error || '?'));
+  } catch (e) { alert('Не разрешено: ' + e.message); }
+  tick();
 }
 async function loadReport() {
   if (!openRep) return;
@@ -560,7 +585,7 @@ function showcaseTable(title, r) {
   return h + '</table>';
 }
 function renderShowcase(d) {
-  let h = '<h2>Витрина навыков</h2><div class="box small dim">Две таблицы по одному формату (SHOWCASE.md): наши навыки и навыки соседа (Ассасин, :3099) со статистикой. Прочерк — такой статистики нет, зелёный/жёлтый/красный цвет — только когда запусков 10 и больше. Учитель сравнивает их при итоге дня и заказывает инженеру переделать лучшее под нашу муху.</div>';
+  let h = '<h2>Витрина навыков</h2><div class="box small dim">Две таблицы по одному формату (SHOWCASE.md): наши навыки и навыки соседа (Ассасин, :3099) со статистикой. Прочерк — такой статистики нет, зелёный/жёлтый/красный цвет — только когда запусков 10 и больше. Учитель смотрит их без порогов, в каждом разборе и как только у соседа появилось новое: полезное у соседа заказывает инженеру переделать под нашу муху, а полезное у нас отмечает в отчёте для соседа (наша витрина открыта ему).</div>';
   h += '<div class="two" style="margin-top:12px"><div>' + showcaseTable('Наши навыки', d.ours) + '</div><div>' + showcaseTable('Навыки соседа', d.neighbor) + '</div></div>';
   return h;
 }
@@ -593,6 +618,10 @@ async function tick() {
   busy = false;
 }
 document.addEventListener('click', e => {
+  const ab = e.target.closest('button[data-approve]');
+  if (ab) { e.stopPropagation(); approveCore(ab.dataset.approve, ab); return; }
+  const tc = e.target.closest('tr[data-core]');
+  if (tc) { openCore = openCore === tc.dataset.core ? null : tc.dataset.core; tick(); }
   const tr = e.target.closest('tr[data-req]');
   if (tr) { openReq = openReq === tr.dataset.req ? null : tr.dataset.req; tick(); }
   const tr2 = e.target.closest('tr[data-rep]');

@@ -38,7 +38,6 @@
       "*/stop*": "deny",
       "*/owner_msg*": "deny",
       "*/behavior/reload*": "deny",
-      "*/rollback*": "deny",
       "*/enable*": "deny",
       "*/disable*": "deny",
       "*/check*": "deny",
@@ -61,7 +60,8 @@
       "*;*": "deny",
       "*`*": "deny",
       "*$(*": "deny",
-      "*..*": "deny"
+      "*..*": "deny",
+      "curl.exe -s -H \"Content-Type: application/json\" -d @data/teacher/rollback.json http://127.0.0.1:3200/rollback": "allow"
     },
     "external_directory": "deny",
     "webfetch": "deny",

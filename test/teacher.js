@@ -23,7 +23,7 @@ const hms = ms => new Date(ms).toISOString().slice(11, 19);
 function testQueue() {
   const D = mkdirs();
   let now = Date.UTC(2026, 9, 21, 12, 0, 0);
-  const cfg = { dataDir: D.dataDir, brainDir: D.brainDir, now: () => now };
+  const cfg = { dataDir: D.dataDir, brainDir: D.brainDir, now: () => now, neighborDir: null };
   const ev = (o) => fs.appendFileSync(path.join(D.dataDir, 'events.log'), JSON.stringify({ t: hms(now), ...o }) + '\n');
   const run = (o) => fs.appendFileSync(path.join(D.brainDir, 'runner.log'), JSON.stringify({ time: new Date(now).toISOString(), ...o }) + '\n');
   const bb = (name, summary) => fs.writeFileSync(path.join(D.dataDir, 'blackbox', name), JSON.stringify({ kind: name.split('-')[0], savedAt: new Date(now).toISOString(), summary, frames: [{}] }));
@@ -88,9 +88,12 @@ function testQueue() {
   T.scan(cfg);
   assert.strictEqual(st().cases.filter(c => c.status === 'pending').length, 0, 'разные ошибки не склеиваются в провал');
 
-  // выученный навык провалился дважды подряд (runner.log)
+  // выученный навык (версия): случай с первого же провала — повод заказать другой вариант; второй провал рядом — в тот же случай
   now += 10 * 60000;
   run({ id: 1, type: 'run_end', name: 'build_hut', ok: false, error: 'нет места у -397 66 29' });
+  T.scan(cfg);
+  pend = st().cases.filter(c => c.status === 'pending');
+  assert.strictEqual(pend.length, 1, 'один провал версии — уже случай'); assert.strictEqual(pend[0].type, 'fail');
   run({ id: 2, type: 'run_end', name: 'build_hut', ok: false, error: 'нет места у -390 66 30' });
   T.scan(cfg);
   pend = st().cases.filter(c => c.status === 'pending');
@@ -137,6 +140,32 @@ function testQueue() {
   assert(/^[\x20-\x7e]+\n$/.test(out) && JSON.parse(out).ok === false, 'CLI ASCII');
   console.log('teacher queue: OK');
   return D;
+}
+
+// сосед: новый или изменённый файл навыка в его папке — случай «новое у соседа»; без изменений — тихо; папки нет — тихо
+function testNeighbor() {
+  const D = mkdirs();
+  let now = Date.UTC(2026, 9, 22, 12, 0, 0);
+  const nb = path.join(D.root, 'neighbor');
+  fs.mkdirSync(path.join(nb, 'lib', 'skills'), { recursive: true }); fs.mkdirSync(path.join(nb, 'behavior'), { recursive: true });
+  fs.writeFileSync(path.join(nb, 'lib', 'skills', 'combat.js'), '// бой\n');
+  const cfg = { dataDir: D.dataDir, brainDir: D.brainDir, now: () => now, neighborDir: nb };
+  const st = () => T.loadState(T.paths(cfg));
+  T.scan(cfg);                                    // первый запуск: migrate
+  T.scan(cfg);
+  let nbc = st().cases.filter(c => c.type === 'neighbor');
+  assert.strictEqual(nbc.length, 1, 'первый взгляд на соседа — случай'); assert(/combat/.test(nbc[0].items[0].text));
+  T.scan(cfg);
+  assert.strictEqual(st().cases.filter(c => c.type === 'neighbor')[0].items.length, 1, 'без изменений — ничего нового');
+  fs.writeFileSync(path.join(nb, 'behavior', 'mission.js'), '// миссия\n');
+  T.scan(cfg);
+  nbc = st().cases.filter(c => c.type === 'neighbor');
+  assert.strictEqual(nbc.length, 1); assert(nbc[0].items.some(i => /mission/.test(i.text)), 'новый файл соседа — в тот же ожидающий случай');
+  const D2 = mkdirs();
+  const cfg2 = { dataDir: D2.dataDir, brainDir: D2.brainDir, now: () => now, neighborDir: path.join(D2.root, 'нет') };
+  T.scan(cfg2); T.scan(cfg2);
+  assert(!T.loadState(T.paths(cfg2)).cases.some(c => c.type === 'neighbor'), 'нет папки соседа — молча');
+  console.log('teacher neighbor: OK');
 }
 
 function testHelpers() {
@@ -210,15 +239,20 @@ async function testConfigs() {
   for (const k of allowEdit) assert(/(brain\/lessons\.md|brain\/lessons\.json|brain\/core_requests\.md|brain\/skill_requests\/\*|data\/teacher\/\*)$/.test(k), 'учителю лишнее: ' + k);
   assert.strictEqual(tc.permission.edit['*'], 'deny'); assert.strictEqual(tc.permission.webfetch, 'deny'); assert.strictEqual(tc.permission.bash['*'], 'deny');
   for (const k of ['*/do*', '*/cmd*', '*/go*', '*/run*', '* -d*', '* -X*']) assert.strictEqual(tc.permission.bash[k], 'deny', k);
-  // мозгу нельзя писать учебник, журнал уроков и поведение
+  // мозгу нельзя писать учебник, журнал уроков и поведение; запросы на правку ядра — можно (их разрешает хозяин в аудите)
   const bc = JSON.parse(fs.readFileSync(path.join(root, 'opencode.json'), 'utf8'));
-  for (const k of Object.keys(bc.permission.edit)) if (bc.permission.edit[k] === 'allow') assert(!/lessons|behavior|teacher|core_requests/.test(k), 'мозгу лишнее: ' + k);
+  for (const k of Object.keys(bc.permission.edit)) if (bc.permission.edit[k] === 'allow') assert(!/lessons|behavior|teacher/.test(k), 'мозгу лишнее: ' + k);
+  assert.strictEqual(bc.permission.edit['brain/core_requests.md'], 'allow', 'мозг пишет запросы на правку ядра');
+  // правка ядра по разрешённому запросу: всё, кроме судьи
+  const cc = JSON.parse(fs.readFileSync(path.join(root, 'brain', 'opencode.core.json'), 'utf8'));
+  assert.strictEqual(cc.permission.edit['lib/referee.js'], 'deny'); assert.strictEqual(cc.permission.edit['*/lib/referee.js'], 'deny');
   assert.strictEqual(bc.permission.edit['*'], 'deny');
 }
 
 module.exports = async function () {
   testHelpers();
   const D = testQueue();
+  testNeighbor();
   await testLessonsEvent();
   await testAudit(D);
   await testConfigs();

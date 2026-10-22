@@ -12,6 +12,9 @@ curl.exe -s -m 3 http://127.0.0.1:3199/health >nul 2>&1 || start "flybot-body" /
 curl.exe -s -m 3 http://127.0.0.1:3200/health >nul 2>&1 || start "flybot-brain-runner" /min cmd /c "cd /d %~dp0brain && node runner.js >> ..\data\runner.out.log 2>&1"
 timeout /t 5 /nobreak >nul
 for /f "delims=" %%m in ('node "%~dp0models_config.js" get brain 2^>nul') do set MODEL=%%m
+rem Handover in the loop too: tail of the previous brain session -> data\handover.md (the new brain reads it at start), fresh ready.flag.
+node "%~dp0tools\handover_note.js" data\night.log data\handover.md >nul 2>&1
+del /q brain\ready.flag >nul 2>&1
 echo. >> data\night.log
 echo ===== [%date% %time%] brain start, model %MODEL% ===== >> data\night.log
 echo [%time%] brain start, model %MODEL%

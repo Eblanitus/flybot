@@ -9,6 +9,8 @@
       "brain/notes.md": "allow",
       "*/brain/core_bugs.md": "allow",
       "brain/core_bugs.md": "allow",
+      "*/brain/core_requests.md": "allow",
+      "brain/core_requests.md": "allow",
       "*/brain/ready.flag": "allow",
       "brain/ready.flag": "allow",
       "*/brain/skill_requests/*": "allow",

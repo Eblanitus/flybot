@@ -15,6 +15,9 @@ $brains = @(Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | ? { $_
 Log "старых петель: $($loops.Count), мозгов: $($brains.Count)"
 
 Remove-Item $flag -Force -ErrorAction SilentlyContinue
+# передача опыта: хвост журнала старого мозга (он ещё играет) → data\handover.md, новый прочтёт при старте (как в петле night.cmd)
+$oldLog = Get-ChildItem "$fb\data\night.log", "$fb\data\night-*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($oldLog) { & node "$fb\tools\handover_note.js" $oldLog.FullName "$fb\data\handover.md" 2>$null | Out-Null; Log "передача: data\handover.md из $($oldLog.Name)" }
 # петлю закрываем без дочерних процессов: старый мозг доигрывает, но заново его никто не запустит
 foreach ($l in $loops) { taskkill /PID $l.ProcessId /F | Out-Null }
 
