@@ -1,5 +1,7 @@
 // Автопилот (поведение): когда мозг молчит >= 30 с и тело свободно, тело само делает полезное — по одному навыку за раз
-// (source:'autopilot'): защита → ночь (укрытие, night_mine) → день (day_routine) → простые навыки.
+// (source:'autopilot'). Срочное (враг-игрок, лава/застряла, мало HP, моб ночью) — сразу; остальное (В) — не очередь,
+// а выбор по обстановке: у дел счёт (время суток, голод, до базы, цель мозга, провалы), берётся наибольший.
+// А: «мало HP», «бой по силам» — по последствию (lib/danger.js outlook), пороги HP — только когда оценки нет.
 // Мозг всегда главнее: любая его команда вытесняет навык автопилота (tasks.js).
 // L013 (переделано по заявке учителя): выученный навык, который вёл автопилот, по возможности НЕ убиваем.
 // Короткая команда мозга (chest_take, craft…) — тело отдаёт её сама (она вытеснит текущую задачу навыка), навык сам
@@ -32,6 +34,7 @@ const AG = L('aggressors');
 const vision = L('vision');
 const { parseGoal, parseBase, baseTravel } = L('basegoal');
 const T = require('./thresholds');
+const D = L('danger');
 
 const RUNNER = (process.env.RUNNER_URL || 'http://127.0.0.1:3200').replace(/\/+$/, '');
 const IDLE_MS = T.idleMs;  // столько мозг должен молчать (и тело стоять), чтобы автопилот взялся за дело
@@ -65,6 +68,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const MOD = {}; // метка этой версии модуля: после перезагрузки поведения автопилот создаётся заново
 
 // ---------- Решение (чистая функция) ----------
+// А: «мало HP» по последствию (lib/danger.js outlook в s.outlook): бой проигран и, не отбиваясь, муха умрёт раньше apReactSec
+function lowHpOf(s) {
+  const o = s.outlook;
+  return o ? !o.win && o.passiveTtdSec != null && o.passiveTtdSec < T.apReactSec : s.hp < T.apLowHp;
+}
 // s: {on, idle, task:{name,source}|null, running:{key,name,kind}|null, runnerOther, hp, food, hasFood, hasWeapon, hasPickaxe,
 //     blocks, logs, cobble, phase, isNight, nightIn, sheltered, inLava, suffocating, stuck, underWater,
 //     hostilesNear, hostile:{name,id,d}|null (ближайший враждебный моб в hostileR),
@@ -74,8 +82,9 @@ const MOD = {}; // метка этой версии модуля: после п�
 //     goal:{name,params,kind:'body'|'learned'}|null (цель мозга из notes.md), goalDone,
 //     goalFailed (цель мозга уже провалилась — с теми же параметрами не повторяем), crashed:{навык:{reason,at}}
 //     (навыки, упавшие со сбоем кода: автопилот их не повторяет),
-//     base:{x,y,z,r}|null (строка «База:» из notes.md), baseDist (горизонтальная дистанция до базы, null если не считается)}
-// -> null | {key, kind:'body'|'learned', name, params, why, preempt?}
+//     base:{x,y,z,r}|null (строка «База:» из notes.md), baseDist (горизонтальная дистанция до базы, null если не считается),
+//     outlook (А, lib/danger.js outlook: {win, ttdSec, passiveTtdSec, hitsToDie, mobs…}; нет — пороги HP)}
+// -> null | {key, kind:'body'|'learned', name, params, why, preempt?, score?, others?} (score/others — В: счёт выбранного дела и следующих)
 function decide(s) {
   if (!s.on) return null;
   if (s.task && s.task.source !== 'autopilot') return null; // мозг или рефлекс заняли тело — не лезем
@@ -91,11 +100,14 @@ function decide(s) {
   // (behavior/reflexes.js defensePrior): бой с оружием (HP в норме) → укрытие стенами (НЕ яма — копка ямы
   // занимает 3-4 с, зомби успевает дойти и залезть; по муху били и враг вплотную — стены не начинаем) → отход.
   // Укрытие заявлено и ударов нет — строить заново бессмысленно: бой или стоим (в тике напишем, что стоим).
+  // А: «HP в норме для боя» — по последствию: бой с мобами рядом выигран (lib/danger.js outlook); без оценки — порог apFightHp
+  const o = s.outlook || null;
+  const fightWins = o ? !!o.win : s.hp >= T.apFightHp;
   const nightDefense = preempt => {
     const h = s.hostile;
     const hitClose = s.hitRecent && !!h && h.d < T.hitNoShelterDist; // били только что и враг вплотную — стены не успеть
     // 1) с оружием и HP в норме — отбиваемся (и из укрытия тоже: моб в 0.3 м — «укрытие» уже не спасает)
-    if (h && s.hasWeapon && s.hp >= T.apFightHp && ok('night_fight'))
+    if (h && s.hasWeapon && fightWins && ok('night_fight'))
       return body('night_fight', 'fight', { target: String(h.name).toLowerCase(), radius: T.fightRadius, flee_hp: T.playerFleeHp, timeout: T.apFightTimeout },
         `ночью отбиваюсь от ${h.name} (${h.d} м)${s.hitRecent ? ' — по муху били' : ''}`, preempt);
     // 2) укрытия нет — стены из блоков (НЕ яма: копка ямы 3-4 с, зомби успевает дойти и залезть); по муху били
@@ -132,8 +144,10 @@ function decide(s) {
   // 2. безопасность
   if ((s.inLava || s.suffocating || s.stuck || s.underWater) && ok('unstuck'))
     return body('unstuck', 'explore', { distance: T.unstuckDist }, s.inLava ? 'выбираюсь из лавы' : s.suffocating ? 'выбираюсь из блока' : s.underWater ? 'выплываю из воды' : 'выбираюсь: застрял');
-  if (s.hp < T.apLowHp) {
-    const crit = s.hp <= T.apCritHp && !s.hasFood;          // еле жива и есть нечего — наружу не ходим
+  // А: «мало HP» — по последствию: встреча (с мобами рядом, а нет их — с обычным ночным мобом) проиграна и, не отбиваясь,
+  // муха умрёт раньше, чем уйдёт или укроется (apReactSec). «Еле жива» — переживёт не больше одного удара. Без оценки — пороги.
+  if (lowHpOf(s)) {
+    const crit = (o ? o.hitsToDie != null && o.hitsToDie <= 1 : s.hp <= T.apCritHp) && !s.hasFood; // еле жива и есть нечего — наружу не ходим
     const dark = s.isNight || s.nightIn < T.nightSoonSec;   // ночью в поле не выходим: стены и ждать утра
     const fi = s.failInfo || {};
     const bad = k => !!(fi[k] && fi[k].count >= T.failSameCount); // эта тактика уже провалилась одинаково
@@ -151,12 +165,12 @@ function decide(s) {
         return body('lowhp_shelter', 'shelter', dig ? { mode: 'walls' } : {}, `мало HP (${s.hp}) — укрываюсь${dig ? ' стенами (вниз копать нельзя)' : ''}`);
       }
       // 3) побег (L014) — только из открытого места, днём, с оружием и не crit. Из укрытия не бежим.
-      if (s.hostilesNear > 0 && ok('lowhp_escape') && !crit && !dark && s.hasWeapon)
+      if (s.hostilesNear > 0 && ok('lowhp_escape') && !bad('lowhp_escape') && !crit && !dark && s.hasWeapon)
         return body('lowhp_escape', 'escape', { distance: T.apLowHpEscapeDist, shelter: true },
           `мало HP (${s.hp}) — убегаю в поле на ${T.apLowHpEscapeDist} м (укрытия нет, оружие есть)`);
       // 4) одна и та же причина провала — сменить тактику: отойти в сторону (иначе тот же провал и та же пауза)
       const last = ((bad('lowhp_shelter') ? fi.lowhp_shelter : fi.lowhp_dirt) || fi.lowhp_shelter || {}).reason || 'укрытие не выходит';
-      if (!crit && !(dark && s.hostilesNear > 0) && (bad('lowhp_dirt') || bad('lowhp_shelter')) && ok('lowhp_move'))
+      if (!crit && !(dark && s.hostilesNear > 0) && (bad('lowhp_dirt') || bad('lowhp_shelter') || bad('lowhp_escape')) && ok('lowhp_move'))
         return body('lowhp_move', 'explore', { distance: T.apLowHpMoveDist }, `мало HP (${s.hp}) — ${last} — отхожу в сторону`);
     }
     return null; // ждём (ест рефлекс) — в укрытии восстанавливаемся, наружу не идём
@@ -170,50 +184,63 @@ function decide(s) {
     return a; // все варианты защиты на паузе — жду (яму и ночную работу при мобе не начинаем)
   }
 
-  // 3. после смерти — за вещами (днём; если у места смерти враг — recover откажет сам)
-  if (s.recoverable && !night && ok('recover')) return body('recover', 'recover', {}, 'иду за вещами к месту смерти');
+  // ---- В: дальше не очередь, а выбор по обстановке ----
+  // У каждого дела — счёт: время суток (до ночи, ночь), голод, далеко ли база, цель мозга, удалось ли раньше.
+  // Провал дела — минус к его счёту (apFailPenalty за каждый): берётся следующее дело, а не пауза; сбор и разведка
+  // при повторе идут с другими параметрами (радиус/дальность больше). Выбирается дело с наибольшим счётом.
+  const fiAll = s.failInfo || {};
+  const tried = k => (fiAll[k] ? fiAll[k].count || 0 : 0);
+  const cands = [];
+  const add = (score, act) => { if (act && ok(act.key)) cands.push({ score: score - T.apFailPenalty * tried(act.key), act }); };
+  const wider = (k, r0) => Math.min(96, r0 + 24 * tried(k)); // повтор сбора — шире радиус
+  const pick = () => {
+    if (!cands.length) return null;
+    cands.sort((a, b) => b.score - a.score);
+    return { ...cands[0].act, score: Math.round(cands[0].score), ...(cands.length > 1 ? { others: cands.slice(1, 4).map(c => `${c.act.key} ${Math.round(c.score)}`) } : {}) };
+  };
 
-  // 4. ночь: укрытие → туннель night_mine → кровать → переждать
   if (night) {
+    // ночь: укрыться важнее всего (без укрытия ночью — мобы), потом польза (туннель), сон, переждать
     if (!s.sheltered) {
-      if (s.blocks < T.nightBlocksMin && s.hostilesNear === 0 && ok('night_dirt')) return body('night_dirt', 'collect', { block: 'dirt', count: T.nightBlocksMin + 1 - s.blocks }, 'запасаю землю на укрытие');
+      if (s.blocks < T.nightBlocksMin && s.hostilesNear === 0) add(80, body('night_dirt', 'collect', { block: 'dirt', count: T.nightBlocksMin + 1 - s.blocks, radius: wider('night_dirt', 48) }, 'запасаю землю на укрытие'));
       // L052: яму (3-4 с) не начинаем, когда моб уже близко и сближается — тогда стены, отход или бой
-      if (s.hasPickaxe && s.hostilesNear === 0 && ok('night_shelter_dig')) return body('night_shelter_dig', 'shelter', { mode: 'dig' }, 'ночь: закапываюсь (мобов рядом нет)');
-      if (ok('night_shelter')) return body('night_shelter', 'shelter', {}, 'ночь: строю укрытие');
+      if (s.hasPickaxe && s.hostilesNear === 0) add(75, body('night_shelter_dig', 'shelter', { mode: 'dig' }, 'ночь: закапываюсь (мобов рядом нет)'));
+      add(70, body('night_shelter', 'shelter', {}, 'ночь: строю укрытие'));
     }
-    if ((s.phase === 'ночь' || s.phase === 'закат') && ok('night_mine')) {
-      const m = learned('night_mine', 'night_mine', {}, 'копаю туннель ночью');
-      if (m) return m; // упал со сбоем кода — не повторяем, ночью лучше переждать
-    }
-    if (s.isNight && s.freeBed && ok('sleep')) return body('sleep', 'sleep', {}, 'сплю в кровати');
+    if (s.phase === 'ночь' || s.phase === 'закат') add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью')); // упал со сбоем кода — его нет в выборе
+    if (s.isNight && s.freeBed) add(45 + (s.hp < 20 || s.food < T.huntFood ? 10 : 0), body('sleep', 'sleep', {}, 'сплю в кровати')); // ранена или голодна — сон полезнее
     // L052: wait_night только без врагов рядом и без свежих ударов (иначе выше сработала ночная защита)
-    if (s.isNight && ok('wait_night')) return body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь');
-    return null;
+    if (s.isNight) add(20, body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь'));
+    return pick();
   }
 
-  // 5a. день, далеко от базы проекта — сначала на базу (до цели мозга и day_routine); пока пауза после провала — стоим, а не уходим дальше
-  if (s.base && s.baseDist != null && s.baseDist > s.base.r) {
-    if (!ok('go_base')) return null;
-    return body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec }, 'иду на базу');
+  // день
+  const duskSoon = s.nightIn != null && s.nightIn < T.apDuskSec; // до ночи мало — далеко не уходим, к базе спешим
+  // после смерти — за вещами (лежат ~5 мин: самое срочное днём; если у места смерти враг — recover откажет сам)
+  if (s.recoverable) add(60, body('recover', 'recover', {}, 'иду за вещами к месту смерти'));
+  // база далеко: чем дальше и чем ближе ночь — тем важнее дойти
+  const farBase = s.base && s.baseDist != null && s.baseDist > s.base.r;
+  if (farBase) {
+    // переход на базу только что не вышел — дальше от базы не уходим (только за вещами), ждём следующей попытки
+    if (!ok('go_base')) return pick();
+    add(45 + Math.min(25, (s.baseDist - s.base.r) / 8) + (duskSoon ? 20 : 0),
+      body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec }, 'иду на базу'));
   }
-
-  // 5. день: цель мозга (строка «Автопилот:» в notes.md), потом длинный навык, иначе простые
-  // проваленная цель с теми же параметрами не повторяется (goalFailed) — ждём новой строки «Автопилот:»
-  if (s.goal && !s.goalDone && !s.goalFailed && ok('goal')) {
+  // цель мозга (строка «Автопилот:» в notes.md); проваленная с теми же параметрами не повторяется (goalFailed) — следующее дело
+  if (s.goal && !s.goalDone && !s.goalFailed) {
     const g = s.goal, why = `продолжаю цель мозга: ${g.name}${Object.keys(g.params).length ? ' ' + JSON.stringify(g.params) : ''}`;
-    const act = g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why);
-    if (act) return act; // цель упала со сбоем кода — не повторяем, идём к другим делам
+    add(50, g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why)); // упала со сбоем кода — её нет в выборе
   }
-  if (ok('day_routine')) {
-    const d = learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)');
-    if (d) return d;
-  }
-  if (s.food < T.huntFood && !s.hasFood && s.animals > 0 && ok('hunt')) return body('hunt', 'hunt', { count: T.huntCount }, 'охочусь: нечего есть');
-  if (!s.hasPickaxe && s.logs >= T.pickLogs && ok('craft_pick')) return body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку');
-  if (!s.hasPickaxe && s.logs < T.needLogs && ok('collect_log')) return body('collect_log', 'collect', { block: 'log', count: T.logCount }, 'рублю дерево');
-  if (s.hasPickaxe && s.cobble < T.cobbleWant && ok('collect_stone')) return body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount }, 'добываю камень');
-  if (ok('explore')) return body('explore', 'explore', { distance: T.exploreDist }, 'исследую окрестности');
-  return null;
+  // длинная дневная работа: до ночи не успеет — счёт ниже
+  add(35 - (s.nightIn != null && s.nightIn < T.dayRoutineSec ? 10 : 0), learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)'));
+  // голод: чем меньше сытость (а еды нет), тем важнее охота — голодная муха охотится раньше цели мозга
+  if (s.food < T.huntFood && !s.hasFood && s.animals > 0) add(20 + (T.huntFood - s.food) * 3, body('hunt', 'hunt', { count: T.huntCount }, 'охочусь: нечего есть'));
+  if (!s.hasPickaxe && s.logs >= T.pickLogs) add(30, body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку'));
+  if (!s.hasPickaxe && s.logs < T.needLogs) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, ...(tried('collect_log') ? { radius: wider('collect_log', 48) } : {}) }, 'рублю дерево'));
+  if (s.hasPickaxe && s.cobble < T.cobbleWant) add(26, body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount, ...(tried('collect_stone') ? { radius: wider('collect_stone', 48) } : {}) }, 'добываю камень'));
+  // разведка — когда больше нечего; перед ночью — ближе
+  add(10, body('explore', 'explore', { distance: duskSoon ? Math.round(T.exploreDist / 2) : T.exploreDist + 24 * tried('explore') }, 'исследую окрестности'));
+  return pick();
 }
 
 // ---------- HTTP к исполнителю выученных навыков ----------
@@ -298,28 +325,32 @@ function verdictOf(run, err) {
   return 'провал';
 }
 
-// пауза после побега (L014): оторвались — минута, не оторвались — 5 минут (такой побег повторять нельзя)
+// пауза после побега (L014): тот же побег сразу не зовём. В: не оторвались — долгой паузы нет: провал идёт в причины
+// (failInfo «не оторвался»), и в следующий раз берётся другая тактика (отойти в сторону, укрытие), а не тот же побег
 function escapePause(key, grew) {
-  if (key === 'lowhp_escape') return grew ? T.apEscapeCooldownMs : T.apEscapeFailPauseMs;
+  if (key === 'lowhp_escape') return T.apEscapeCooldownMs;
   return grew ? T.apPlayerEscapeCooldownMs : T.apEscapeCooldownMs;
 }
 
 // сбой кода навыка (в ошибке — файл и строка), а не отказ о мире: тот же вызов упадёт так же
 const isCodeCrash = err => CODE_ERR.test(String(err || ''));
 
-// пауза после провала: одна и та же причина — пауза длиннее (для выученных навыков тоже — как у команд тела)
+// пауза после провала. В: долгих пауз (5 мин) нет — одна и та же причина или много провалов подряд дают не больше минуты,
+// а главное — минус к счёту этого дела в decide (берётся следующее дело или тот же сбор с другими параметрами)
 function failPause(kind, err, same, count, n) {
-  if (kind === 'learned' && /выключен|не найден/.test(err)) return 600000; // навык выключен — ждём, пока включат
-  if (same && count >= T.failSameCount) return Math.min(BACKOFF_MS * count, T.failSameMaxMs);
-  if (n >= FAIL_MAX) return BACKOFF_MS;
+  if (kind === 'learned' && /выключен|не найден/.test(err)) return 600000; // навык выключен мозгом — ждём, пока включит
+  if ((same && count >= T.failSameCount) || n >= FAIL_MAX) return BACKOFF_MS;
   return 4000;
 }
 
-// навыки, упавшие со сбоем кода: автопилот их не повторяет (протухшие записи забываем)
-function crashList(ap, now) {
+// навыки, упавшие со сбоем кода: автопилот их не зовёт, пока файл навыка тот же (тот же код упадёт так же).
+// В: не 30 минут — запись снимается, как только файл навыка поменялся (мозг поправил/выложил версию)
+const LEARNED_DIR = path.join(process.env.FLYBOT_CORE || path.join(__dirname, '..'), 'brain', 'learned');
+const learnedMtime = name => { try { return fs.statSync(path.join(LEARNED_DIR, name + '.js')).mtimeMs; } catch (e) { return null; } };
+function crashList(ap, now, mtimeOf = learnedMtime) {
   const out = {};
   for (const [k, v] of Object.entries(ap.codeCrash || {})) {
-    if (now - v.at > T.apCodeCrashSkipMs) delete ap.codeCrash[k];
+    if (v.mtime !== undefined && mtimeOf(k) !== v.mtime) delete ap.codeCrash[k]; // файл поменялся — пробуем снова
     else out[k] = v;
   }
   return out;
@@ -367,6 +398,7 @@ function gather(ctx, ap) {
     task: cur ? { name: cur.name, source: cur.source } : null,
     running: ap.running ? { key: ap.running.key, name: ap.running.name, kind: ap.running.kind } : null, runnerOther: ap.runnerOther,
     hp: Math.round(bot.health), food: bot.food,
+    outlook: (() => { try { return D.outlook(bot); } catch (e) { return null; } })(), // А: чем кончится встреча с мобами (lib/danger.js)
     hasFood: items.some(i => foods[i.name] && !FOOD_BL.has(i.name) && !i.name.endsWith('_bucket')),
     hasWeapon: items.some(i => /_sword$|_axe$/.test(i.name)),
     hasPickaxe: items.some(i => /_pickaxe$/.test(i.name)),
@@ -638,9 +670,8 @@ function create(ctx) {
       // сбой кода навыка (в ошибке — файл и строка): это не отказ о мире, тот же вызов упадёт так же —
       // автопилот его не повторяет: сообщает мозгу и ждёт правки
       if (run.kind === 'learned' && run.name && isCodeCrash(err)) {
-        ap.codeCrash[run.name] = { reason, at: now };
-        ap.until[run.key] = now + T.apCodeCrashSkipMs;
-        note(`навык ${run.name}: сбой кода (${reason}) — сам не повторяю, жду правки от мозга`, true);
+        ap.codeCrash[run.name] = { reason, at: now, mtime: learnedMtime(run.name) };
+        note(`навык ${run.name}: сбой кода (${reason}) — этот код не повторяю (беру другие дела), жду правки файла от мозга`, true);
         clearFailsAfterCrash(run.name, reason);
       }
     }
@@ -651,6 +682,10 @@ function create(ctx) {
       const grew = run.enemyD0 == null || d1 == null || d1 >= run.enemyD0 + T.apEscapeMinDist; // моб пропал или отстал — побег удался
       const pause = escapePause(run.key, grew);
       ap.until[run.key] = now + pause;
+      if (!grew) { // В: не оторвался — в причины провала: в следующий раз другая тактика, а не тот же побег
+        const prev = ap.failInfo[run.key];
+        ap.failInfo[run.key] = { reason: 'побег не оторвал от врага', norm: 'побег не оторвал от врага', count: (prev && prev.norm === 'побег не оторвал от врага' ? prev.count : 0) + T.failSameCount, t: now };
+      }
       note(`побег: ${grew ? 'оторвался' : 'не оторвался'}${run.enemyD0 != null && d1 != null ? ` (враг: ${run.enemyD0.toFixed(1)} → ${d1.toFixed(1)} м)` : ''} — пауза ${Math.round(pause / 1000)} с`);
     }
     if (run.key === 'goal') {
@@ -658,9 +693,8 @@ function create(ctx) {
       else if (verdict === 'провал') {
         // проваленную цель с теми же параметрами не повторяем: ждём новой строки «Автопилот:» (или явного enable)
         const reason = err ? String(err).split('\n')[0].slice(0, 120) : 'провал';
-        ap.goalFail = { sig: run.sig, name: run.name, reason, at: now };
-        ap.until.goal = Math.max(ap.until.goal || 0, now + T.failSameMaxMs);
-        ap.goalFailNote = `цель ${run.name}: та же причина — не повторяю, жду новой цели (провал: ${reason})`;
+        ap.goalFail = { sig: run.sig, name: run.name, reason, at: now }; // В: без паузы — просто следующее дело
+        ap.goalFailNote = `цель ${run.name}: с теми же параметрами не повторяю, беру другие дела и жду новой цели (провал: ${reason})`;
       } else {
         ap.until.goal = Math.max(ap.until.goal || 0, now + BACKOFF_MS); // прерванная/выключенная цель — тоже пауза (L013)
       }
@@ -736,7 +770,7 @@ function create(ctx) {
       if (!act) {
         const nightNow = st.isNight || st.nightIn < T.nightSoonSec;
         if (st.idle && !st.task && !st.runnerOther) {
-          if (st.hp < T.apLowHp) noteWait(st);
+          if (lowHpOf(st)) noteWait(st);
           // L052: не молчим, когда моб рядом ночью — что делаем, написано (укрытие/отход/бой выше или стоим тут)
           else if (nightNow && (st.hostilesNear > 0 || st.hitRecent)) noteThreatWait(st);
         }
@@ -768,4 +802,4 @@ function attach(api) {
   return { detach: reason => ap.yieldAll(reason || 'поведение выгружено') };
 }
 
-module.exports = { attach, decide, gather, create, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };
+module.exports = { attach, decide, lowHpOf, gather, create, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };

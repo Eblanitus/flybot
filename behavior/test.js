@@ -47,10 +47,12 @@ module.exports = async function selfTest() {
   assert.strictEqual(decide({ ...stuck, hostilesNear: 1, hasWeapon: false }).key, 'lowhp_move', 'без оружия — не побег, отходим в сторону');
   assert.strictEqual(decide({ ...stuck, hp: 2, hasFood: false, hostilesNear: 1 }), null, 'HP≤4 и еды нет — наружу не ходим (ни побег, ни блоки, ни в сторону)');
   assert.strictEqual(decide({ ...stuck, hp: 2, hasFood: false, hostilesNear: 1, blocks: T.apLowHpBlocks }).key, 'lowhp_shelter', 'HP≤4 и еды нет — укрываемся, если блоки есть');
-  // пауза после побега: оторвались — минута, не оторвались — 5 минут
+  // пауза после побега: минута; В — не оторвались: пятиминутной паузы нет, провал идёт в причины (другая тактика)
   assert.strictEqual(escapePause('lowhp_escape', true), T.apEscapeCooldownMs);
-  assert.strictEqual(escapePause('lowhp_escape', false), T.apEscapeFailPauseMs);
-  assert.ok(T.apEscapeFailPauseMs > T.apEscapeCooldownMs, 'неудачный побег — пауза длиннее');
+  assert.strictEqual(escapePause('lowhp_escape', false), T.apEscapeCooldownMs, 'неудачный побег — без долгой паузы');
+  assert.strictEqual(T.apEscapeFailPauseMs, undefined, 'пятиминутной паузы побега больше нет');
+  a = decide({ ...stuck, hostilesNear: 1, failInfo: { ...stuck.failInfo, lowhp_escape: { reason: 'побег не оторвал от врага', count: 2 } } });
+  assert.strictEqual(a.key, 'lowhp_move', 'побег не оторвал — другая тактика (отойти в сторону), а не тот же побег');
   // еда: лучшая по качеству, гнилое мясо — только с голоду
   const bot = { registry: { foodsByName: { bread: { effectiveQuality: 11 }, rotten_flesh: { effectiveQuality: 4 }, cooked_beef: { effectiveQuality: 20 } } },
     inventory: { items: () => [{ name: 'rotten_flesh', count: 3 }, { name: 'bread', count: 1 }, { name: 'cooked_beef', count: 1 }] } };
@@ -183,13 +185,14 @@ module.exports = async function selfTest() {
   assert.strictEqual(nightPlan.skill, 'escape', 'удар ночью без оружия при мобе вплотную — побег');
   assert.ok(!nightPlan.options.includes('shelter'), 'копка-укрытие в вариантах нет');
   // ---- L011/L002/L024 (заявка учителя): провал цели и сбой кода не повторяются ----
-  // пауза после провала: у ВЫУЧЕННОГО навыка — как у команд тела (та же причина — длиннее), а не ровно 60 с
+  // пауза после провала (В): долгих пауз нет — та же причина или третий провал — не больше минуты, дальше решает счёт дела
   assert.strictEqual(failPause('learned', 'не нашёл log в радиусе 48', false, 1, 1), 4000, 'первый провал — короткая пауза');
-  assert.strictEqual(failPause('learned', 'не нашёл log в радиусе 48', true, 2, 2), Math.min(T.backoffMs * 2, T.failSameMaxMs));
-  assert.ok(failPause('learned', 'не нашёл log в радиусе 48', true, 2, 2) > T.backoffMs, 'та же причина — пауза длиннее 60 с');
+  assert.strictEqual(failPause('learned', 'не нашёл log в радиусе 48', true, 2, 2), T.backoffMs, 'та же причина — минута, не 5 мин');
+  assert.strictEqual(failPause('learned', 'не нашёл log в радиусе 48', true, 5, 5), T.backoffMs, 'много раз та же причина — всё равно минута');
   assert.strictEqual(failPause('learned', 'не нашёл log в радиусе 48', false, 1, T.failMax), T.backoffMs, 'третий провал — минута');
-  assert.strictEqual(failPause('learned', 'навык "build_hut" выключен: авто: 3 провала подряд', false, 1, 1), 600000, 'выключенный навык — 10 мин');
-  assert.strictEqual(failPause('body', 'не нашёл log', true, 2, 2), Math.min(T.backoffMs * 2, T.failSameMaxMs), 'у команд тела — как было');
+  assert.strictEqual(failPause('learned', 'навык "build_hut" выключен: вручную', false, 1, 1), 600000, 'выключенный мозгом навык — ждём включения');
+  assert.strictEqual(failPause('body', 'не нашёл log', true, 2, 2), T.backoffMs, 'у команд тела — так же');
+  assert.strictEqual(T.failSameMaxMs, undefined, 'пятиминутной паузы больше нет');
   // сбой кода (в ошибке — файл и строка) — не отказ о мире
   assert.strictEqual(isCodeCrash('brain/learned/build_hut.js:250'), true, 'файл и строка — сбой кода');
   assert.strictEqual(isCodeCrash('построено 140/167, двери нет; дыры: [[-400,66,29]]'), false, 'отказ о мире — не сбой кода');
@@ -202,11 +205,12 @@ module.exports = async function selfTest() {
   assert.strictEqual(decide({ ...goalState, crashed: { build_hut: { reason: 'brain/learned/build_hut.js:250', at: Date.now() } } }).key, 'day_routine', 'упавшую цель не повторяем');
   assert.strictEqual(decide({ ...base, crashed: { day_routine: { reason: 'x.js:1', at: Date.now() } } }).key, 'explore', 'упавший навык не повторяем');
   assert.strictEqual(decide({ ...base, phase: 'ночь', isNight: true, nightIn: 0, sheltered: true, crashed: { night_mine: { reason: 'x.js:1', at: Date.now() } } }).key, 'wait_night', 'ночью без упавшего навыка — пережидаем');
-  // протухший сбой кода забываем (навык можно снова)
-  const apc = { codeCrash: { build_hut: { reason: 'x.js:1', at: Date.now() - 1000 }, old: { reason: 'y.js:2', at: Date.now() - (T.apCodeCrashSkipMs + 1000) } } };
-  const cl = crashList(apc, Date.now());
-  assert.ok(cl.build_hut, 'свежий сбой кода в списке');
-  assert.ok(!cl.old, 'протухший сбой кода забыт');
+  // сбой кода (В): не 30 минут — запись живёт, пока файл навыка тот же; поменялся файл — пробуем снова
+  const apc = { codeCrash: { build_hut: { reason: 'x.js:1', at: Date.now() - 1000, mtime: 111 }, fixed: { reason: 'y.js:2', at: Date.now() - 1000, mtime: 111 } } };
+  const cl = crashList(apc, Date.now(), n => (n === 'fixed' ? 222 : 111));
+  assert.ok(cl.build_hut, 'файл тот же — сбой кода в списке');
+  assert.ok(!cl.fixed && !apc.codeCrash.fixed, 'файл поменялся — сбой забыт, навык снова можно');
+  assert.strictEqual(T.apCodeCrashSkipMs, undefined, 'тридцатиминутной паузы больше нет');
   // ---- L052-автопилот (заявка учителя, смерть 23): «укрытие объявлено» ≠ «безопасно ждать» ----
   const nz = { ...base, phase: 'ночь', isNight: true, nightIn: 0, sheltered: true };
   // мобов нет и ударов нет — пережидаем ночь (как было; night_mine отключен, чтобы дойти до wait_night)
@@ -235,5 +239,44 @@ module.exports = async function selfTest() {
   // в закрытом укрытии ударов нет — без оружия ждём моба в укрытии (не вместо wait_night — журнальная строка в тике)
   nd = decide({ ...nz, hasWeapon: false, hostilesNear: 1, hostile: { name: 'zombie', d: 5 } });
   assert.strictEqual(nd, null, 'в укрытии, ударов нет, без оружия — стоим (не wait_night!)');
+  // ---- А: опасность по последствию (lib/danger.js fight/outlook), а не по порогу HP ----
+  const Dg = require('./core')('danger');
+  const f1 = Dg.fight({ hp: 5, weapon: 'fist', mobs: [{ name: 'zombie', d: 1.4 }] });
+  assert.ok(!f1.win && f1.ttdSec <= 2 && f1.hitsToDie === 2, 'HP 5 без оружия против зомби вплотную — проигрыш: ' + JSON.stringify(f1));
+  const f2 = Dg.fight({ hp: 20, weapon: 'iron_sword', mobs: [{ name: 'zombie', d: 9 }] });
+  assert.ok(f2.win && f2.hpLeft > 10, 'железный меч, HP 20 против зомби — победа: ' + JSON.stringify(f2));
+  const f3 = Dg.fight({ hp: 20, weapon: 'iron_sword', mobs: [{ name: 'creeper', d: 3 }] });
+  assert.ok(!f3.win && f3.hitsToDie === 1, 'крипер вплотную убивает взрывом и при полном HP');
+  const f4 = Dg.fight({ hp: 6, weapon: 'stone_sword', mobs: [{ name: 'zombie', d: 8 }] });
+  assert.ok(f4.win, 'HP 6 (ниже старого порога 10), но с мечом против одного зомби — бой по силам');
+  assert.ok(f1.passiveTtdSec != null && f1.passiveTtdSec * 1000 < T.shelterBuildMs, 'не отбиваясь — умрёт раньше, чем выкопает укрытие');
+  // автопилот: оценка решает, порог — нет
+  assert.notStrictEqual((decide({ ...base, hp: 6, outlook: f4 }) || {}).key, 'lowhp_shelter', 'HP 6, бой по силам — не «мало HP»');
+  assert.strictEqual(decide({ ...base, hp: 15, outlook: { win: false, passiveTtdSec: 3, hitsToDie: 2 } }).key, 'lowhp_shelter', 'HP 15, но встреча проиграна и умрёт за 3 с — «мало HP»');
+  nd = decide({ ...nz, hp: 8, hostilesNear: 1, hostile: { name: 'zombie', d: 6 }, outlook: { win: true, passiveTtdSec: 5 } });
+  assert.strictEqual(nd.key, 'night_fight', 'HP 8 (ниже порога 12), но бой выигран — отбиваемся');
+  nd = decide({ ...nz, hp: 20, sheltered: false, hostilesNear: 3, hostile: { name: 'zombie', d: 6 }, outlook: { win: false, ttdSec: 4, passiveTtdSec: 8 } });
+  assert.notStrictEqual(nd.key, 'night_fight', 'HP 20, но толпу не перебить — в бой не лезем');
+  // рефлекс: с мечом и HP 5 против одного зомби — бой (оценка), копка не успевает (не отбиваясь — 1 с)
+  const armed5 = fakeBot({ health: 5, entities: { 3: zClose }, inventory: { items: () => [{ name: 'stone_sword' }], slots: [] } });
+  assert.ok(R.outlookOf(fakeCtx(armed5), zClose).win, 'оценка рефлекса видит победу');
+  assert.ok(R.shelterTooSlow(fakeCtx(armed5), zClose), 'копка не успевает — по оценке');
+
+  // ---- В: выбор по обстановке, а не очередь ----
+  const gl = { name: 'collect', params: { block: 'stone', count: 60 }, kind: 'body', sig: 'x' };
+  assert.strictEqual(decide({ ...base, goal: gl }).key, 'goal', 'сыта — цель мозга');
+  assert.strictEqual(decide({ ...base, goal: gl, food: 2, hasFood: false, animals: 3 }).key, 'hunt', 'голодна и еды нет — сначала охота, потом цель');
+  assert.strictEqual(decide({ ...base, goal: gl, food: 12, hasFood: false, animals: 3 }).key, 'goal', 'чуть голодна — цель важнее');
+  const bs = { x: 0, y: 64, z: 0, r: 96 };
+  assert.strictEqual(decide({ ...base, goal: gl, base: bs, baseDist: 110 }).key, 'goal', 'база чуть дальше радиуса, день — цель');
+  assert.strictEqual(decide({ ...base, goal: gl, base: bs, baseDist: 110, nightIn: 60 }).key, 'go_base', 'до ночи минута — к базе');
+  assert.strictEqual(decide({ ...base, goal: gl, base: bs, baseDist: 400 }).key, 'go_base', 'база далеко — к базе');
+  // провал — не пауза, а другое дело или те же дела с другими параметрами
+  const wood = { ...base, hasPickaxe: false, logs: 2, crashed: { day_routine: { reason: 'x.js:1' } } };
+  assert.strictEqual(decide(wood).key, 'collect_log');
+  a = decide({ ...wood, failInfo: { collect_log: { reason: 'не нашёл log', count: 1 } } });
+  assert.ok(a.key === 'collect_log' && a.params.radius > 48, 'повтор сбора — шире радиус: ' + JSON.stringify(a.params));
+  assert.strictEqual(decide({ ...wood, failInfo: { collect_log: { reason: 'не нашёл log', count: 2 } } }).key, 'explore', 'дважды не вышло — следующее дело');
+  assert.ok(decide(base).score != null, 'счёт выбранного дела виден');
   return { ok: true };
 };

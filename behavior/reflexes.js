@@ -9,6 +9,8 @@
 //   и не берёт копку-укрытие, когда враг уже вплотную и HP низкий (задача не успевает).
 //   — муха в закрытом укрытии: блок зомби не проломит, а побег вытащит наружу — стоим и ждём;
 //   — враг ближе defenseCloseDist и HP ниже defenseLowHp: копка-укрытие (3-4 с) в вариантах её нет.
+// Правка А (законы игры вместо порогов): «HP низкий» = бой проигран по оценке lib/danger.js (outlook: удары мобов, оружие мухи),
+//   «копка не успевает» = не отбиваясь, муха умрёт раньше shelterBuildMs; пороги defenseLowHp/swatMinHp — только когда оценки нет.
 // Правка L052 (смерть 20261022-104811-74, 00:54:56-00:55:05): укрытие есть, только пока по муху не бьют.
 //   — mob_hurt = удар: признак «в укрытии» не действует — зомби в 0.3 м из «укрытия» (голова открыта) бил 8 раз подряд и убил за 9 с;
 //   — при ударе и враге ближе hitNoShelterDist (2 м) копку-укрытие не начинаем и не ждём (раньше до правила не доходило: hold срабатывал первым);
@@ -23,6 +25,7 @@ const F = L('felt');
 const E = L('experience');
 const SURV = L('skills/survival');
 const T = require('./thresholds');
+const D = L('danger');
 
 function hasWeapon(bot) { return bot.inventory.items().some(i => /_sword$|_axe$/.test(i.name)); }
 function hostilesNear(bot, r) {
@@ -45,10 +48,15 @@ function attackerDist(bot, att) {
   const nh = F.nearestHostile(bot, T.defenseFightDist);
   return nh ? F.distTo(bot, nh) : null;
 }
-// L043: копка-укрытие не успевает — враг вплотную, HP низкий (задача 3-4 с, а муху добьют раньше)
+// А: чем кончится бой здесь и сейчас — законы игры (lib/danger.js: удары мобов, оружие мухи). null — оценки нет: тогда пороги thresholds
+function outlookOf(ctx, att) { try { return D.outlook(ctx.bot, att && att.id); } catch (e) { return null; } }
+// L043: копка-укрытие не успевает — враг вплотную, и пока муха копает (shelterBuildMs, не отбиваясь), её добьют.
+// А: «добьют» — по оценке passiveTtdSec (не отбиваться); без оценки — старый порог defenseLowHp
 function shelterTooSlow(ctx, att) {
   const bot = ctx.bot;
-  if (bot.health >= T.defenseLowHp) return false;
+  const o = outlookOf(ctx, att);
+  const slow = o ? o.passiveTtdSec != null && o.passiveTtdSec * 1000 < T.shelterBuildMs : bot.health < T.defenseLowHp;
+  if (!slow) return false;
   const d = attackerDist(bot, att);
   return d !== null && d <= T.defenseCloseDist;
 }
@@ -89,7 +97,9 @@ function clearRefusal(ctx, action) {
 function defensePrior(ctx, att, underHit) {
   const bot = ctx.bot;
   const canFight = !!att && F.distTo(bot, att) <= T.defenseFightDist && isAutoTarget(att);
-  const opts = bot.health < T.defenseLowHp ? ['escape', 'shelter'] : (!hasWeapon(bot) && (hostilesNear(bot, T.crowdR) >= T.crowdN || timeInfo(bot).isNight)) ? ['shelter', 'escape'] : canFight ? ['fight', 'shelter', 'escape'] : ['escape', 'shelter'];
+  const o = outlookOf(ctx, att);
+  const losing = o ? !o.win : bot.health < T.defenseLowHp; // А: бой проигран по оценке (без оценки — порог HP)
+  const opts = losing ? ['escape', 'shelter'] : (!hasWeapon(bot) && (hostilesNear(bot, T.crowdR) >= T.crowdN || timeInfo(bot).isNight)) ? ['shelter', 'escape'] : canFight ? ['fight', 'shelter', 'escape'] : ['escape', 'shelter'];
   if (canFight && !opts.includes('fight')) opts.push('fight');
   // L043: враг вплотную и HP низкий — копка-укрытие (3-4 с) не успевает: в вариантах её нет. Остаётся бой (если оружие есть) или отход.
   if (shelterTooSlow(ctx, att)) {
@@ -121,7 +131,8 @@ function mobHurtPlan(ctx, att) {
   // пока по муху не бьют: здесь такое решение от удара больше не выходит, «стою» остаётся у защиты от игрока.
   const plan = { shelterVoid: inShelter(ctx) }; // признак укрытия был, удар его отменил — причина пойдёт в журнал
   const opts = defensePrior(ctx, att, true);
-  if (cur && bot.health >= T.swatMinHp && att && opts[0] === 'fight') { plan.swat = att; return plan; } // занят делом, HP в норме — отмахнуться
+  const o = outlookOf(ctx, att);
+  if (cur && (o ? o.win : bot.health >= T.swatMinHp) && att && opts[0] === 'fight') { plan.swat = att; return plan; } // занят делом, бой выигран (А; без оценки — HP в норме) — отмахнуться
   const ch = E.choose(ctx, opts);
   const params = ch.action === 'fight' ? { targetId: att.id, radius: T.fightRadius } : {};
   const note = shelterTooSlow(ctx, att) ? '; копка-укрытие не успевает' : '';
@@ -308,4 +319,4 @@ function attach(api) {
 }
 
 module.exports = { attach, mobHurtPlan, defensePrior, pickFood, FOOD_BLACKLIST, hasWeapon, hostilesNear,
-  busyInfo, failState, bannedActions, noteRefusal, clearRefusal, startDefense, inShelter, attackerDist, shelterTooSlow };
+  busyInfo, failState, bannedActions, noteRefusal, clearRefusal, startDefense, inShelter, attackerDist, shelterTooSlow, outlookOf };
