@@ -4,7 +4,8 @@
   "description": "FlyBot: тело Minecraft-бота с HTTP API для LLM-мозга",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "test": "node tools/run_tests.js"
   },
   "keywords": [],
   "author": "",

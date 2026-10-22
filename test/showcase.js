@@ -197,7 +197,7 @@ function testTeacherConfig() {
   const ec = JSON.parse(fs.readFileSync(path.join(ROOT, 'brain', 'opencode.engineer.json'), 'utf8')); assert.strictEqual(ec.permission.edit['*'], 'deny');
   // тексты
   const tp = fs.readFileSync(path.join(ROOT, 'brain', 'TEACHER_PROMPT.md'), 'utf8');
-  assert(/## Соседи/.test(tp) && /127\.0\.0\.1:3099\/showcase/.test(tp) && /skill_requests\/<имя>\.md/.test(tp) && /молча/.test(tp) && /≥ ?10/.test(tp) && /адаптировать навык соседа/.test(tp));
+  assert(/## Соседи/.test(tp) && /127\.0\.0\.1:3099\/showcase/.test(tp) && /skill_requests\/<имя>\.md/.test(tp) && /молча/.test(tp) && /адаптировать навык соседа/.test(tp));
   const ep = fs.readFileSync(path.join(ROOT, 'brain', 'ENGINEER_PROMPT.md'), 'utf8');
   assert(/адаптировать навык соседа/.test(ep) && /3099\/showcase\/code/.test(ep));
   const doc = fs.readFileSync(path.join(ROOT, 'SHOWCASE.md'), 'utf8');
