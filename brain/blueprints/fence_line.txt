@@ -1,0 +1,11 @@
+# name: fence_line
+# desc: забор из ели 1x5, для постройки по краю обрыва
+# origin: NW-bottom
+F = spruce_fence
+
+layer 0
+F
+F
+F
+F
+F

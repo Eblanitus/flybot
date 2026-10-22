@@ -309,7 +309,11 @@ function decide(s) {
   if (s.food < T.huntFood && !s.hasFood && s.animals > 0) add(20 + (T.huntFood - s.food) * 3, body('hunt', 'hunt', { count: T.huntCount }, 'охочусь: нечего есть'));
   if (!s.hasPickaxe && s.logs >= T.pickLogs) add(30, body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку'));
   if (!s.hasPickaxe && s.logs < T.needLogs) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, ...(tried('collect_log') ? { radius: wider('collect_log', 48) } : {}) }, 'рублю дерево'));
-  if (s.hasPickaxe && s.cobble < T.cobbleWant) add(26, body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount, ...(tried('collect_stone') ? { radius: wider('collect_stone', 48) } : {}) }, 'добываю камень'));
+  // сброс сбору при опасном обрыве: если под ногами пустота — не копим
+  const edgeHazard = s.snapshot?.hazards?.includes('обрыв') || s.survey?.edges?.some(e => e.drop >= 3);
+  if (s.hasPickaxe && s.cobble < T.cobbleWant && !edgeHazard) add(26, body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount, ...(tried('collect_stone') ? { radius: wider('collect_stone', 48) } : {}) }, 'добиваю камень'));
+  // если обрыв — сбор не начинаем, оставляем следующий кандидат или тихо ждем
+  if (edgeHazard && s.snapshot?.hazards?.includes('обрыв') && !s.running) add(0, body('explore', 'explore', { distance: 8 }, 'обрыв рядом — не начинаю сбор, исследую другое место'));
   // разведка — когда больше нечего; перед ночью — ближе
   add(10, body('explore', 'explore', { distance: duskSoon ? Math.round(T.exploreDist / 2) : T.exploreDist + 24 * tried('explore') }, 'исследую окрестности'));
   return pick();

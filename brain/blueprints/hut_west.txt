@@ -9,7 +9,7 @@ C = cobblestone
 L = spruce_log axis=y
 P = spruce_planks
 D = spruce_door facing=east
-W = glass_pane
+W = spruce_fence
 T = wall_torch facing=east
 U = wall_torch facing=west
 . = air

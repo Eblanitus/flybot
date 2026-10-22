@@ -107,22 +107,22 @@
   },
   "gather_list": {
     "enabled": true,
-    "runs": 71,
-    "ok": 37,
-    "fail": 34,
-    "consecutiveFails": 3,
-    "lastError": "не добрал: sand x4 (sand: навык тела \"collect\" не удался: не вижу sand (добыто 0/4) — исследуй (explore) или копай туннель: руда в стене туннеля станет видна)",
-    "lastRun": "2026-10-22T10:12:18.578Z",
-    "lastOk": "2026-10-22T06:54:16.992Z"
+    "runs": 85,
+    "ok": 47,
+    "fail": 38,
+    "consecutiveFails": 0,
+    "lastError": "не знаю, как получить glass_pane x5",
+    "lastRun": "2026-10-22T13:40:00.512Z",
+    "lastOk": "2026-10-22T13:40:00.512Z"
   },
   "setup_base": {
     "enabled": true,
-    "runs": 13,
+    "runs": 18,
     "ok": 7,
-    "fail": 6,
-    "consecutiveFails": 0,
-    "lastError": "не всё стоит: chest",
-    "lastRun": "2026-10-22T09:34:01.685Z",
+    "fail": 11,
+    "consecutiveFails": 5,
+    "lastError": "не хватает: spruce_planks x12, cobblestone x8; рядом ровных мест нет (нашёл 1, нужно 3) — сдвинуть точку базы или выровнять площадку",
+    "lastRun": "2026-10-22T12:52:51.694Z",
     "lastOk": "2026-10-22T09:34:01.685Z"
   },
   "deposit": {
@@ -289,13 +289,13 @@
   },
   "climb_up": {
     "enabled": true,
-    "runs": 17,
-    "ok": 7,
+    "runs": 18,
+    "ok": 8,
     "fail": 10,
-    "consecutiveFails": 4,
+    "consecutiveFails": 0,
     "lastError": "время вышло (240 с)",
-    "lastRun": "2026-10-22T08:33:57.245Z",
-    "lastOk": "2026-10-22T06:35:47.650Z"
+    "lastRun": "2026-10-22T12:19:34.389Z",
+    "lastOk": "2026-10-22T12:19:34.389Z"
   },
   "chest_open": {
     "enabled": true,
@@ -1092,6 +1092,46 @@
     "lastOk": null
   },
   "craft_gear_v1": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "climb_up_v6": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "chest_open_v7": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_list_v4": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null
+  },
+  "gather_list_alt_safe_v1": {
     "enabled": true,
     "runs": 0,
     "ok": 0,
