@@ -4,15 +4,18 @@
 // зависание или падение навыка не трогает исполнитель.
 //
 // Эндпоинты:
-//   GET  /skills                         — выученные навыки + статистика
+//   GET  /skills                         — выученные навыки + статистика (каждая версия — отдельной строкой)
+//   GET  /catalog[?name=X]               — коротко для мозга: навык -> версии, лучшие по счёту сверху (текст)
 //   GET  /log?since=N&limit=100          — журнал запусков
 //   GET  /health                         — состояние исполнителя и доступность тела
 //   POST /run      {name, params, timeout_sec?}  — запустить и дождаться (по умолчанию 300 с, максимум 1800)
 //   POST /check    {name}                — проверить файл без запуска
-//   POST /rollback {name}                — вернуть предыдущую версию
+//   POST /rollback {name}                — отменить правку файла на месте (вернуть содержимое из .history)
 //   POST /enable | /disable {name}       — включить / выключить
 //   POST /abort                          — убить текущий запуск и отправить телу stop
 // POST — только с Content-Type: application/json, тело до 64 КБ.
+// Версии (brain/versions.js): build_hut, build_hut_v2, build_hut_v3… — отдельные файлы, отдельный счёт и автовыключение.
+// Всё, что попало в .history (правка на месте), само становится новой версией — ничего не теряется.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -21,15 +24,17 @@ const vm = require('vm');
 const crypto = require('crypto');
 const { fork } = require('child_process');
 const bodyapi = require('./bodyapi');
+const V = require('./versions');
 
 const PORT = parseInt(process.env.RUNNER_PORT || '3200', 10);
 const BODY_URL = (process.env.BODY_URL || bodyapi.DEFAULT_URL).replace(/\/+$/, '');
 const DIR = __dirname;
-const LEARNED = path.join(DIR, 'learned');
+const DATA = process.env.RUNNER_DATA ? path.resolve(process.env.RUNNER_DATA) : DIR; // для проверок: своя папка с learned/ и статистикой
+const LEARNED = path.join(DATA, 'learned');
 const HISTORY = path.join(LEARNED, '.history');
 const TRASH = path.join(LEARNED, '.trash');
-const STATS_FILE = path.join(DIR, 'skills_stats.json');
-const LOG_FILE = path.join(DIR, 'runner.log');
+const STATS_FILE = path.join(DATA, 'skills_stats.json');
+const LOG_FILE = path.join(DATA, 'runner.log');
 const WORKER = path.join(DIR, 'worker.js');
 
 const DEFAULT_TIMEOUT = 300, MAX_TIMEOUT = 1800, CHECK_TIMEOUT = 10;
@@ -112,9 +117,23 @@ function snapshotVersion(name) {
   const newFile = `${name}.${tsName()}.js`;
   if (same > 0) { fs.renameSync(list[same].full, path.join(HISTORY, newFile)); return null; } // подняли наверх стека
   fs.writeFileSync(path.join(HISTORY, newFile), src);
+  importVersions(); // до обрезки истории: старые снимки уже лежат версиями
   for (const old of historyList(name).slice(HISTORY_KEEP)) trash(old.full, old.file.replace(/\.js$/, ''));
   logAdd('version_saved', { name, file: newFile });
   return newFile;
+}
+
+// История -> версии: каждый снимок с новым кодом становится <имя>_v<N> (копия; .history не трогаем)
+let importSig = null;
+function importVersions() {
+  let sig;
+  try { sig = fs.readdirSync(HISTORY).sort().join('|'); } catch (e) { return []; }
+  if (sig === importSig) return [];
+  let made = [];
+  try { made = V.importHistory(LEARNED, { historyDir: HISTORY }); } catch (e) { console.log('[runner] версии из истории:', e.message); return []; }
+  importSig = sig;
+  for (const m of made) logAdd('version_imported', { name: m.name, from: m.from });
+  return made;
 }
 
 // ---------- Проверка файла ----------
@@ -200,7 +219,7 @@ function recordResult(name, ok, error, runId) {
     s.fail++; s.consecutiveFails++; s.lastError = String(error || 'неизвестная ошибка').slice(0, 2000);
     if (s.consecutiveFails >= MAX_FAILS && s.enabled !== false) {
       s.enabled = false; autoDisabled = true;
-      s.disabledReason = `авто: ${MAX_FAILS} провала подряд; последняя ошибка: ${String(error || '').split('\n')[0].slice(0, 300)}`;
+      s.disabledReason = `авто: ${MAX_FAILS} провала подряд (выключена только эта версия); последняя ошибка: ${String(error || '').split('\n')[0].slice(0, 300)}`;
       s.disabledAt = s.lastRun;
       logAdd('auto_disable', { name, runId, reason: s.disabledReason });
     }
@@ -271,7 +290,7 @@ async function doRun(name, params, timeoutSec) {
   if (r.output) out.output = r.output.slice(0, 1500);
   if (autoDisabled) {
     out.autoDisabled = true;
-    out.note = `навык выключен: ${MAX_FAILS} провала подряд. Исправь файл, /check, затем /enable — или /rollback.`;
+    out.note = `версия "${name}" выключена: ${MAX_FAILS} провала подряд (другие версии навыка работают — GET /catalog?name=${V.baseOf(name)}). Новая версия — заявкой инженеру; вернуть эту — /enable.`;
   } else if (!ok) {
     out.note = 'Разбери причину: правило в notes.md / правка навыка / заявка в core_bugs.md (см. README.md).';
   }
@@ -285,6 +304,7 @@ function badName(name) {
 }
 
 async function listSkills() {
+  importVersions();
   let files = [];
   try { files = fs.readdirSync(LEARNED, { withFileTypes: true }).filter(d => d.isFile() && !d.name.startsWith('.')).map(d => d.name); } catch (e) {}
   const skills = []; const ignored = [];
@@ -294,8 +314,12 @@ async function listSkills() {
     const name = m[1];
     const c = await checkFile(name);
     const s = stats[name];
+    let note = null;
+    try { note = V.noteOf(fs.readFileSync(fileOf(name), 'utf8')); } catch (e) {}
+    const pv = V.parseName(name);
     skills.push({
       name,
+      base: pv.base, version: pv.n, note,
       description: c.meta ? c.meta.description : null,
       params: c.meta ? c.meta.params : null,
       enabled: isEnabled(name),
@@ -317,7 +341,7 @@ async function handleRun(b) {
   if (!fs.existsSync(fileOf(b.name))) return [404, { ok: false, error: `навык не найден: learned/${b.name}.js` }];
   if (!isEnabled(b.name)) {
     const s = stats[b.name];
-    return [200, { ok: false, error: `навык "${b.name}" выключен: ${s.disabledReason || 'вручную'}. Исправь файл, /check, потом /enable (или /rollback).` }];
+    return [200, { ok: false, error: `версия "${b.name}" выключена: ${s.disabledReason || 'вручную'}. Другие версии навыка — GET /catalog?name=${V.baseOf(b.name)}; вернуть эту — /enable.` }];
   }
   if (b.params !== undefined && (b.params === null || typeof b.params !== 'object' || Array.isArray(b.params))) return [400, { ok: false, error: 'params должен быть объектом' }];
   if (active) return [200, { ok: false, error: `исполнитель занят навыком "${active.name}" (runId ${active.runId}, идёт ${Math.round((Date.now() - active.startedAt) / 1000)} с). Дождись или POST /abort.` }];
@@ -342,6 +366,7 @@ function handleRollback(b) {
   const bad = badName(b.name);
   if (bad) return [400, { ok: false, error: bad }];
   if (active && active.name === b.name) return [200, { ok: false, error: 'навык сейчас запущен; дождись или POST /abort' }];
+  importVersions(); // всё из истории уже лежит версиями — откат ничего не теряет
   const file = fileOf(b.name);
   const list = historyList(b.name);
   let curHash = null;
@@ -350,6 +375,9 @@ function handleRollback(b) {
   const target = list[i + 1];
   if (!target) return [200, { ok: false, error: `нет предыдущей версии для "${b.name}" в learned/.history (версий: ${list.length})` }];
   if (curHash && fs.existsSync(file)) fs.copyFileSync(file, path.join(TRASH, `${b.name}.${tsName()}.js`)); // страховка
+  let kept = null; // текущий код (правку на месте) не теряем: он остаётся отдельной версией
+  try { if (curHash) kept = V.keepAsVersion(LEARNED, V.baseOf(b.name), fs.readFileSync(file, 'utf8'), `отменённая правка ${b.name} (rollback ${nowIso().slice(0, 16)}); ${V.NO_NOTE}`, b.name); } catch (e) { console.log('[runner] rollback: версия не сохранена:', e.message); }
+  if (kept) logAdd('version_kept', { name: kept, from: b.name });
   for (let k = 0; k <= i; k++) trash(list[k].full, list[k].file.replace(/\.js$/, '')); // откатываемые версии уходят из стека
   fs.copyFileSync(target.full, file);
   checkCache.delete(b.name);
@@ -357,7 +385,7 @@ function handleRollback(b) {
   s.enabled = true; s.consecutiveFails = 0; delete s.disabledReason; delete s.disabledAt;
   saveStats();
   logAdd('rollback', { name: b.name, restored: target.file });
-  return [200, { ok: true, name: b.name, restored: target.file, versionsLeft: list.length - i - 1, note: 'навык включён, счётчик провалов сброшен; проверь /check и /run' }];
+  return [200, { ok: true, name: b.name, restored: target.file, versionsLeft: list.length - i - 1, ...(kept ? { keptAs: kept } : {}), note: 'отменена правка на месте: файл вернулся к прошлому содержимому, навык включён, счётчик провалов сброшен. Все прежние версии и так доступны по своим именам (GET /catalog?name=' + V.baseOf(b.name) + ').' }];
 }
 
 function handleToggle(b, on) {
@@ -423,6 +451,16 @@ const server = http.createServer((req, res) => {
         return send(res, 200, { ok: true, started: b.name, runId: active.runId, hint: 'ход: GET :3199/wait; итог: GET :3200/log' });
       }
       case '/skills': return guard(listSkills().then(r => send(res, 200, r)));
+      case '/catalog': return guard(listSkills().then(r => {
+        const one = q.get('name');
+        let groups = V.group(r.skills);
+        if (one) groups = groups.filter(g => g.base === V.baseOf(one));
+        if (one && !groups.length) return send(res, 404, { ok: false, error: 'нет навыка ' + one });
+        if (q.get('format') === 'json') return send(res, 200, { ok: true, skills: groups.map(g => ({ base: g.base, description: g.description, params: g.params, next: g.next,
+          versions: g.versions.map(v => ({ name: v.name, note: v.note, enabled: v.enabled, runs: v.stats.runs, ok: v.stats.ok, fail: v.stats.fail })), broken: g.broken.map(v => v.name) })) });
+        res.statusCode = 200; res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end(V.catalogText(groups, { full: !!one }));
+      }));
       case '/health': return guard(health().then(r => send(res, 200, r)));
       case '/log': {
         const since = parseInt(q.get('since') || '0', 10) || 0;
@@ -469,6 +507,7 @@ const shutdown = () => { try { if (active && active.handle) active.handle.abort(
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
 
 server.on('error', e => { console.log('[runner] http error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
+try { importVersions(); } catch (e) {}
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[runner] http://127.0.0.1:${PORT}  тело: ${BODY_URL}  навыки: ${LEARNED}`);
   logAdd('start', { port: PORT, bodyUrl: BODY_URL });

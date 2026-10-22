@@ -42,7 +42,8 @@ function validate(mod, name) {
     return { errors, warnings };
   }
   if (typeof mod.name !== 'string' || !mod.name) errors.push('нет поля name (строка)');
-  else if (mod.name !== name) errors.push(`name "${mod.name}" не совпадает с именем файла "${name}.js"`);
+  // версия build_hut_v3.js может называться и build_hut_v3, и build_hut (копия прежней версии)
+  else if (mod.name !== name && !(/_v\d{1,3}$/.test(name) && name.replace(/_v\d{1,3}$/, '') === mod.name)) errors.push(`name "${mod.name}" не совпадает с именем файла "${name}.js" (у версии <имя>_vN можно name <имя>)`);
   if (typeof mod.description !== 'string' || !mod.description.trim()) errors.push('нет description (непустая строка: что делает и когда применять)');
   if (typeof mod.run !== 'function') errors.push('нет функции run(api, params)');
   else if (mod.run.length > 2) warnings.push('run принимает больше 2 аргументов: используются только (api, params)');
