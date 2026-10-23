@@ -207,16 +207,35 @@ module.exports = async () => {
     const e0 = await rejects(BP.buildBlueprint(w0.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }), /не хватает: cobblestone ×102/, 'пустая сумка');
     assert.strictEqual(e0.extra.ok, false); assert.strictEqual(w0.log.placed, 0); assert.strictEqual(w0.log.dug, 0);
   }
+  // ---- core task scenario: 55 cobblestone (не хватает ~46), 51 planks — строим частью, placed > 30 ----
+  // тестовый hut_west использует glass_pane вместо spruce_fence (см. строку 89)
+  {
+    const w = mkWorld({ inv: { cobblestone: 55, spruce_log: 13, spruce_planks: 51, spruce_door: 3, glass_pane: 4, torch: 4 } });
+    const dry = await BP.buildBlueprint(w.ctx, null, { name: 'hut_west', x: 0, y: 64, z: 0, dry: 1 });
+    assert(dry.missing.cobblestone >= 45 && dry.missing.cobblestone <= 48, 'missing cobblestone ~46: ' + dry.missing.cobblestone);
+    assert(dry.missing.glass_pane === 1, 'missing glass_pane: ' + JSON.stringify(dry.missing));
+    const e = await rejects(BP.buildBlueprint(w.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }), /не достроено: .*не хватило: .*cobblestone/, 'частичная стройка: core task scenario');
+    assert.strictEqual(e.extra.ok, false);
+    assert(e.extra.placed > 30, 'поставлено > 30 клеток: ' + e.extra.placed);
+    assert(e.extra.missing.cobblestone >= 43, 'в итоге не хватает cobblestone: ' + e.extra.missing.cobblestone);
+    assert(w.log.placed > 30, 'логировано placed > 30: ' + w.log.placed);
+    // partial=1 должен тоже работать (даже если бы отказ был)
+    const w2 = mkWorld({ inv: { cobblestone: 55, spruce_log: 13, spruce_planks: 51, spruce_door: 3, glass_pane: 4, torch: 4 } });
+    const e2 = await rejects(BP.buildBlueprint(w2.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0, partial: 1 }), /не достроено: .*не хватило: .*cobblestone/, 'partial=1 работает');
+    assert.strictEqual(e2.extra.ok, false);
+    assert(e2.extra.placed > 30, 'partial=1: поставлено > 30: ' + e2.extra.placed);
+  }
 
   // ---- верстак в клетке стены: свой — снимается и клетка строится, чужой — не трогаем ----
   {
     const FULL0 = { cobblestone: 110, spruce_log: 12, spruce_planks: 49, spruce_door: 1, glass_pane: 5, torch: 2, dirt: 6 };
     const wall = BP.instantiate(hut, 0, 64, 0, 0).cells.find(k => k.kind === 'block' && k.block === 'cobblestone' && k.ly === 1);
     const key = `${wall.x},${wall.y},${wall.z}`;
+    const posKey = (pos) => `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
     for (const own of [true, false]) {
       const w = mkWorld({ inv: FULL0 });
       w.set(wall.x, wall.y, wall.z, 'crafting_table');
-      w.ctx.ownBlocks = { get: k => own && k === key ? { name: 'crafting_table' } : undefined };
+      w.ctx.ownBlocks = { get: (pos) => own && posKey(pos) === key ? { name: 'crafting_table' } : undefined };
       const r = await BP.buildBlueprint(w.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }).catch(e => e.extra);
       if (own) { assert.strictEqual(w.get(wall.x, wall.y, wall.z).name, 'cobblestone', 'свой верстак заменён'); assert(r.ok, JSON.stringify(r).slice(0, 300)); }
       else { assert.strictEqual(w.get(wall.x, wall.y, wall.z).name, 'crafting_table', 'чужой верстак на месте'); assert(!r.ok); }

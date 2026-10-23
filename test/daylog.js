@@ -16,9 +16,27 @@ function mk(dir, extra) {
   const chat = [], events = [];
   const skillsFile = path.join(dir, 'skills_stats.json');
   fs.writeFileSync(skillsFile, JSON.stringify({ build_hut: { ok: 2, fail: 1 }, mine_vein: { ok: 5, fail: 0 } }));
+  const ownBlocks = new Map();
+  // Mock ledger with death losses for day 5 (75 items as per core task)
+  const mockLedger = {
+    days: {
+      '5': {
+        cobblestone: { out: { died: { смерть: 52 } } },
+        spruce_log: { out: { died: { смерть: 7 } } },
+        andesite: { out: { died: { смерть: 5 } } },
+        granite: { out: { died: { смерть: 4 } } },
+        pointed_dripstone: { out: { died: { смерть: 3 } } },
+        cobbled_deepslate: { out: { died: { смерть: 2 } } },
+        wooden_pickaxe: { out: { died: { смерть: 1 } } },
+        dripstone_block: { out: { died: { смерть: 1 } } }
+      }
+    }
+  };
   const ctx = Object.assign({
     bot, ready: true, dataDir: dir, daylogSkillsFile: skillsFile, stats: { distanceTraveled: 1000 },
-    events: { push: (type, d) => events.push({ type, ...d }) }, tasks: { current: null, legacyBusy: 0 }
+    events: { push: (type, d) => events.push({ type, ...d }) }, tasks: { current: null, legacyBusy: 0 },
+    ownBlocks: { has: () => true, get: () => null, size: 0 },
+    ledger: mockLedger
   }, extra || {});
   const session = { bot, timers: [], ended: false };
   return { ctx, bot, chat, events, session, skillsFile };
@@ -72,11 +90,11 @@ module.exports = async () => {
     assert(line.length <= 200, 'длина ' + line.length);
     assert(/^День 5: построено 9 блоков \(cobblestone 6, oak_planks 2, stone 1\)/.test(line), line);
     assert(/добыто stone 7, coal_ore 3, dirt 1/.test(line), line);
-    assert(/смертей 1 \(выпало 31 предм\.\)/.test(line), line);
+    assert(/смертей 1 \(выпало 75 предм\.\)/.test(line), line);
     assert(/прошла 812 бл/.test(line) && /навыки ok 2\/провал 1/.test(line), line);
     assert(!line.startsWith('/'));
     const ev = events.find(e => e.type === 'day_report');
-    assert(ev && ev.day === 5 && ev.built === 9 && ev.aux === 8 && ev.deaths === 1 && ev.skills.ok === 2 && ev.skills.fail === 1 && !ev.warn);
+    assert(ev && ev.day === 5 && ev.built === 9 && ev.aux === 8 && ev.deaths === 1 && ev.skills.ok === 2 && ev.skills.fail === 1 && ev.lostTotal === 75 && !ev.warn);
     const rows = fs.readFileSync(path.join(dir, 'days.log'), 'utf8').trim().split('\n').map(JSON.parse);
     assert.strictEqual(rows.length, 1); assert.strictEqual(rows[0].day, 5); assert.strictEqual(rows[0].line, line); assert.deepStrictEqual(rows[0].skills.by.build_hut, [1, 0]);
     // новый день пуст, вчера в snapshot

@@ -94,6 +94,33 @@ async function testBandit(reg) {
     assert.strictEqual(V.stats(ctx3).stats.demo['*'].a.ok, 1);
     // без файла (тест) — только в памяти, ничего не пишет
     assert.strictEqual(ctx.variantsFile, undefined);
+    // ----- dangerous situation tests -----
+    // isDangerous: HP < 10, foe nearby (dist <= 10), night or underground
+    // Demo family sitKeys uses s.t and s.k
+    const dangerSit = { t: 'zombie', k: 'k1', hpNum: 6, dist: 7, targetType: 'mob', phase: 'night', place: 'outdoors' };
+    const safeSit = { t: 'zombie', k: 'k1', hpNum: 15, dist: 7, targetType: 'mob', phase: 'day', place: 'outdoors' };
+    // Setup: variant 'a' (bad, ok=0), 'b' (good, ok=5/5), 'c' (fresh, applies when x=true)
+    const ctxD = { bot: { health: 6 }, variantRand: () => 0.1 };
+    for (let i = 0; i < 5; i++) { V.record(ctxD, 'demo', 'a', dangerSit, { ok: false, score: 0 }); V.record(ctxD, 'demo', 'b', dangerSit, { ok: true, score: 1 }); }
+    // Fresh variant 'c' becomes applicable in dangerSit (x: true)
+    const dangerSitX = { ...dangerSit, x: true };
+    // In dangerous situation: should NOT pick fresh 'c' even with low rng, should pick 'b' (good)
+    const chDanger = V.choose(ctxD, 'demo', dangerSitX, { rng: () => 0.01 });
+    assert.strictEqual(chDanger.name, 'b', 'опасная обстановка: не выбирает fresh, а лучший b');
+    assert(/опасная обстановка.*исследование выкл/.test(chDanger.why), 'why упоминает опасную обстановку: ' + chDanger.why);
+    // In dangerous situation: should NOT pick 'a' (ok=0) when 'b' exists
+    const chDanger2 = V.choose(ctxD, 'demo', dangerSit, { rng: () => 0.99 });
+    assert.strictEqual(chDanger2.name, 'b', 'опасная обстановка: не выбирает a (ok=0)');
+    // In safe situation: fresh 'c' CAN be picked with low rng
+    const ctxS = { bot: { health: 15 }, variantRand: () => 0.1 };
+    for (let i = 0; i < 5; i++) { V.record(ctxS, 'demo', 'a', safeSit, { ok: false, score: 0 }); V.record(ctxS, 'demo', 'b', safeSit, { ok: true, score: 1 }); }
+    const chSafe = V.choose(ctxS, 'demo', { ...safeSit, x: true }, { rng: () => 0.01 });
+    assert.strictEqual(chSafe.name, 'c', 'спокойная обстановка: fresh выбирается при низком rng');
+    // Verify NEW_P is effectively 0 in danger: fresh not picked even at rng=0
+    assert.strictEqual(V.choose(ctxD, 'demo', { ...dangerSit, x: true }, { rng: () => 0 }).name, 'b', 'при rng=0 в опасности fresh не выбирается');
+    // Verify reason logging includes why not best
+    const whyTest = V.choose(ctxD, 'demo', dangerSit, { rng: () => 0.99 });
+    assert(/лучший 5\/5/.test(whyTest.why), 'why содержит счёт лучшего: ' + whyTest.why);
   } finally { V.setRegistry(null); }
   console.log('variants bandit: OK');
 }

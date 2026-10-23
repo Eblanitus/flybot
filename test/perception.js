@@ -27,5 +27,15 @@ module.exports = async () => {
   let sh = shelterInfo(mk(box)); assert(sh.closed && sh.roof && sh.walls === 8 && !sh.open.length && sh.skill === false, JSON.stringify(sh));
   box.delete('0,66,0'); box.delete('0,65,-1');
   sh = shelterInfo(mk(box)); assert(!sh.closed && !sh.roof && sh.walls === 7 && sh.open[0] === 'север (голова)', JSON.stringify(sh));
+
+  // hazards: сталагмит (pointed_dripstone) в футах или голове
+  const { hazards } = require('../lib/perception');
+  const botDripFeet = { entity: { position: new Vec3(0.5, 64, 0.5) }, blockAt: p => Math.floor(p.y) === 64 ? { name: 'pointed_dripstone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' } };
+  const botDripHead = { entity: { position: new Vec3(0.5, 63.5, 0.5) }, blockAt: p => Math.floor(p.y) === 65 ? { name: 'pointed_dripstone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' } };
+  const botNoDrip = { entity: { position: new Vec3(0.5, 64, 0.5) }, blockAt: p => ({ name: 'stone', boundingBox: 'block' }) };
+  const useful = { lava: null };
+  assert(hazards(botDripFeet, useful).includes('сталагмит'), 'hazards includes сталагмит at feet');
+  assert(hazards(botDripHead, useful).includes('сталагмит'), 'hazards includes сталагмит at head');
+  assert(!hazards(botNoDrip, useful).includes('сталагмит'), 'hazards no сталагмит on stone');
   console.log('perception: OK');
 };

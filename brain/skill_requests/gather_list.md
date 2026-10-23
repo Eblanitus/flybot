@@ -1,23 +1,10 @@
 # gather_list — от учителя
-
-Что не так: навык не знает обычного имени предмета «stone» (в игре камень в инвентаре — `cobblestone`) и отказывает всей задачи: «не знаю, как получить stone». Проверка недостижимости стоит ПОСЛЕ сбора: во втором прогоне навык 64 с собирал брёвна и только потом сообщил, что `stone` недостижим.
-
-Доказательства:
-- brain/runner.log #1142/#1143 (13:51:23-13:51:25): gather_list items="spruce_planks:24,stone:24" → провал за 2.1 с «не добрал: stone x24 (не знаю, как получить stone)»;
-- brain/runner.log #1144/#1146 (13:52:51-13:53:55): items="spruce_log:16,stone:24" → 64.1 с: сначала `collect spruce_log` (events.log #78/#79, 13:52:51-13:53:55), потом тот же отказ;
-- brain/runner.log #1164/#1171 (13:55:46-13:55:48): уже с настоящим именем items="spruce_log:16,cobblestone:24" → «не добрал: cobblestone x3 (не получается добраться до stone: не дотянулся)»; это 3-й провал подряд, навык выключен авто (runner.log #1170; MAX_FAILS=3 — brain/runner.js:37,201);
-- код: brain/learned/gather_list.js — карта сырья RAW (стр. 32) знает блок `stone` (это `collect block=stone`), но самого предмета `stone` в ней нет → он уходит в `unknown` (стр. 68-71) и в отказ «не знаю, как получить stone» (стр. 172-174, 214);
-- статистика: `GET :3199/showcase` → gather_list runs 62, ok 33, fail 29; в lastErrors есть «не добрал: stone x24 (не знаю, как получить stone)»;
-- заявку на этот навык уже написал мозг (brain/skill_requests/gather_list.md, текст ошибки совпадает с провалом #1143) — правки в навыке не было, `.done.md` нет.
-
-Кто решал: skill:gather_list (код) — и brain (составил запрос с недостижимым именем и повторил его после явного отказа).
-
-Что нужно (правка существующего навыка, не новый):
-- Понимать синонимы предметов: `stone` → `cobblestone`, `log` → `spruce_log`/`oak_log`/`birch_log`, `planks` → `spruce_planks`, `coal_ore`/`ore` → `coal`, `iron_ore` → `iron`, `copper_ore` → `copper`;
-- Проверять недостижимость ДО сбора: если в списке есть предмет, которого нет ни в рецептах, ни в сырье, — сразу вернуть `missing` с этим предметом и ближайшим известным именем («stone» → «cobblestone»), не тратя минуту на collect остального;
-- В `missing`/`collected`/`plan` писать настоящие имена инвентаря, чтобы повторный вызов сразу был рабочим;
-- В отказе «не знаю, как получить X» называть X и подсказку, чем его заменить (сейчас только X).
-
-Как проверить: запуск items="spruce_planks:24,stone:24" — вместо провала за 2 с вернуть ok с 24 булыжником и 24 досками; заведомо чужое имя (например items="quartz:4") — мгновенный отказ (<1 с, без collect) с подсказкой правильного имени в `missing`; в brain/runner.log не должно остаться провалов с текстом «не знаю, как получить».
-
-Случай: 20261021-235355-6, уроки L005 (мозг) и L006 (код).
+Что не так:Skill gather_list Consistently fails to collect cobblestone and other resources because it cannot craft the required tools (wooden_pickaxe, stone_pickaxe, etc.). Crafting always fails, so the skill can never gather the needed materials. This has persisted for 19 consecutive runs (runs 37–55 in runner.log), all with the same error: "не добрал: cobblestone x2". Without cobblestone, build_blueprint fails and construction stops entirely.
+Доказательства: runner.log #3894 (gather_list run #56: "запуск прерван (POST /abort): процесс навыка убит, телу отправлен stop"); events.log #14 (build_blueprint failed: missing cobblestone ×30, spruce_log ×8, torch ×1, spruce_fence ×1, spruce_planks ×2); events.log #75 (collect failed: "не вижу stone (добыто 0/16)"); day_report #64 (skills ok 1/failed 3, gather_list [0,3]); runnerTail runs 37–55 all fail with same error.
+Кто решал: skill:gather_list
+Версия: — (все 19 запусков подряд провалились, успешной версии не было).
+Что нужно: gather_list должен проверять наличие необходимых инструментов перед сбором или самостоятельно крафтовать их, вместо того чтобы безуспешно пытаться и прерывать процесс. Муха должна уметь добирать нужные блоки (cobblestone, spruce_log, torch, spruce_fence, spruce_planks) перед build_blueprint, а не падать с ошибкой, когда инструментов нет.
+Вариант: "исправление": добавить в gather_list проверку инструментов и автоматический крафт нужных инструментов перед сбором. "новый вариант": использовать подход "collect with tool check" — сначала обеспечить инструменты, потом собирать ресурсы.
+Простой до: 19 мин (за сутки, день 52); самый длинный 178 мин (просмотр days.log); построено за сутки: 0 блоков (day_report #64).
+Как проверить: после исправления runner.log показывает successful сбор cobblestone ×30 без ошибки "не добрал"; build_blueprint проходит с нужными материалами; idleMin снижается, built растет. Ключевая запись — runner.log #3894 и events.log #14.
+Случай: 20261023-153043-76

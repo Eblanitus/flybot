@@ -83,13 +83,13 @@ function saveStats() {
   } catch (e) { console.log('[runner] не смог записать статистику:', e.message); }
 }
 function stat(name) {
-  if (!stats[name]) stats[name] = { enabled: true, runs: 0, ok: 0, fail: 0, consecutiveFails: 0, lastError: null, lastRun: null, lastOk: null };
+  if (!stats[name]) stats[name] = { enabled: true, runs: 0, ok: 0, fail: 0, consecutiveFails: 0, lastError: null, lastRun: null, lastOk: null, nestedRuns: 0, nestedOk: 0, nestedFail: 0, emptyRuns: 0, emptyOk: 0 };
   return stats[name];
 }
 const isEnabled = name => !(stats[name] && stats[name].enabled === false);
 const statView = name => {
   const s = stats[name] || stat(name);
-  return { runs: s.runs, ok: s.ok, fail: s.fail, consecutiveFails: s.consecutiveFails, lastError: s.lastError, lastRun: s.lastRun, lastOk: s.lastOk };
+  return { runs: s.runs, ok: s.ok, fail: s.fail, consecutiveFails: s.consecutiveFails, lastError: s.lastError, lastRun: s.lastRun, lastOk: s.lastOk, nestedRuns: s.nestedRuns, nestedOk: s.nestedOk, nestedFail: s.nestedFail, emptyRuns: s.emptyRuns, emptyOk: s.emptyOk };
 };
 
 // ---------- История версий ----------
@@ -210,13 +210,23 @@ async function checkFile(name, { force = false } = {}) {
 }
 
 // ---------- Запись результата (счёт версии; выключает только мозг — /disable) ----------
-function recordResult(name, ok, error, runId) {
+// meta: { nested: true } — вложенный прогон помощника, не считается в основной счётчик навыка
+// meta: { empty: true } — прогон вернул ok:true, но ничего не сделал (нулевой результат), не считается в ok/runs
+function recordResult(name, ok, error, runId, meta = {}) {
   const s = stat(name);
-  s.runs++; s.lastRun = nowIso();
-  if (ok) { s.ok++; s.consecutiveFails = 0; s.lastOk = s.lastRun; }
-  else { s.fail++; s.consecutiveFails++; s.lastError = String(error || 'неизвестная ошибка').slice(0, 2000); }
+  if (meta.nested) {
+    s.nestedRuns++;
+    if (ok) s.nestedOk++; else s.nestedFail++;
+  } else if (meta.empty) {
+    s.emptyRuns++;
+    if (ok) s.emptyOk++;
+  } else {
+    s.runs++; s.lastRun = nowIso();
+    if (ok) { s.ok++; s.consecutiveFails = 0; s.lastOk = s.lastRun; }
+    else { s.fail++; s.consecutiveFails++; s.lastError = String(error || 'неизвестная ошибка').slice(0, 2000); }
+  }
   saveStats();
-  if (ok) { try { snapshotVersion(name); } catch (e) { console.log('[runner] история:', e.message); } }
+  if (ok && !meta.nested && !meta.empty) { try { snapshotVersion(name); } catch (e) { console.log('[runner] история:', e.message); } }
 }
 
 // ---------- Запуск навыка ----------
@@ -246,7 +256,7 @@ async function doRun(name, params, timeoutSec) {
       onMessage: m => {
         if (m.type === 'log') { if (logs.length < 500) logs.push(m.msg); logAdd('log', { runId, name, msg: m.msg }); }
         else if (m.type === 'nested') {
-          recordResult(m.name, m.ok, m.error, runId);
+          recordResult(m.name, m.ok, m.error, runId, { nested: true });
           logAdd('nested', { runId, name: m.name, ok: m.ok, ...(m.ok ? {} : { error: String(m.error).split('\n')[0] }) });
         }
       }
@@ -268,7 +278,9 @@ async function doRun(name, params, timeoutSec) {
     error = 'процесс навыка завершился без результата: ' + (r.spawnError || `код ${r.exitCode}${r.signal ? ', сигнал ' + r.signal : ''}`) + (r.output ? '\n' + r.output.slice(0, 1000) : '');
   }
 
-  recordResult(name, ok, error, runId);
+  // Пустой результат: ok=true, но навык ничего не сделал (blocker, уже на месте, и т.д.)
+  const isEmpty = ok && value && typeof value === 'object' && (value.empty === true || value.blocker === true || value.nothingDone === true);
+  recordResult(name, ok, error, runId, { empty: isEmpty });
   logAdd('run_end', { runId, name, ok, sec, ...(ok ? {} : { error: String(error).split('\n')[0].slice(0, 300) }), ...(stopSent ? { stop: stopSent } : {}) });
   active = null;
 

@@ -1,0 +1,24 @@
+# name: base_pad
+# desc: базовая площадка 5x5 у точки базы -393 67 36: булыжник, верстак и печь у северного края, факела по северным углам
+# origin: NW-bottom
+# Слой 0 — площадка (на его высоте стоит y); слой 1 — верстак, печь и факелы поверх площадки.
+# Сундук в чертёж не кладётся (см. notes.md, «Нужно мухе»).
+C = cobblestone
+T = crafting_table
+F = furnace facing=south
+L = torch
+. = air
+
+layer 0
+CCCCC
+CCCCC
+CCCCC
+CCCCC
+CCCCC
+
+layer 1
+L...L
+.T.F.
+.....
+.....
+.....

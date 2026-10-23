@@ -7,6 +7,7 @@ const R = require('./reflexes');
 const T = require('./thresholds');
 
 module.exports = async function selfTest() {
+  console.log('SELFTEST-START');
   // пороги — числа
   for (const [k, v] of Object.entries(T)) assert(typeof v === 'number' && Number.isFinite(v), 'порог ' + k + ' не число');
   // автопилот: день без забот -> дневная работа; враг-агрессор -> драка; мало HP -> укрытие; мозг занял тело -> ничего
@@ -408,6 +409,37 @@ module.exports = async function selfTest() {
   const openPit = { ...nightBase, sheltered: false, hostilesNear: 1, hostile: { name: 'creeper', d: 3 } };
   const pitAct = D(openPit);
   assert.ok(pitAct && pitAct.key !== 'wait_night', 'open pit with creeper 3m -> action');
+
+  // (4) zero HP / crit without food: waits < 2 min, then triggers emergency action (e.g. explore or go_base) instead of hanging indefinitely
+  const zeroHpState = { ...base, hp: 0, hasFood: false, sheltered: true, failInfo: {} };
+  assert.strictEqual(D(zeroHpState), null, 'zero HP without food: waits initially (< 2 min)');
+  zeroHpState.failInfo.lowhp_waitCount = 65;
+  const emergencyAct = D(zeroHpState);
+  assert.ok(emergencyAct !== null, 'zero HP without food after > 2 min: does not hang, triggers emergency action');
+
+  // ---- behavior_autopilot_lowhp_no_build (заявка учителя): низкий HP + нет еды на регенерацию — только восстановление ----
+  console.error('STEP lowhp block start');
+  const buildPad = { name: 'base_pad', x: -395, y: 67, z: 34, rot: 0, sig: 'bp' };
+  const goalStone = { name: 'collect', params: { block: 'stone', count: 60 }, kind: 'body', sig: 'g' };
+  // постройка от мозга при HP<10 и еде<18 не берётся — укрытие, а не «строю base_pad»
+  assert.strictEqual(decide({ ...base, hp: 8, food: 10, hasFood: false, blocks: T.apLowHpBlocks, build: buildPad, buildDist: 3 }).key, 'lowhp_shelter', 'постройка от мозга при низком HP без еды — не брать');
+  // в закрытом укрытии при низком HP без еды — ждём, не выходим на постройку к месту в поле
+  assert.strictEqual(decide({ ...base, hp: 8, food: 10, hasFood: false, sheltered: true, build: buildPad, buildDist: 3 }), null, 'в укрытии при низком HP без еды — ждём, не выходим на постройку');
+  // сбор (цель мозга) при низком HP без еды — запрет; давление простоя не отменяет запрет
+  assert.strictEqual(decide({ ...base, hp: 9, food: 17, hasFood: false, sheltered: true, goal: goalStone }), null, 'сбор при низком HP без еды — запрет');
+  assert.strictEqual(decide({ ...base, hp: 9, food: 17, hasFood: false, sheltered: true, goal: goalStone, idleBuildMin: 40 }), null, 'давление простоя не перебивает запрет работы при низком HP без еды');
+  // ---- враг-игрок nearby / неудачный побег от игрока — работа запрещена ----
+  const enemy = { name: 'Eblanitus228', d: 11, why: 'убивал меня 4 р.', aggressor: true };
+  // игрок рядом без оружия — бегство, а не работа
+  assert.strictEqual(decide({ ...base, hp: 20, hasWeapon: false, enemies: [enemy] }).key, 'escape_player', 'игрок рядом — бегство, а не работа');
+  // после неудачного побега от игрока — сбор/стройка/разведка/рутина не возобновляются
+  const afterEscape = { ...base, hp: 20, food: 20, hasWeapon: false, enemies: [enemy], blocked: { escape_player: true }, failInfo: { escape_player: { reason: 'побег не оторвал от врага', count: 2, norm: 'побег не оторвал от врага', t: Date.now() } } };
+  const afterEsc = decide(afterEscape);
+  if (!(!afterEsc || !/^(build|build_go|build_gather|collect_log|collect_stone|explore|day_routine|goal)$/.test(afterEsc.key))) throw new Error('WORK-TASK-RETURNED: ' + JSON.stringify(afterEsc));
+  // с базой далеко — уходим на базу после неудачного побега, а не собираем
+  assert.strictEqual(decide({ ...afterEscape, base: { x: -393, y: 67, z: 36, r: 96 }, baseDist: 300 }).key, 'go_base', 'после неудачного побега — уход на базу, а не сбор');
+  // в закрытом укрытии при critique HP и игроке рядом — ждём, не выходим на постройку
+  assert.strictEqual(decide({ ...base, hp: 2, food: 0, hasFood: false, sheltered: true, enemies: [enemy], build: buildPad, buildDist: 3 }), null, 'укрытие при critique HP и игроке рядом — ждём, не строим');
 
   return { ok: true };
 };

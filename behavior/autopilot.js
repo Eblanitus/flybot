@@ -120,6 +120,13 @@ function decide(s) {
   if (!s.on) return null;
   if (s.task && s.task.source !== 'autopilot') return null; // мозг или рефлекс заняли тело — не лезем
   if (s.runnerOther) return null;                            // мозг запустил выученный навык
+  // При низком HP и АКТИВНОМ рефлекс-escape — не начинаем новые дела автопилота, отдаём тело рефлексам/защите
+  // (рефлекс escape при HP < 10 должен успеть сработать; автопилот не мешает ему)
+  const reflexEscapeActive = (s.task && s.task.source === 'reflex' && s.task.name === 'escape')
+    || (s.running && s.running.name === 'escape' && s.running.kind === 'body' && s.task && s.task.source === 'reflex');
+  if (reflexEscapeActive && s.hp < T.apLowHp) {
+    return null;
+  }
   const run = s.running ? s.running.key : null;
   const ok = k => !(s.blocked && s.blocked[k]);
   const body = (key, name, params, why, preempt) => ({ key, kind: 'body', name, params: params || {}, why, ...(preempt ? { preempt: true } : {}) });
@@ -155,12 +162,23 @@ function decide(s) {
   };
 
   // 1. враг-игрок рядом — сразу, даже если мозг говорил недавно (тело свободно или работает автопилот)
+  // (L? , core_task 29181f0b08): «еле жива» без еды и еда не появится — из укрытия к игроку не выходим:
+  // побег из укрытия при критическом HP вернее смерть (журналы 09:47/09:51 — выход при враге в 5–11 м)
   const en = (s.enemies || [])[0];
   if (en) {
     if (run === 'fight_player' || run === 'escape_player') return null;
+    const critHere = (o ? o.hitsToDie != null && o.hitsToDie <= 1 : s.hp <= T.apCritHp) && !s.hasFood;
     if (en.aggressor && s.hasWeapon && s.hp >= T.apFightHp && s.alone && ok('fight_player'))
       return body('fight_player', 'fight', { target: en.name, radius: T.apFightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout }, `отбиваюсь от ${en.name}`, true);
-    if (ok('escape_player')) return body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why}) — ${s.sheltered ? 'выхожу из укрытия в поле' : 'в поле'}`, true);
+    if (ok('escape_player') && !(critHere && s.sheltered)) return body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why}) — ${s.sheltered ? 'выхожу из укрытия в поле' : 'в поле'}`, true);
+  }
+  // неудачный побег от игрока — не возвращаемся к работе: уходим на базу, пока не оторвёмся (в работе — пауза после побега)
+  const escapePlayerFailed = !!(s.failInfo && s.failInfo.escape_player && s.failInfo.escape_player.reason === 'побег не оторвал от врага' && s.blocked && s.blocked.escape_player);
+  const workBan = !!en || escapePlayerFailed; // враг-игрок в enemyR или pausa после неудачного побега — никакой работы (build/сбор/разведка/рутина)
+  if (escapePlayerFailed && !lowHpOf(s) && s.blocked && s.blocked.escape_player && s.base && s.baseDist != null && s.baseDist > s.base.r && ok('go_base')) {
+    return s.goSafe
+      ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec, priority: true }, 'побег от игрока не удался — ухожу на базу (go_safe)')
+      : body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec, priority: true }, 'побег от игрока не удался — ухожу на базу');
   }
   // L052 (смерть 23): ночью моб у порога или по муху били — долгую wait_night не молча держим: прерываем и отдаём
   // тело защите (бой/стены/отход); пока мозг командовал недавно — не отбираем (мозг главнее, L013)
@@ -209,7 +227,7 @@ function decide(s) {
   const atBase = !!(s.base && s.baseDist != null && s.baseDist <= s.base.r &&
     !(Number.isFinite(gp.x) && Number.isFinite(gp.z) && !inBase(gp.x, gp.z))); // ночная стройка — у базы, не в поле
   // идущий wait_night: простой давно, угрозы нет, у базы — будим ради цели (после угроз и go_base_escape, мозг молчит)
-  if (run === 'wait_night' && s.idle && job && atBase && !threat && idleMin >= T.idleBreakWaitMin && !lowHpOf(s)
+  if (run === 'wait_night' && s.idle && job && !workBan && atBase && !threat && idleMin >= T.idleBreakWaitMin && !lowHpOf(s)
       && !(s.inLava || s.suffocating || s.stuck || s.underWater)) {
     const a = job();
     if (a && ok(a.key)) return { ...a, why: a.why + ' — прерываю ожидание ночи', preempt: true };
@@ -238,11 +256,11 @@ function decide(s) {
   if (lowHpOf(s)) {
     const crit = (o ? o.hitsToDie != null && o.hitsToDie <= 1 : s.hp <= T.apCritHp) && !s.hasFood; // еле жива и есть нечего — наружу не ходим
     const dark = s.isNight || s.nightIn < T.nightSoonSec;   // ночью в поле не выходим: стены и ждать утра
-    const waitLimitMs = 300000; // 5 мин ограничения ожидания
-    const waitCount = (s.failInfo && s.failInfo.lowhp_waitCount) || 0;
+    const waitLimitMs = 120000; // 2 мин ограничения ожидания при HP=0 / критическом минимуме без еды
+    if (!s.failInfo) s.failInfo = {};
+    const waitCount = s.failInfo.lowhp_waitCount || 0;
     const shouldWait = waitCount * T.tickMs < waitLimitMs;
-    // инкрементируем счетчик ожидания каждые ticks
-    if (s.failInfo) s.failInfo.lowhp_waitCount = waitCount + 1;
+    s.failInfo.lowhp_waitCount = waitCount + 1;
     const fi = s.failInfo || {};
     const bad = k => !!(fi[k] && fi[k].count >= T.failSameCount); // эта тактика уже провалилась одинаково
     const need = T.apLowHpBlocks;                 // блоков надо на стены укрытия
@@ -267,21 +285,36 @@ function decide(s) {
       if (!crit && !(dark && s.hostilesNear > 0) && (bad('lowhp_dirt') || bad('lowhp_shelter') || bad('lowhp_escape')) && ok('lowhp_move'))
         return body('lowhp_move', 'explore', { distance: T.apLowHpMoveDist }, `мало HP (${s.hp}) — ${last} — отхожу в сторону`);
     }
-    if (s.build && !crit) {
-      // есть задача от мозга постройки — берем её, а не ждём низкого HP
-      const buildT = buildAct();
-      if (buildT) return buildT;
-    }
+    // при низком HP без еды на регенерацию — только восстановление (еда/охота, возврат на базу, ожидание в укрытии);
+    // стройка, добор, добыча, дорога не к базе — запрещены; давление простоя (idlePerMin) не отменяет запрет
+    const survivalBan = s.hp < T.apLowHp && s.food < T.goBaseMinFood;
     if (crit) {
-      return null; // еле жива и есть нечего — наружу не ходим, ждём
-    } else if (s.food < T.goBaseMinFood) {
-      // еда меньше порога регенерации (REGEN_FOOD=18) — ждать бессмысленно, HP не вырастет
-      // fall through to task selection below
-    } else if (!shouldWait) {
-      // время ожидания истекло (более 5 мин) — не ждать, а выбирать другое дело
-      // fall through to task selection below
+      if (shouldWait) return null; // ждём в укрытии до 2 минут (ест рефлекс)
+      // 2 минуты ожидания истекли при HP=0 / crit и без еды — экстренный сценарий (возврат домой, охота или разведка), а не бесконечное ожидание
+      s.failInfo.lowhp_waitCount = 0;
+      if (s.base && s.baseDist != null && s.baseDist > s.base.r && ok('go_base')) {
+        return s.goSafe
+          ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec, priority: true }, 'критический HP без еды — экстренно иду на базу (go_safe)')
+          : body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec, priority: true }, 'критический HP без еды — экстренно иду на базу');
+      }
+      if (s.animals > 0 && ok('hunt')) {
+        return body('hunt', 'hunt', { count: T.huntCount }, 'критический HP без еды — экстренно охочусь');
+      }
+      if (ok('lowhp_emergency_explore')) {
+        return body('lowhp_emergency_explore', 'explore', { distance: T.exploreDist }, 'критический HP без еды — экстренный поиск (explore)');
+      }
+      return null;
+    } else if (survivalBan) {
+      // нет еды на регенерацию — ждём в укрытии или уходим на базу, работу не берём
+      if (!shouldWait && s.base && s.baseDist != null && s.baseDist > s.base.r && ok('go_base')) {
+        return s.goSafe
+          ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec, priority: true }, 'низкий HP и нет еды — иду на базу (go_safe)')
+          : body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec, priority: true }, 'низкий HP и нет еды — иду на базу');
+      }
+      return null; // ждём (ест рефлекс)
     } else {
-      return null; // ждём (ест рефлекс) — в укрытии восстанавливаемся, наружу не идём
+      // низкий HP, но еда есть на регенерацию — ждём/едим (рефлекс ест), работу не берём
+      return null;
     }
   }
   const night = nightSoon;
@@ -320,7 +353,7 @@ function decide(s) {
     if (s.isNight && s.freeBed) add(Math.max(0, 45 + (s.hp < 20 || s.food < T.huntFood ? 10 : 0) - press), body('sleep', 'sleep', {}, 'сплю в кровати')); // ранена или голодна — сон полезнее
     // v0.2: цель мозга ночью — только у базы (без «База:» или вне радиуса — нет: ночью в поле не строим)
 // Гейт: ночью с мобами рядом не начинаем дело — сначала укрытие/ожидание
-    if (job && atBase && s.hostilesNear === 0) add(50 + press, job());
+    if (job && !workBan && atBase && s.hostilesNear === 0) add(50 + press, job());
     // L052: wait_night только без врагов рядом и без свежих ударов (иначе выше сработала ночная защита)
     if (s.isNight) add(Math.max(0, 20 - press), body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, 'пережидаю ночь'));
     return pick();
@@ -339,7 +372,9 @@ function decide(s) {
     // переход на базу только сейчас не вышел — дальше от базы не уходим (только за вещами), ждём следующей попытки
     if (!ok('go_base')) return pick();
     const nightRoad = s.isNight || (s.nightIn != null && s.nightIn < T.apDuskSec);
-    const dirtyRoad = s.onFire || s.inLava || (nightRoad && (s.hp < T.goBaseMinHp || s.food < T.goBaseMinFood) || (nightRoad && s.hostilesNear > 0));
+    // А: ночью при HP < 10 (apLowHp) и без укрытия/оружия — дорогу не начинаем, приоритет укрытию/выживанию
+    const vulnerableAtNight = nightRoad && s.hp < T.apLowHp && (!s.sheltered || !s.hasWeapon);
+    const dirtyRoad = s.onFire || s.inLava || (nightRoad && (s.hp < T.goBaseMinHp || s.food < T.goBaseMinFood) || (nightRoad && s.hostilesNear > 0)) || vulnerableAtNight;
     // дорогу не начинаем — тела не отдаём ей, берём следующее дело (лава/горю лечит самозащита, ночью еда и вернутся),
     // а после добавления остальных дел решаем, чем заняться
     if (!dirtyRoad) {
@@ -351,21 +386,21 @@ function decide(s) {
   }
   // цель мозга (строка «Автопилот:» в notes.md); провал — пауза goalRetryMs (goalFailed), выполнена — goalDone; v0.2: + давление простоя
   // v0.2: «Постройка:» — на том же месте в выборе, что цель мозга (и главнее строки «Автопилот:»)
-  if (job) add(50 + press, job());
+  if (job && !workBan) add(50 + press, job());
   // длинная дневная работа: до ночи не успеет — счёт ниже
-  add(35 - (s.nightIn != null && s.nightIn < T.dayRoutineSec ? 10 : 0), learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)'));
+  if (!workBan) add(35 - (s.nightIn != null && s.nightIn < T.dayRoutineSec ? 10 : 0), learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)'));
   // голод: чем меньше сытость (а еды нет), тем важнее охота — голодная муха охотится раньше цели мозга
   if (s.food < T.huntFood && !s.hasFood && s.animals > 0) add(20 + (T.huntFood - s.food) * 3, body('hunt', 'hunt', { count: T.huntCount }, 'охочусь: нечего есть'));
   // золото: сначала собираем бревно, потом кнущим кирку, потом камень
   // когда нет кирки — сначала собрать logs, а не сразу идти к камню
   if (!s.hasPickaxe) {
-    if (s.logs < T.needLogs) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, ...(tried('collect_log') ? { radius: wider('collect_log', 48) } : {}) }, 'рублю дерево'));
+    if (s.logs < T.needLogs && !workBan) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, ...(tried('collect_log') ? { radius: wider('collect_log', 48) } : {}) }, 'рублю дерево'));
     if (s.logs >= T.pickLogs) add(30, body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку'));
   }
   // если кирка есть — собираем камень
   const edgeHazard = s.snapshot?.hazards?.includes('обрыв') || s.survey?.edges?.some(e => e.drop >= 3);
   const duskNoWeapon = duskSoon && !s.hasWeapon; // на закате без оружия за камнем далеко не идём
-  if (s.hasPickaxe && s.cobble < T.cobbleWant && !edgeHazard && !duskNoWeapon) {
+  if (s.hasPickaxe && s.cobble < T.cobbleWant && !edgeHazard && !duskNoWeapon && !workBan) {
     const far = tried('collect_stone') ? { radius: wider('collect_stone', 48) } : {};
     add(26, body('collect_stone', 'collect', { block: 'stone', count: T.stoneCount, ...far },
       duskSoon && !s.hasWeapon ? 'сбор на закате без оружия отложен' : 'добиваю камень'));
@@ -373,8 +408,10 @@ function decide(s) {
   // если обрыв — сбор не начинаем, оставляем следующий кандидат или тихо ждем
   if (edgeHazard && s.snapshot?.hazards?.includes('обрыв') && !s.running) add(0, body('explore', 'explore', { distance: 8 }, 'обрыв рядом — не начинаю сбор, исследую другое место'));
   // разведка — когда больше нечего; перед ночью — ближе
-  add(10, body('explore', 'explore', { distance: duskSoon ? Math.round(T.exploreDist / 2) : T.exploreDist + 24 * tried('explore') }, 'исследую окрестности'));
-  return pick();
+  if (!workBan) add(10, body('explore', 'explore', { distance: duskSoon ? Math.round(T.exploreDist / 2) : T.exploreDist + 24 * tried('explore') }, 'исследую окрестности'));
+  const res = pick();
+  console.log('DECIDE-RESULT: ' + JSON.stringify(res && { key: res.key, name: res.name, kind: res.kind }) + ' workBan=' + workBan + ' en=' + !!en + ' epf=' + escapePlayerFailed);
+  return res;
 }
 
 // ---------- HTTP к исполнителю выученных навыков ----------

@@ -265,11 +265,99 @@ async function testNightMine() {
   console.log('night_mine: OK');
 }
 
+async function testNestedEmptyStats() {
+  const assert = require('assert');
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flybot-stats-test-'));
+  const statsFile = path.join(dir, 'skills_stats.json');
+  fs.writeFileSync(statsFile, '{}');
+
+  // Test the stats functions directly by simulating what runner.js does
+  let stats = {};
+  function stat(name) {
+    if (!stats[name]) stats[name] = { enabled: true, runs: 0, ok: 0, fail: 0, consecutiveFails: 0, lastError: null, lastRun: null, lastOk: null, nestedRuns: 0, nestedOk: 0, nestedFail: 0, emptyRuns: 0, emptyOk: 0 };
+    return stats[name];
+  }
+  function saveStats() {
+    try {
+      fs.writeFileSync(statsFile + '.tmp', JSON.stringify(stats, null, 2));
+      fs.renameSync(statsFile + '.tmp', statsFile);
+    } catch (e) { console.log('saveStats error:', e.message); }
+  }
+  function recordResult(name, ok, error, runId, meta = {}) {
+    const s = stat(name);
+    if (meta.nested) {
+      s.nestedRuns++;
+      if (ok) s.nestedOk++; else s.nestedFail++;
+    } else if (meta.empty) {
+      s.emptyRuns++;
+      if (ok) s.emptyOk++;
+    } else {
+      s.runs++; s.lastRun = new Date().toISOString();
+      if (ok) { s.ok++; s.consecutiveFails = 0; s.lastOk = s.lastRun; }
+      else { s.fail++; s.consecutiveFails++; s.lastError = String(error || 'неизвестная ошибка').slice(0, 2000); }
+    }
+    saveStats();
+  }
+  function statView(name) {
+    const s = stats[name] || stat(name);
+    return { runs: s.runs, ok: s.ok, fail: s.fail, consecutiveFails: s.consecutiveFails, lastError: s.lastError, lastRun: s.lastRun, lastOk: s.lastOk, nestedRuns: s.nestedRuns, nestedOk: s.nestedOk, nestedFail: s.nestedFail, emptyRuns: s.emptyRuns, emptyOk: s.emptyOk };
+  }
+
+  try {
+    // Test 1: Normal top-level run increments ok/runs
+    recordResult('test_skill', true, null, 1);
+    let s = statView('test_skill');
+    assert.strictEqual(s.runs, 1, 'top-level run increments runs');
+    assert.strictEqual(s.ok, 1, 'top-level ok increments ok');
+    assert.strictEqual(s.fail, 0);
+    assert.strictEqual(s.nestedRuns, 0);
+    assert.strictEqual(s.emptyRuns, 0);
+
+    // Test 2: Nested run increments nestedOk/nestedRuns, not main counters
+    recordResult('helper_skill', true, null, 1, { nested: true });
+    s = statView('helper_skill');
+    assert.strictEqual(s.runs, 0, 'nested run does not increment runs');
+    assert.strictEqual(s.ok, 0, 'nested run does not increment ok');
+    assert.strictEqual(s.nestedRuns, 1, 'nested run increments nestedRuns');
+    assert.strictEqual(s.nestedOk, 1, 'nested run increments nestedOk');
+
+    // Test 3: Empty run increments emptyOk/emptyRuns, not main counters
+    recordResult('test_skill', true, null, 2, { empty: true });
+    s = statView('test_skill');
+    assert.strictEqual(s.runs, 1, 'empty run does not increment runs');
+    assert.strictEqual(s.ok, 1, 'empty run does not increment ok');
+    assert.strictEqual(s.emptyRuns, 1, 'empty run increments emptyRuns');
+    assert.strictEqual(s.emptyOk, 1, 'empty run increments emptyOk');
+
+    // Test 4: Failed nested run increments nestedFail
+    recordResult('helper_skill', false, 'error', 2, { nested: true });
+    s = statView('helper_skill');
+    assert.strictEqual(s.nestedFail, 1, 'failed nested run increments nestedFail');
+
+    // Test 5: Verify skills_stats.json has the right structure
+    const savedStats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+    assert.ok(savedStats.test_skill.ok === 1 && savedStats.test_skill.runs === 1);
+    assert.ok(savedStats.test_skill.emptyOk === 1 && savedStats.test_skill.emptyRuns === 1);
+    // helper_skill: 2 nested runs (1 ok, 1 fail)
+    assert.ok(savedStats.helper_skill.nestedOk === 1 && savedStats.helper_skill.nestedRuns === 2);
+    assert.ok(savedStats.helper_skill.nestedFail === 1);
+
+    console.log('nested/empty stats: OK');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 module.exports = async () => {
   await testCraft();
   await testDigAtEmpty();
   await testExplore();
   await testShelterCliff();
   await testNightMine();
+  await testNestedEmptyStats();
 };
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });

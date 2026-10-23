@@ -23,7 +23,8 @@ function fakeBot(gen = flat, { inv = [] } = {}) {
   bot.entities[1] = bot.entity;
   return { bot, calls, ctx: { bot, stats: { blocksPlaced: 0, blocksMined: 0 }, variantRand: () => 0.99 } };
 }
-const mob = (bot, name, x, z = 0.5, extra = {}) => { const e = { id: 10, name, type: 'hostile', position: new Vec3(x, 66, z), height: 1.95, width: 0.6, ...extra }; bot.entities[e.id] = e; return e; };
+let nextMobId = 10;
+const mob = (bot, name, x, z = 0.5, extra = {}) => { const id = nextMobId++; const e = { id, name, type: 'hostile', position: new Vec3(x, 66, z), height: 1.95, width: 0.6, ...extra }; bot.entities[id] = e; return e; };
 const task = () => new Task(1, 'test', {}, 'test');
 // подменённый путь: цель-точка — встать в неё; GoalY — подняться/опуститься; журнал целей
 function fakeGoto(bot, log) {
@@ -40,18 +41,23 @@ module.exports = async () => {
   V.setRegistry(null);
   const reg = V.registry();
   assert.strictEqual(reg.errors.length, 0, JSON.stringify(reg.errors));
-  const want = { escape: ['pillar', 'sprint_away', 'zigzag'], shelter: ['dig', 'smart', 'walls'], climb: ['path', 'pillar'], descend: ['path', 'stairs'], home: ['direct', 'hops', 'short_hops'], dig: ['look', 'near', 'safe'], place: ['close', 'near', 'pillar'] };
+  const want = { escape: ['cave_escape', 'cover_escape', 'escape_to_base', 'pillar', 'sprint_away', 'wall_escape', 'zigzag'], shelter: ['dig', 'smart', 'walls'], climb: ['path', 'pillar'], descend: ['path', 'stairs'], home: ['direct', 'hops', 'short_hops'], dig: ['look', 'near', 'safe'], place: ['close', 'near', 'pillar'] };
   for (const [f, vs] of Object.entries(want)) assert.deepStrictEqual([...V.family(f).variants.keys()].sort(), vs, f);
   const ap = (f, n, sit) => V.family(f).variants.get(n).applies({}, { ceiling: 5, blocks: 0, ...sit });
   const oldGoto = A.goto;
   try {
     // ---- escape ----
-    assert(ap('escape', 'pillar', { blocks: 5 }) && !ap('escape', 'pillar', { blocks: 5, ranged: true }) && !ap('escape', 'pillar', { blocks: 5, creeper: true }) && !ap('escape', 'pillar', { blocks: 1 }) && !ap('escape', 'pillar', { blocks: 5, ceiling: 3 }), 'столб: не от стрелков/крипера, нужны блоки и потолок');
+    assert(ap('escape', 'pillar', { blocks: 5 }) && !ap('escape', 'pillar', { blocks: 5, rangedNearby: true }) && !ap('escape', 'pillar', { blocks: 5, creeper: true }) && !ap('escape', 'pillar', { blocks: 1 }) && !ap('escape', 'pillar', { blocks: 5, ceiling: 3 }), 'столб: не от стрелков/крипера, нужны блоки и потолок');
+    assert(!ap('escape', 'pillar', { blocks: 5, rangedNearby: true }), 'столб: не применяется, когда стрелок рядом (rangedNearby)');
+    assert(ap('escape', 'cover_escape', { rangedNearby: true }) && !ap('escape', 'cover_escape', { rangedNearby: false }), 'cover_escape: применяется только когда стрелок рядом');
     assert(!ap('escape', 'zigzag', { water: true }) && ap('escape', 'zigzag', {}));
+    // escape_to_base: от стрелка (скелет/любой ranged) ближе 10 м; от ближнего бойца — не он
+    assert(ap('escape', 'escape_to_base', { target: 'skeleton', dist: 9 }) && !ap('escape', 'escape_to_base', { target: 'skeleton', dist: 12 }), 'к базе бежим от стрелка <10м');
+    assert(!ap('escape', 'escape_to_base', { target: 'zombie', dist: 5 }) && ap('escape', 'escape_to_base', { ranged: true, dist: 8 }), 'от ближнего бойца — прочь по вектору (вариант не применим)');
     const legs = V.family('escape').variants.get('zigzag').legs({ x: 1, z: 0 }, 15);
     assert(legs.length === 3 && legs[0].z > 0 && legs[1].z < 0 && legs.every(l => l.x > 0), 'зигзаг: отрезки в разные стороны, все прочь');
     {
-      const { bot, ctx } = fakeBot(); mob(bot, 'zombie', 3.5);
+      const { bot, ctx } = fakeBot(); mob(bot, 'zombie', 5); // 5м -> после бегства 16м = 21м > 20м, away=true
       const log = []; A.goto = fakeGoto(bot, log);
       const combat = require('../lib/skills/combat');
       const r = await combat.escape(ctx, task(), { shelter: false });
@@ -62,6 +68,72 @@ module.exports = async () => {
       await assert.rejects(combat.escape(ctx, task(), { style: 'teleport' }), /такого варианта нет/);
       const st = V.stats(ctx, 'escape').stats.escape;
       assert(st.zombie.sprint_away.n === 1 && st.zombie.zigzag.n === 1, 'исход записан по обстановке (цель zombie): ' + JSON.stringify(st));
+    }
+    // --- escape_to_base: настоящий вариант (29181f0b08) — от скелета <10м бежит (к базе или прочь), исход записан по ключу skeleton
+    {
+      const { bot, ctx } = fakeBot(); mob(bot, 'skeleton', 5);
+      const log = []; A.goto = fakeGoto(bot, log);
+      const combat = require('../lib/skills/combat');
+      const r = await combat.escape(ctx, task(), { shelter: false, style: 'escape_to_base' });
+      assert(r.variant === 'escape_to_base' && r.away === true, 'от скелета <10м — отход к базе/прочь: ' + JSON.stringify(r));
+      const st = V.stats(ctx, 'escape').stats.escape;
+      assert(Object.entries(st).some(([, vs]) => vs.escape_to_base && vs.escape_to_base.ok === 1), 'счёт escape_to_base записан по ключу стрелка: ' + JSON.stringify(st));
+    }
+    // --- rangedNearby: скелет рядом -> pillar не выбирается, cover_escape или zigzag ---
+    {
+      const { bot, ctx } = fakeBot(); 
+      mob(bot, 'spider', 11); // цель - паук 11м
+      const skel = mob(bot, 'skeleton', 14); // скелет 14м - rangedNearby=true
+      const log = []; A.goto = fakeGoto(bot, log);
+      const combat = require('../lib/skills/combat');
+      const r = await combat.escape(ctx, task(), { shelter: false });
+      assert(r.variant !== 'pillar', 'pillar НЕ выбран при скелете рядом: ' + r.variant);
+      assert(['cover_escape', 'zigzag', 'sprint_away', 'wall_escape', 'cave_escape'].includes(r.variant), 'выбран подходящий вариант: ' + r.variant);
+      assert(r.why && r.why.length > 0, 'есть причина выбора: ' + r.why);
+    }
+// --- away считается по всем враждебным: если все ушли за 20м — away=true ---
+    {
+      const { bot, ctx } = fakeBot(); 
+      mob(bot, 'zombie', 5); // зомби 5м -> после бегства 16м = 21м > 20м
+      nextMobId = 10; // reset
+      const skel = mob(bot, 'skeleton', 18); // скелет 18м -> после бегства 34м
+      const log = []; A.goto = fakeGoto(bot, log);
+      const combat = require('../lib/skills/combat');
+      // используем sprint_away, чтобы убежать на полную дистанцию
+      const r = await combat.escape(ctx, task(), { shelter: false, style: 'sprint_away' });
+      // оба ушли за 20м -> away=true
+      assert.strictEqual(r.away, true, 'away=true, когда все враги за 20м: ' + JSON.stringify(r));
+    }
+    // --- away=false, если хотя бы один враг остался в зоне выстрела ---
+    {
+      const { bot, ctx } = fakeBot(); 
+      mob(bot, 'zombie', 3); // зомби близко
+      const skel = mob(bot, 'skeleton', 50); // скелет ДАЛЕКО (не в fleeVector), но в выстреле
+      // fakeGoto не двигает бота достаточно далеко
+      const originalGoto = A.goto;
+      A.goto = async (ctx, t, g) => { 
+        // двигаем только на 5 блоков вместо цели
+        const me = ctx.bot.entity.position;
+        if (g.constructor.name === 'GoalNearXZ' && g.x != null) {
+          const dx = g.x - me.x, dz = g.z - me.z;
+          const dist = Math.hypot(dx, dz);
+          if (dist > 5) {
+            ctx.bot.entity.position = new (me.constructor)(me.x + dx/dist*5, me.y, me.z + dz/dist*5);
+          } else {
+            ctx.bot.entity.position = new (me.constructor)(g.x, me.y, g.z);
+          }
+        }
+        return true;
+      };
+      try {
+        const combat = require('../lib/skills/combat');
+        const r = await combat.escape(ctx, task(), { shelter: false });
+        // скелет в 50м, бот сдвинулся на 5м -> скелет в 45м > 20м, но зомби в 3м -> сдвинулся на 5м -> зомби в 8м < 20м
+        // away должен быть false, так как зомби остался в зоне
+        assert.strictEqual(r.away, false, 'away=false, когда зомби остался в зоне: ' + JSON.stringify(r));
+      } finally {
+        A.goto = originalGoto;
+      }
     }
     // ---- shelter ----
     {

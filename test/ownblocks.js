@@ -56,6 +56,50 @@ module.exports = async () => {
   assert.strictEqual(ev3.length, 1); assert.strictEqual(ev3[0].by, 'mob:zombie');
   ses.timers.forEach(clearInterval);
   for (const x of [file, file + '2']) try { fs.unlinkSync(x); } catch (e) {}
+
+  // ---- интеграция: collect не выбирает свои блоки (через настоящий ownblocks) ----
+  {
+    const file2 = path.join(os.tmpdir(), 'flybot_own_collect_' + process.pid + '.json');
+    try { fs.unlinkSync(file2); } catch (e) {}
+    let t2 = 2000;
+    const bot2 = new EventEmitter(); bot2.entities = {};
+    const ctx2 = { bot: bot2, tasks: { current: { by: 'skill:build_hut', source: 'brain' }, legacy: null }, events: { push: () => {} } };
+    const ob2 = OB.create(ctx2, { file: file2, now: () => t2 });
+    const P2 = (x, y, z) => new Vec3(x, y, z);
+    // Ставим свой блок (брус) в (5,66,0)
+    ob2.onPlaced('oak_log', P2(5, 66, 0));
+    // Мок isOwnBlock проверка (экспортируется из gather)
+    const gather = require('../lib/skills/gather');
+    assert(gather.isOwnBlock({ ownBlocks: ob2 }, P2(5, 66, 0)) === true, 'свой блок определяется через настоящий ownblocks');
+    assert(gather.isOwnBlock({ ownBlocks: ob2 }, P2(6, 66, 0)) === false, 'чужой блок не свой через настоящий ownblocks');
+    console.log('collect skips own blocks (real ownblocks) OK');
+    try { fs.unlinkSync(file2); } catch (e) {}
+  }
+
+  // ---- интеграция: blueprint ownFree снимает свой верстак, чужой — нет (через настоящий ownblocks) ----
+  {
+    const file3 = path.join(os.tmpdir(), 'flybot_own_bp_' + process.pid + '.json');
+    try { fs.unlinkSync(file3); } catch (e) {}
+    let t3 = 3000;
+    const bot3 = new EventEmitter(); bot3.entities = {};
+    const ctx3 = { bot: bot3, tasks: { current: { by: 'skill:build_hut', source: 'brain' }, legacy: null }, events: { push: () => {} } };
+    const ob3 = OB.create(ctx3, { file: file3, now: () => t3 });
+    const P3 = (x, y, z) => new Vec3(x, y, z);
+    // Ставим свой верстак в (0,65,0)
+    ob3.onPlaced('crafting_table', P3(0, 65, 0));
+    const BP = require('../lib/skills/blueprint');
+    // ownFree должен вернуть true для своего верстака
+    const mockBlock = { name: 'crafting_table', position: P3(0, 65, 0) };
+    assert(BP.ownFree({ ownBlocks: ob3 }, mockBlock) === true, 'ownFree: свой верстак определяется');
+    // Для чужого верстака (нет в ownBlocks) — false
+    const mockBlockOther = { name: 'crafting_table', position: P3(1, 65, 0) };
+    assert(BP.ownFree({ ownBlocks: ob3 }, mockBlockOther) === false, 'ownFree: чужой верстак не свой');
+    // Без ownBlocks — false
+    assert(BP.ownFree({}, mockBlock) === false, 'ownFree: без ownBlocks false');
+    console.log('blueprint ownFree (real ownblocks) OK');
+    try { fs.unlinkSync(file3); } catch (e) {}
+  }
+
   console.log('ownblocks: OK');
 };
 

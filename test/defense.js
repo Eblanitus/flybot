@@ -151,5 +151,40 @@ async function testShelterDig() {
   console.log('shelter dig: OK', JSON.stringify(r));
 }
 
-module.exports = async () => { await testShelterDig(); await testAttacker(); await testExperience(); await testDigCheck(); await testWarnings(); };
+// Рефлекс на урон от сталагмита: должен вызывать escape
+async function testDripstoneReflex() {
+  const { bot } = fake({ gen: flat });
+  const ctx = mkCtx(bot);
+  // mock runSkill to capture what skill is called
+  let calledSkill = null;
+  let calledParams = null;
+  ctx.runSkill = async (name, params) => { calledSkill = name; calledParams = params; return { ok: true }; };
+
+  // Simulate mob_hurt with cause 'сталагмит' (from body_events)
+  await R.attach({ ctx, bot, every: (ms, fn, name) => {}, handle: (name, handler) => {
+    if (name === 'mob_hurt') {
+      handler({ att: null, source: null, cause: 'сталагмит' });
+    }
+  }, on: () => {} });
+
+  assert.strictEqual(calledSkill, 'escape', 'reflex should call escape for stalagmite damage');
+  assert.deepStrictEqual(calledParams, {}, 'escape params should be empty');
+  console.log('  dripstone reflex (escape): OK');
+}
+
+// Вариант побега упал — задача escape проваливается с причиной и честным extra (fled:false), а не «ок» с escapeErr (29181f0b08)
+async function testEscapeFail() {
+  // sprint_away/zigzag/escape_to_base проглатывают «нет пути» (бегмут куда получится) — падающий вариант: столб (нет рук на placeBlock)
+  const w = fake({ gen: flat, inv: [{ name: 'dirt', count: 5 }] }), ctx = mkCtx(w.bot);
+  const e = mob(w.bot, 5, 'zombie', 4, 0.5);
+  F.feel(ctx, e);
+  let threw = null;
+  try { await combat.escape(ctx, new Task(1, 'escape', {}, 'test'), { shelter: false, style: 'pillar' }); }
+  catch (er) { threw = er; }
+  assert(threw, 'провал варианта побега — навык падает с причиной');
+  assert(threw.extra && threw.extra.fled === false && threw.extra.moved != null && threw.extra.hp != null, 'в провале — честный итог (fled:false, moved, hp): ' + JSON.stringify(threw.extra));
+  console.log('escape: провал варианта = провал навыка (fled:false в extra): OK');
+}
+
+module.exports = async () => { await testShelterDig(); await testAttacker(); await testExperience(); await testDigCheck(); await testWarnings(); await testDripstoneReflex(); await testEscapeFail(); };
 if (require.main === module) module.exports().then(() => console.log('defense OK'), e => { console.error(e); process.exit(1); });

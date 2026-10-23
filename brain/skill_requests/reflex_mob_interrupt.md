@@ -1,0 +1,10 @@
+# reflex_mob_interrupt — от учителя
+Что не так: reflex behavior interrupts autopilot tasks (goto, collect, shelter) too aggressively when mobs are nearby, causing prolonged idle and preventing construction; muha flees instead of building when mobs approach at safe distance.
+Доказательства: signal near #31 (by:reflex, задача escape, хуже всего mobs 1.5 с); events.log #39-45, #57-61, #71-75 show goto aborted by reflex, then escape tasks; events.log #94-111 show collect failed "не получается добраться до dirt: не дотянулся" after reflex interruptions; events.log #114-116 show hut_west building repeated with 168 m remaining; day_report idle 221-224 min, built 0.
+Кто решал: reflex — escape behavior overrode autopilot goto/task decisions.
+Версия: — (поведение, не навык). Активна behavior с времени последней успешной загрузки; runner.log показывает collect ошибки из-за reflex interruptions.
+Что нужно: муха должна продолжать autopilot задачи (goto, collect, shelter) когда мобы на безопасном расстоянии, а не прерывать их для escape; reflex должен иметь порог близости перед перехватом: только если моб ближе threshold (например, 5-8 м), иначе пусть autopilot продолжит задачу; приоритет collect над escape при скрафте/достаче ресурсов; shelter should not fail when materials available.
+Вариант: «исправление поведения reflex: добавление порога близости перед interrupt» — когда моб дальше 5 м, не прерывать autopilot; «новый вариант: smarter reflex interrupt» — reflex проверяет тип задачи перед перехватом (не прерывать goto к постройке, если строительная задача активна).
+Простой до: ~221 мин за сутки (попытки добраться до hut_west), самый длинный 224 мин; построено за сутки: 0 блоков. Сверка прошлых заявок: behavior_reflexes_mob_near — НЕ помогло (проблема в interrupite, не в укрытии); reflex_stops_collect — НЕ помогло (проблема не в colekt, а в goto/shelter interrupite).
+Как проверить: если reflex не прерывает goto задачи когда моб дальше 5-8 м — autopilot доберется до цели и начнет строить; если collect завершается без прерывания reflex — cobblestone/dirt добывается; built в day_report вырастет с 0 до >0.
+Случай: 20261023-024052-31.

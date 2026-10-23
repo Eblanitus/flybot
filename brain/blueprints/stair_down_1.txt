@@ -1,0 +1,71 @@
+# name: stair_down_1
+# desc: пролёт 1 спуска к воде: 13 ступеней вниз на запад, 3 шириной, перила из елового забора по краям, факелы; воздух над ступенями вырезается
+# origin: NW-bottom
+# Нижняя (западная) ступень — layer 0 (y=54), верхняя (восточная) — layer 12 (y=66, поверхность 67 = край обрыва у базы).
+# Каждая ступень шириной 3 и блок-поддержка под следующей ступенью — цепная опора, всё связано боками.
+# Ставить: build_blueprint name=stair_down_1 x=-415 y=54 z=25 rot=0 — верхняя ступень x=-403 у края, низ уходит в склон на запад.
+C = cobblestone
+F = spruce_fence
+T = torch
+. = air
+
+layer 0
+|             |
+|CC           |
+|             |
+layer 1
+|FCC          |
+|.CC          |
+|FCC          |
+layer 2
+|TFCC         |
+|..CC         |
+|TFCC         |
+layer 3
+|  FCC        |
+|...CC        |
+|  FCC        |
+layer 4
+|   FCC       |
+|....CC       |
+|   FCC       |
+layer 5
+|   TFCC      |
+|.....CC      |
+|   TFCC      |
+layer 6
+|     FCC     |
+|......CC     |
+|     FCC     |
+layer 7
+|      FCC    |
+|.......CC    |
+|      FCC    |
+layer 8
+|       FCC   |
+|........CC   |
+|       FCC   |
+layer 9
+|       TFCC  |
+|.........CC  |
+|       TFCC  |
+layer 10
+|         FCC |
+|..........CC |
+|         FCC |
+layer 11
+|          FCC|
+|...........CC|
+|          FCC|
+layer 12
+|           FC|
+|          ..C|
+|           FC|
+layer 13
+|           TF|
+|           ..|
+|           TF|
+layer 14
+|             |
+|            .|
+|             |

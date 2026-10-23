@@ -1,0 +1,6 @@
+# gather_list_alt_cobblestone: готово
+Версия: gather_list_v9
+Запуск: curl.exe -s "http://127.0.0.1:3200/go?name=gather_list_v9&items=cobblestone:25"
+Params: items — список "имя:кол-во,…" или объект {имя:n}; синонимы: stone=cobblestone, log=брёвна, planks=spruce_planks; max_sec — ограничение времени, по умолчанию 600; dry=1 — только план
+Что делает: Добрать список предметов с встроенным обеспечением инструмента ПЕРЕД сбором. Если в items есть cobblestone/stone/coal/руда и кирки нет — craft-цепочкой делает wooden_pickaxe (spruce_log → planks → stick → crafting_table → wooden_pickaxe), потом collect. Если брёвен нет в инвентаре и не найдено рядом — отказ с точной причиной «нужно обеспечить инструмент: wooden_pickaxe сначала (spruce_log → planks → stick → crafting_table)». Строгая гарантия: ok:true только когда все запрошенные предметы на месте. Возвращает {ok, have, missing, collected, crafted, errors} или dry-план.
+Ограничения: Не переплавляет сырьё (железо/медь/золото/стекло) — для этого нужен smelt_all. Не ломает свои блоки. Для сбора руды нужен explore/подземка — collect видит только открытые блоки. Автопилот должен проверять cobblestone ≥25 перед build_blueprint hut_west (это поведение, не навык).

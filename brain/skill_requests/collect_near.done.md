@@ -1,0 +1,6 @@
+# collect_near: готово
+Версия: collect_near (новый навык)
+Запуск: curl.exe -s "http://127.0.0.1:3200/go?name=collect_near&block=dirt&count=10&safeDist=16"
+Params: block — имя блока (cobblestone, stone, coal, dirt и др.), count — количество (по умолчанию 1), items — список "block:count,...", radius — радиус (по умолчанию 32), deep — глубина (true/false), style — стиль копки, safeDist — безопасное расстояние до мобов (по умолчанию 16)
+Что делает: Сбор с гарантированным обеспечением кирки спереди (цепочка: бревно→доски→палки→верстак→wooden_pickaxe). Перед стартом проверяет мобов в радиусе safeDist — если моб близко, возвращает wait for safe вместо escape. Проверяет материал для shelter (9 блоков dirt/cobblestone/планки/бревна). В ответе: crafted.wooden_pickaxe, collected.cobblestone/stone/dirt, pickaxeEnsured, shelterChecked, shelterMaterialOk. При успехе ok:true, при нехватке брёвен — честный отказ «нет брёвен для крафта кирки».
+Ограничения: Нужен доступ к spruce_log/oak_log/birch_log в радиусе для крафта кирки. Не копает руду без видимости (только collect тела). При мобах ближе safeDist — не начинает сбор, возвращает wait for safe. Не делает shelter сам — только проверяет материал.

@@ -145,6 +145,25 @@ function mobHurtPlan(ctx, att) {
   const ch = E.choose(ctx, opts);
   const params = ch.action === 'fight' ? { targetId: att.id, radius: T.fightRadius } : {};
   const note = shelterTooSlow(ctx, att) ? '; копка-укрытие не успевает' : '';
+  // А: при критически низком HP (< 10) — escape использует экстренные варианты в зависимости от типа врага
+  if (ch.action === 'escape' && bot.health < T.apLowHp) {
+    const isRanged = att && F.RANGED.has(entName(att));
+    const isNight = timeInfo(bot).isNight;
+    const dist = attackerDist(bot, att);
+    const hasBlocks = bot.inventory.items().filter(i => ['dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'stone', 'diorite', 'andesite', 'granite', 'tuff', 'coarse_dirt', 'deepslate', 'calcite', 'sandstone', 'blackstone'].includes(i.name)).reduce((a, i) => a + i.count, 0) >= 3;
+    const hasWeapon = bot.inventory.items().some(i => /_sword$|_axe$/.test(i.name));
+    if (isRanged) {
+      // Скелет/стрелк — приоритет укрытие от линии огня (cover_escape) или зигзаг
+      if (dist != null && dist <= 5 && hasBlocks && !hasWeapon) {
+        params.style = 'wall_escape'; // ставим стену между собой и скелетом
+      } else {
+        params.style = 'cover_escape'; // ищем укрытие, разрывая линию огня
+      }
+    } else if (isNight) {
+      // Ночь, враг ближнего боя — столб
+      params.style = 'pillar'; // предпочитаем столб: мобы ближнего боя не достают
+    }
+  }
   plan.skill = ch.action;
   plan.params = params;
   plan.why = ch.why + note;
@@ -281,20 +300,32 @@ function attach(api) {
     const low = String(name).toLowerCase();
     if (cur && (cur.name === 'escape' || cur.name === 'defend')) return;
     if (cur && cur.name === 'fight' && String(cur.params && cur.params.target || '').toLowerCase() === low) return;
-    // L043: в закрытом укрытии наружу не выходим (побег вытащил бы в открытое место). Игрок блок проломит — тогда укрытия уже нет.
-    if (inShelter(ctx)) { ctx.events.push('info', { msg: 'рефлекс: в укрытии, стою', reflex: true, hold: true }); return; }
+    // L043 / owner fix: в закрытом укрытии наружу не выходим, ПОКА игрок далеко (playerDist >= 3).
+    // Если игрок вплотную (playerDist < 3) — укрытия фактически нет (игрок близко/проломит/бьет у входа, как на 1.1 м), стоять нельзя!
+    if (inShelter(ctx)) {
+      const p = bot.entity.position;
+      const playerDist = player && player.position ? player.position.distanceTo(p) : 999;
+      if (playerDist >= 3) {
+        ctx.events.push('info', { msg: 'рефлекс: в укрытии, стою', reflex: true, hold: true });
+        return;
+      }
+      ctx.events.push('info', { msg: 'рефлекс: в укрытии, но игрок вплотную — укрытия нет, ухожу', reflex: true });
+    }
     const p = bot.entity.position;
     const playerDist = player && player.position ? player.position.distanceTo(p) : 999;
     const lowHpAgainstPlayer = bot.health <= 5 && playerDist < 10;
-    // посторонние враги рядом: мобы или другие игроки-агрессоры в 6 м
+    const hasBlocks = bot.inventory.items().filter(i => ['dirt', 'cobblestone', 'cobbled_deepslate', 'stone', 'netherrack'].includes(i.name)).reduce((a, i) => a + i.count, 0) >= 2;
     const others = hostilesNear(bot, T.playerOthersR) + Object.values(bot.entities).filter(e =>
       e && e !== bot.entity && e !== player && AG.isAggressorEntity(ctx, e) && e.position.distanceTo(p) <= T.playerOthersR).length;
     const canFight = !lowHpAgainstPlayer && hasWeapon(bot) && bot.health >= T.playerFightHp && others === 0;
-    const opts = lowHpAgainstPlayer ? ['shelter', 'escape'] : (canFight ? ['fight', 'escape'] : ['escape', 'shelter']);
-    const skill = lowHpAgainstPlayer ? 'shelter' : (canFight ? 'fight' : 'escape');
+    const opts = lowHpAgainstPlayer ? ['shelter', 'goto', 'escape'] : (canFight ? ['fight', 'escape'] : ['escape', 'shelter']);
+    const skill = lowHpAgainstPlayer ? (hasBlocks ? 'shelter' : 'goto') : (canFight ? 'fight' : 'escape');
+    const params = lowHpAgainstPlayer && !hasBlocks ? { x: -393, y: 67, z: 36, r: 2, label: 'на базу от игрока', priority: true } : (lowHpAgainstPlayer ? { mode: 'walls' } : {});
+    const whyText = lowHpAgainstPlayer ? 'reflex: utechei ot igroka (sprint_away/zigzag k ukrytiu/basе)' : `игрок ${name} ударил${playerDist < 10 ? ' (близко, низкий HP)' : ''}`;
     const plan = canFight
       ? { skill: 'fight', params: { target: low, radius: AG.CHASE_MAX, flee_hp: T.playerFleeHp, timeout: T.playerFightTimeout }, why: `игрок ${name} ударил`, options: opts }
-      : { skill: skill, params: {}, why: `игрок ${name} ударил${playerDist < 10 ? ' (близко, низкий HP)' : ''}`, options: opts };
+      : { skill: skill, params: params, why: whyText, options: opts };
+    ctx.events.push('info', { msg: `рефлекс: утечки от игрока (sprint_away/zigzag к укрытию/базе): ${plan.why}`, reflex: true });
     await startDefense(ctx, plan);
   });
 
@@ -350,7 +381,7 @@ function attach(api) {
       const dist = F.posOf(nearest).distanceTo(p);
       const isCreeper = nearest.name === 'creeper';
       const isProtectedTask = cur0 && ['collect', 'gather_list', 'craft', 'build_blueprint'].includes(cur0.name) ||
-        (cur0 && cur0.name === 'goto' && (cur0.params && (cur0.params.label === 'к постройке' || cur0.params.priority)));
+        (cur0 && cur0.name === 'goto' && (cur0.params && (cur0.params.label || cur0.params.priority)));
       const threshold = isProtectedTask 
         ? (isCreeper ? 5 : T.defenseCloseDist) 
         : (isCreeper ? T.creeperInterruptDist : T.reflexInterruptDist);

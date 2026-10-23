@@ -35,10 +35,10 @@ module.exports = async () => {
   // кошка на сундуке
   w = world({ '0,64,0': 'chest' }); w.bot.entities[3] = { name: 'cat', position: new Vec3(0.5, 65, 0.5) };
   await assert.rejects(build.openNearestChest(w.ctx, w.t, at), /кошка/);
-  // окно не пришло — 5 с и честная причина с позициями
+  // окно не пришло — 5 с и честная причина с позициями + диагностика
   w = world({ '0,64,0': 'chest' }, { open: () => new Promise(() => {}) });
   t0 = Date.now();
-  await assert.rejects(build.openNearestChest(w.ctx, w.t, at), /сервер не открыл окно за 5 с \(муха в 0 64 2, до сундука/);
+  await assert.rejects(build.openNearestChest(w.ctx, w.t, at), e => /сервер не открыл окно за 5 с/.test(e.message) && /над сундуком: air/.test(e.message) && /муха: 0 64 2/.test(e.message) && e.extra && e.extra.diag && e.extra.diag.above === 'air');
   assert(Date.now() - t0 < 7000);
   console.log('chest: OK');
 };

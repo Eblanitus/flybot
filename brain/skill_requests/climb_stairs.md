@@ -24,3 +24,7 @@
 Как проверить: `brain/learned/.tmp/check_climb_stairs.json` = {"name":"climb_stairs"} → `curl.exe -s -H "Content-Type: application/json" -d @brain/learned/.tmp/check_climb_stairs.json http://127.0.0.1:3200/check` → ok. В игре — по следующему прогону в brain/runner.log: в логе навыка видно клетку и причину каждого отказа, провал приходит с текстом error, а не «навык вернул ok:false без error», и в :3199/ledger нет 18 одинаковых отказов place_at подряд на одну клетку.
 
 Случай: 20261022-000512-8, урок L007 (повтор случая 20261021-235911-7; правка в навыке не внедрена — прошлая заявка сгорела на тайм-ауте инженера).
+
+
+## ПОВТОР от хозяина (2026-10-23 19:42)
+Прошлый ответ (climb_stairs.done.md): climb_stairs: не готово. Хозяин отдаёт заявку ещё раз.

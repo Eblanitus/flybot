@@ -106,6 +106,28 @@ module.exports = async () => {
     fa = files(wa.bb); assert.strictEqual(fa.length, 2, 'вторая смерть через 2 с — второй файл: ' + fa);
     wa.bb.onEvent('death', { cause: 'skeleton', deaths: 2 }); assert.strictEqual(files(wa.bb).length, 2, 'повтор той же смерти не пишется');
 
+    // ---- mineflayer 'death' срабатывает ПОСЛЕ респавна (позиция уже точка возрождения) ----
+    // Имитируем: бот умирает, mineflayer 'death' вызывает freeze() когда позиция уже спавн, потом приходит spawn, потом death с причиной
+    const wm = world(path.join(tmp, 'md'));
+    for (let i = 0; i < 10; i++) wm.step(); // кадры в точке смерти (10.5, 64, -20.5)
+    // mineflayer 'death' срабатывает — но к этому моменту энтити уже в спавне
+    wm.bot.entity.position = new Vec3(100.5, 70, 100.5); // точка возрождения
+    wm.bot.health = 20; // HP уже восстановлено
+    wm.bot.emit('death'); // freeze() читает позицию спавна!
+    // затем приходит spawn
+    wm.bb.onEvent('spawn', { msg: 'респавн' });
+    // затем death с причиной
+    wm.clock.t += 600; wm.bb.onEvent('death', { cause: 'zombie', deaths: 1 });
+    const fm = files(wm.bb); assert.strictEqual(fm.length, 1);
+    const dm = JSON.parse(fs.readFileSync(path.join(wm.bb.dir, fm[0]), 'utf8'));
+    // Кадры должны быть из точки смерти (10.5), а не из спавна (100.5)
+    assert(dm.frames.length >= 10, 'кадров достаточно: ' + dm.frames.length);
+    assert(dm.frames.every(f => f.pos[0] === 10.5 && f.pos[1] === 64 && f.pos[2] === -20.5),
+      'кадры из точки смерти, а не спавна: ' + dm.frames.map(f => f.pos).join('; '));
+    assert.strictEqual(dm.summary.cause, 'zombie');
+    // После записи ящик пишет новую жизнь
+    wm.step(); wm.step(); assert.strictEqual(wm.bb.frames.length, 2, 'новая жизнь пишется после смерти');
+
     // ---- смерть не поймана ботом (счётчик вырос, freeze не было): спавн -> death берёт кадры прошлой жизни ----
     const wb = world(path.join(tmp, 'pl'));
     for (let i = 0; i < 8; i++) wb.step();

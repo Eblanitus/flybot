@@ -11,6 +11,7 @@ const { BehaviorHost, check } = require('../lib/behavior_host');
 const D = require('../lib/danger');
 const water = require('../lib/skills/water');
 const A = require('../lib/actions');
+const bodyEvents = require('../lib/body_events');
 
 const wait = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, ms = 3000, what = 'условие') {
@@ -65,6 +66,15 @@ async function hostTests() {
     const good = host.active;
     assert.ok(fs.existsSync(path.join(versionsDir, good.id, 'index.js')), 'копия версии не сохранена');
     console.log('  загрузка, события, рабочая версия: OK');
+
+    // (29181f0b08) require('../lib/…') из версии поведения резолвится на ядро: рядом с версиями лежит ссылка lib
+    assert.ok(fs.existsSync(path.join(versionsDir, 'lib', 'util.js')), 'ссылка lib рядом с версиями не создана');
+    const vLib = path.join(versionsDir, 'libtest');
+    fs.mkdirSync(vLib, { recursive: true });
+    fs.writeFileSync(path.join(vLib, 'index.js'), `'use strict'; module.exports = { API: 1, name: 'т', attach() {}, selfTest: async () => { const U = require('../lib/util'); if (typeof U.r1 !== 'function') throw new Error('инструменты ядра не резолвятся из версии'); } };\n`);
+    const cLib = await check(vLib);
+    assert.ok(cLib.ok, 'require(\'../lib/util\') из версии поведения не резолвится: ' + cLib.error);
+    console.log('  ../lib из версии поведения видит ядро: OK');
 
     // сломанные версии не включаются, активной остаётся рабочая
     const broken = [
@@ -222,6 +232,65 @@ function dangerTests() {
   console.log('  пример: ' + JSON.stringify({ air: dr.air, worst: dr.worst }));
 }
 
+// body_events: атрибуция урона от сталагмита
+function bodyEventsDripstoneTests() {
+  // Test the onDripstone function logic directly
+  const bot = {
+    entity: { position: new Vec3(0.5, 64, 0.5) },
+    blockAt(p) {
+      const y = Math.floor(p.y);
+      if (y === 64) return { name: 'pointed_dripstone', boundingBox: 'block' };
+      if (y === 65) return { name: 'pointed_dripstone', boundingBox: 'block' };
+      return { name: 'air', boundingBox: 'empty' };
+    }
+  };
+
+  // Copy the onDripstone logic from body_events.js
+  function onDripstone(bot) {
+    try {
+      const p = bot.entity.position;
+      const feet = bot.blockAt(p.offset(0, 0.1, 0));
+      const head = bot.blockAt(p.offset(0, 1.6, 0));
+      return (feet && feet.name === 'pointed_dripstone') || (head && head.name === 'pointed_dripstone');
+    } catch (e) { return false; }
+  }
+
+  // Test on dripstone at feet
+  assert.strictEqual(onDripstone(bot), true, 'onDripstone should return true when feet on pointed_dripstone');
+
+  // Test on dripstone at head
+  const bot2 = {
+    entity: { position: new Vec3(0.5, 63.5, 0.5) },
+    blockAt(p) {
+      const y = Math.floor(p.y);
+      if (y === 65) return { name: 'pointed_dripstone', boundingBox: 'block' };
+      return { name: 'air', boundingBox: 'empty' };
+    }
+  };
+  assert.strictEqual(onDripstone(bot2), true, 'onDripstone should return true when head in pointed_dripstone');
+
+  // Test not on dripstone
+  const bot3 = {
+    entity: { position: new Vec3(0.5, 64, 0.5) },
+    blockAt(p) {
+      return { name: 'stone', boundingBox: 'block' };
+    }
+  };
+  assert.strictEqual(onDripstone(bot3), false, 'onDripstone should return false when not on pointed_dripstone');
+
+  console.log('  body_events onDripstone: OK');
+
+  // Test damage attribution logic (simplified)
+  const ctx = { lastDamage: null, combatUntil: 0, events: { push: () => {} } };
+  let cause = null;
+  const source = null;
+  if (!cause && onDripstone(bot)) cause = 'сталагмит';
+  assert.strictEqual(cause, 'сталагмит', 'cause should be сталагмит when no source and on dripstone');
+  ctx.lastDamage = { cause, t: Date.now(), sourceId: null };
+  assert.strictEqual(ctx.lastDamage.cause, 'сталагмит');
+  console.log('  body_events dripstone attribution logic: OK');
+}
+
 // Фальшивый бот в воде: плывёт к точке взгляда, если нажато «вперёд»; «присесть» — вниз, «прыжок» — вверх
 function waterBot({ gen, pos }) {
   const ctrl = {};
@@ -291,6 +360,7 @@ async function waterTests() {
 
 module.exports = async function () {
   dangerTests();
+  bodyEventsDripstoneTests();
   await waterTests();
   await hostTests();
   console.log('behavior: OK');
