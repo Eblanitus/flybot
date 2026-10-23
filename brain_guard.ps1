@@ -10,6 +10,8 @@
 #    его правки и запись почему в data\core_tasks\<id>.result.md). Разрешённые запросы идут раньше заявок на навыки, инженер один.
 # 5) Помощник: когда у учителя нет случаев, модель учителя берёт заявку на навык параллельно инженеру (конфиг brain\opencode.helper.json:
 #    только brain\learned и ответ в skill_requests). Не берёт ядро, behavior_* и «переделать»; появился случай — доделывает и уступает учителю.
+# 6) Тело: раз в минуту отдельным процессом tools\body_autorestart.js — перезапускает тело в безопасный момент, чтобы включились
+#    сделанные правки ядра (bot.js, lib\, behavior\); не встало — откатывает правку. Пока лежит data\body_restart.lock, правку ядра не берём.
 # Модели учителя и инженера берутся из data\models.json (вкладка «Модели» в аудите) ПРИ КАЖДОМ запуске — через models_config.js.
 # Параметров вроде -EngModel/-TeachModel больше нет: источник один.
 param(
@@ -157,9 +159,17 @@ function Core([string[]]$a) {   # lib\core_requests.js: ответ — одна 
 }
 $r = Core @('release'); if ($r -and @($r.released).Count) { GLog "ядро: правка от прошлого сторожа $(@($r.released) -join ', ') — $(@($r.results) -join ', ')" }
 
+$bodyRs = $null; $bodyRsAt = Get-Date
 while ($true) {
   Start-Sleep 30
   if (-not (Get-Process -Id $loopPid -ErrorAction SilentlyContinue)) { GLog 'петля закрыта — сторож выходит'; break }
+
+  # --- 6. перезапуск тела ради правок ядра (свой процесс: сбой там сторожа не роняет) ---
+  if ((-not $bodyRs -or $bodyRs.HasExited) -and (Get-Date) -ge $bodyRsAt) {
+    try { $bodyRs = Start-Process node -ArgumentList "`"$fb\tools\body_autorestart.js`"", '--log', "`"$Log`"" -WorkingDirectory $fb -WindowStyle Hidden -PassThru }
+    catch { GLog "тело: tools\body_autorestart.js не запустился: $($_.Exception.Message)" }
+    $bodyRsAt = (Get-Date).AddMinutes(1)
+  }
 
   # --- 1. зависание мозга ---
   $size = LogSize
@@ -197,7 +207,9 @@ while ($true) {
   elseif ($eng) {
     if (SkillEnd $eng 'инженер') { $eng = $null; $engHits = 0 }
   }
-  if (-not $eng -and (Get-Date) -ge $engWait) {
+  $bodyLock = Get-Item "$fb\data\body_restart.lock" -ErrorAction SilentlyContinue
+  $bodyBusy = $bodyLock -and ((Get-Date) - $bodyLock.LastWriteTime).TotalMinutes -lt 15
+  if (-not $eng -and -not $bodyBusy -and (Get-Date) -ge $engWait) {
     $c = Core @('take')   # сначала разрешённые хозяином правки ядра (снимок и тесты «до» — около минуты)
     if ($c -and $c.id) {
       $engModel = RoleModel 'engineer'
