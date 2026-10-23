@@ -118,6 +118,13 @@ function parseGuardSessions(lines) {
       out.push(s); open.set(k, s); continue;
     }
     if ((m = /^инженер: (\S+) — (.*)$/.exec(t))) { if (!/^завис/.test(m[2])) close('engineer:' + m[1], ts, m[2]); continue; }
+    // помощник — модель учителя на заявке навыка (журнал тот же, что у инженера: engineer-<заявка>.log)
+    if ((m = /^помощник \(модель учителя\): взял заявку (\S+) \(pid (\d+), модель (\S+?)\)/.exec(t))) {
+      const k = 'helper:' + m[1]; close(k, ts, '?');
+      const s = { role: 'helper', key: m[1], log: 'engineer-' + m[1] + '.log', S: ts, E: null, type: 'skill', pid: +m[2], model: m[3] };
+      out.push(s); open.set(k, s); continue;
+    }
+    if ((m = /^помощник: (\S+) — (.*)$/.exec(t))) { if (!/^завис/.test(m[2])) close('helper:' + m[1], ts, m[2]); continue; }
     if ((m = /^ядро: ([0-9a-f]{10}) — (.*)$/.exec(t))) { if (!/^завис/.test(m[2])) close('engineer:core-' + m[1], ts, m[2]); continue; }
   }
   return out;
@@ -329,7 +336,10 @@ function attributeErrors(errs, sessions, brainRuns, now) {
   const same = (a, b) => !!a && !!b && (a === b || a.replace(/^opencode\//, '') === b.replace(/^opencode\//, ''));
   return errs.map(e => {
     const who = [];
-    for (const s of sessions || []) if ((s.role === 'teacher' || s.role === 'engineer') && same(s.model, e.model) && s.S - 5000 <= e.ts && e.ts <= (s.E != null ? s.E : now) + 5000) { if (!who.includes(s.role)) who.push(s.role); }
+    for (const s of sessions || []) {
+      const r = s.role === 'helper' ? 'teacher' : s.role;   // помощник работает на модели учителя
+      if ((r === 'teacher' || r === 'engineer') && same(s.model, e.model) && s.S - 5000 <= e.ts && e.ts <= (s.E != null ? s.E : now) + 5000) { if (!who.includes(r)) who.push(r); }
+    }
     for (const r of brainRuns || []) if (same(r.model, e.model) && r.S - 5000 <= e.ts && e.ts <= r.E + 5000) { if (!who.includes('brain')) who.push('brain'); break; }
     return { ...e, roles: who };
   });

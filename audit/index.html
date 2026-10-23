@@ -171,6 +171,7 @@ function drawLamps(s) {
       const x = R[r];
       if (x.working && x.modelError && x.modelError.fresh) h += lamp('bad', `${name}: ошибка модели — ${clipS(x.modelError.text, 60)}`);
       else if (x.working) h += lamp('ok', `${name}: работает${x.session ? ' ' + Math.round((s.now - x.session.S) / 60000) + ' мин' : ''}`);
+      else if (x.helping) h += lamp('ok', `${name}: помогает инженеру — ${x.helping.key} ${Math.round((s.now - x.helping.S) / 60000)} мин`);
       else h += lamp('', `${name}: свободен${x.pending ? ', ждут ' + x.pending : ''}`);
     }
     if (R.guard.working === false) h += lamp('bad', 'Сторож: не запущен');
@@ -233,10 +234,11 @@ function roleCard(title, role, x, now) {
     lines.push('следит за мозгом, по очереди запускает учителя и инженера');
     if (x.last) lines.push('последнее: ' + tm(x.last.ts) + ' — ' + clipS(x.last.text, 140));
   } else {
-    const ses = x.session;
-    h += `<div class="rv ${x.working ? 'ok' : 'dim'}">${x.working ? (role === 'teacher' ? 'разбирает случай' : 'пишет код') : 'свободен'}</div>`;
+    const ses = x.session, hp = !x.working && x.helping;   // учитель без случаев — помощник инженера
+    h += `<div class="rv ${x.working || hp ? 'ok' : 'dim'}">${x.working ? (role === 'teacher' ? 'разбирает случай' : 'пишет код') : hp ? 'помогает инженеру' : 'свободен'}</div>`;
     if (x.working && x.what) lines.push(clipS(x.what, 200));
     if (x.working && ses) lines.push('с ' + tm(ses.S) + ' (' + dur(ses.S) + ')');
+    if (hp) { lines.push(clipS(hp.what, 200)); lines.push('с ' + tm(hp.S) + ' (' + dur(hp.S) + '), журнал ' + hp.log); }
     if (!x.working && ses) lines.push('последний раз: ' + (ses.key || '') + ', ' + tm(ses.S) + (ses.E ? ' – ' + tm(ses.E) : '') + (ses.how ? ' (' + ses.how + ')' : ''));
     if (role === 'teacher' && x.pending != null) lines.push('ждут разбора: ' + x.pending);
     if (role === 'engineer') lines.push('ждут заявки на навыки: ' + (x.pending || 0) + (x.corePending ? '; запросов на правку ядра ждут твоего разрешения: ' + x.corePending : ''));

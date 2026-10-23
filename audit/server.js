@@ -874,6 +874,16 @@ async function roleStatus(cfg) {
     const c = teacher.session ? cs.find(x => x.id === teacher.session.key) : null;
     if (c) { teacher.what = (TEACH_TYPE_RU[c.type] || c.type) + (c.items && c.items[0] ? ': ' + String(c.items[0].text || '').slice(0, 200) : ''); teacher.caseStatus = c.status; }
   } catch (e) { teacher.pending = null; }
+  // помощник: модель учителя пишет код по заявке навыка; его opencode в процессах виден как инженер (тот же текст задания)
+  {
+    const hs = sessions.filter(x => x.role === 'helper');
+    const open = hs.filter(x => x.E == null).pop() || null;
+    const ps = runOf('engineer');
+    if (open && (ps == null || ps.length > 0)) {
+      const k = open.key, h1 = firstLine(path.join(cfg.brainDir, 'skill_requests', k + '.md'), /^#\s/);
+      teacher.helping = { key: k, S: open.S, model: open.model, log: open.log, what: 'навык ' + k + (h1 ? ': ' + h1 : '') };
+    }
+  }
   const engineer = roleOf('engineer');
   if (engineer.session) {
     const k = engineer.session.key;
