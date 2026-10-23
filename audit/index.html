@@ -771,7 +771,10 @@ function renderCore(c) {
   h += '<table><tr><th>Запрос</th><th>Статус</th><th></th></tr>';
   for (const it of c.items) {
     const can = it.status !== 'working' && it.status !== 'approved';
-    const btn = can ? `<button data-approve="${esc(it.id)}">${it.status === 'new' ? 'Разрешить' : 'Разрешить снова'}</button>` : '';
+    // «сделано» — разрешать снова не нужно; кнопка только чтобы переделать заново (с подтверждением)
+    const btn = !can ? '' : it.status === 'done'
+      ? `<button class="btn2" data-approve="${esc(it.id)}" data-redo="1" title="Уже сделано, тесты прошли. Нажимать не нужно — только если надо отдать инженеру переделать">Переделать заново</button>`
+      : `<button data-approve="${esc(it.id)}">${it.status === 'new' ? 'Разрешить' : 'Разрешить снова'}</button>`;
     h += `<tr class="click" data-core="${esc(it.id)}"><td><b>${esc(it.title)}</b><div class="dim small">${esc(it.id)}</div></td><td><span class="tag ${CST[it.status] || ''}">${esc(it.statusRu)}</span>${it.note ? `<div class="small">${esc(clipS(it.note, 300))}</div>` : ''}</td><td>${btn}</td></tr>`;
     if (openCore === it.id) h += `<tr><td colspan="3"><div class="detail"><pre>${esc(it.text)}</pre>${it.result ? `<h2>Итог</h2><pre>${esc(it.result)}</pre>` : ''}<div style="margin-top:8px"><button class="btn2" data-con="engineer" data-file="engineer-core-${esc(it.id)}.log">Журнал инженера по этому запросу</button></div></div></td></tr>`;
   }
@@ -921,7 +924,11 @@ document.addEventListener('click', e => {
     setConRole(cb.dataset.con, cb.dataset.file || null); tick(); return;
   }
   const ab = e.target.closest('button[data-approve]');
-  if (ab) { e.stopPropagation(); approveCore(ab.dataset.approve, ab); return; }
+  if (ab) {
+    e.stopPropagation();
+    if (ab.dataset.redo && !confirm('Этот запрос уже сделан, тесты прошли. Отдать инженеру переделать заново?')) return;
+    approveCore(ab.dataset.approve, ab); return;
+  }
   const tc = e.target.closest('tr[data-core]');
   if (tc) { openCore = openCore === tc.dataset.core ? null : tc.dataset.core; tick(); }
   const tr = e.target.closest('tr[data-req]');
