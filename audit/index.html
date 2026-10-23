@@ -665,6 +665,9 @@ function modelsShell(d) {
   $('p-models').innerHTML = `<h2>Модели ролей</h2>
     <div class="box small dim">Здесь выбирается, на какой модели работает каждая роль. Выбор записывается в файл <b>${esc(d.file)}</b> и берётся при следующем запуске роли — править файлы руками не нужно. В списке только бесплатные модели opencode.</div>
     <div id="mdGuard"></div>
+    <div class="box" style="margin-top:12px"><label><input type="checkbox" id="mdReserve"> <b>Запасная модель</b> <span id="mdReserveId"></span></label>
+      <div class="small dim">Включена — если модель роли за 2 часа трижды отказала (лимит, «недоступна»), роль запускается на запасной, пока своя не оживёт. Выключена — роли всегда на своих моделях, даже когда те отказывают (например, если запасная не работает в твоём регионе без VPN).</div>
+      <div class="small" id="mdReserveSt" style="margin-top:6px"></div></div>
     <div class="grid" style="margin-top:12px">${cards}</div>
     <div style="margin-top:12px"><button class="btn" id="mdRefresh">Обновить список моделей</button> <span class="small dim" id="mdFree"></span></div>`;
   for (const r of MD_ROLES) {
@@ -672,6 +675,17 @@ function modelsShell(d) {
     $('md-save-' + r).onclick = () => saveModel(r);
     $('md-man-' + r).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveModel(r); } });
   }
+  $('mdReserve').onchange = async e => {
+    const cb = e.target, st = $('mdReserveSt'), on = cb.checked;
+    cb.disabled = true; st.dataset.hold = '1'; st.className = 'small dim'; st.textContent = 'сохраняю…';
+    try {
+      const r = await fetch('/api/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reserveOn: on }) });
+      const j = await r.json();
+      if (j.ok) { st.className = 'small ok'; st.textContent = on ? 'Запасная включена.' : 'Запасная выключена: роли запускаются только на своих моделях.'; }
+      else { st.className = 'small bad'; st.textContent = 'Не сохранено: ' + (j.error || '?'); cb.checked = !on; }
+    } catch (err) { st.className = 'small bad'; st.textContent = 'Не сохранено: ' + err.message; cb.checked = !on; }
+    cb.disabled = false; setTimeout(() => { delete st.dataset.hold; }, 5000); tick();
+  };
   $('mdRefresh').onclick = async () => {
     $('mdFree').textContent = 'спрашиваю opencode…';
     try { const d2 = await get('/api/models?refresh=1'); renderModels(d2); } catch (e) { $('mdFree').textContent = 'не вышло: ' + e.message; }
@@ -681,6 +695,16 @@ function renderModels(d) {
   if (!$('md-sel-brain')) modelsShell(d);
   $('mdGuard').innerHTML = d.guardReadsModels === false
     ? '<div class="box small warn" style="margin-top:12px">Сторож (brain_guard.ps1) запущен до этого обновления и файл моделей не читает: смена модели учителя и инженера подействует только после его перезапуска (restart_brain.cmd или закрыть teach.cmd и запустить заново).</div>' : '';
+  if (d.reserve) {
+    const cb = $('mdReserve'), st = $('mdReserveSt');
+    if (!cb.disabled) cb.checked = d.reserve.on;
+    $('mdReserveId').textContent = '— ' + d.reserve.id;
+    if (!st.dataset.hold) {
+      const names = d.reserve.active.map(r => (d.roles.find(x => x.role === r) || {}).label || r);
+      st.className = 'small ' + (d.reserve.on && names.length ? 'warn' : 'dim');
+      st.textContent = !d.reserve.on ? 'Выключена: роли всегда на своих моделях.' : names.length ? 'Сейчас на запасной: ' + names.join(', ') + ' (своя модель отказывала).' : 'Сейчас все роли на своих моделях.';
+    }
+  }
   for (const r of d.roles) {
     const id = r.role;
     $('md-cur-' + id).textContent = r.model;

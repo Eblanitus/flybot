@@ -820,9 +820,16 @@ async function apiModels(cfg, q) {
     model: cur.models[r], source: cur.source[r], default: modelsCfg.DEFAULTS[r],
     running: running ? running.filter(p => p.role === r).map(p => ({ pid: p.pid, model: p.model })) : null
   }));
-  return { now: Date.now(), roles, free, guardReadsModels: guardReadsModels(cfg), file: path.join(cfg.dataDir, modelsCfg.FILE_NAME) };
+  let raw = {}; try { raw = JSON.parse(fs.readFileSync(modelsCfg.filePath(cfg.dataDir), 'utf8').replace(/^﻿/, '')) || {}; } catch (e) {}
+  const reserve = { on: modelsCfg.reserveOn(cfg.dataDir), id: modelsCfg.validModelId(raw.reserve) ? raw.reserve : modelsCfg.RESERVE,
+    active: modelsCfg.ROLES.filter(r => { try { return modelsCfg.effective(r, cfg.dataDir).reserve; } catch (e) { return false; } }) };
+  return { now: Date.now(), roles, free, reserve, guardReadsModels: guardReadsModels(cfg), file: path.join(cfg.dataDir, modelsCfg.FILE_NAME) };
 }
 function saveModels(cfg, body) {
+  if (body && Object.prototype.hasOwnProperty.call(body, 'reserveOn')) {   // выключатель запасной — отдельным запросом
+    if (Object.keys(body).length !== 1) return { ok: false, error: 'reserveOn сохраняется отдельно от моделей' };
+    return modelsCfg.setReserve(body.reserveOn, cfg.dataDir);
+  }
   const patch = {};
   for (const r of modelsCfg.ROLES) if (body && Object.prototype.hasOwnProperty.call(body, r)) patch[r] = body[r];
   for (const k of Object.keys(body || {})) if (!modelsCfg.ROLES.includes(k)) return { ok: false, error: 'неизвестная роль: ' + String(k).slice(0, 40) };

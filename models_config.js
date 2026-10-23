@@ -67,8 +67,8 @@ function save(patch, dir) {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = file + '.tmp-' + process.pid;
-    const keep = readRaw(dir).reserve;   // запасную модель вкладка «Модели» не знает — не терять её при сохранении
-    fs.writeFileSync(tmp, JSON.stringify({ brain: next.brain, teacher: next.teacher, engineer: next.engineer, ...(validModelId(keep) ? { reserve: keep } : {}) }, null, 2) + '\n');
+    const raw = readRaw(dir), keep = raw.reserve;   // запасную модель и её выключатель не терять при сохранении моделей ролей
+    fs.writeFileSync(tmp, JSON.stringify({ brain: next.brain, teacher: next.teacher, engineer: next.engineer, ...(validModelId(keep) ? { reserve: keep } : {}), ...(raw.reserveOn === false ? { reserveOn: false } : {}) }, null, 2) + '\n');
     fs.renameSync(tmp, file);
   } catch (e) { return { ok: false, error: 'не удалось записать ' + FILE_NAME + ': ' + (e && e.message || e) }; }
   return { ok: true, models: next };
@@ -98,16 +98,34 @@ function downCount(id, logFile = OC_LOG, now = Date.now()) {
   return c;
 }
 
+// Выключатель запасной (вкладка «Модели» в аудите, поле "reserveOn" в models.json; нет поля — включена).
+// Хозяин выключает, когда запасная не годится: 23.10 без VPN сменился регион, Gemini отказал — инженер стоял.
+function reserveOn(dir) { return readRaw(dir).reserveOn !== false; }
+function setReserve(on, dir) {
+  if (typeof on !== 'boolean') return { ok: false, error: 'reserveOn: нужно true или false' };
+  const file = filePath(dir);
+  try {
+    const raw = readRaw(dir);
+    if (on) delete raw.reserveOn; else raw.reserveOn = false;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = file + '.tmp-' + process.pid;
+    fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+    fs.renameSync(tmp, file);
+  } catch (e) { return { ok: false, error: 'не удалось записать ' + FILE_NAME + ': ' + (e && e.message || e) }; }
+  return { ok: true, reserveOn: on };
+}
+
 // модель, которую роль реально запустит сейчас -> { id, reserve: bool }
 function effective(role, dir, logFile) {
   const id = get(role, dir);
   const raw = readRaw(dir);
+  if (raw.reserveOn === false) return { id, reserve: false };
   const reserve = validModelId(raw.reserve) ? raw.reserve : RESERVE;
   if (reserve === id || downCount(id, logFile) < DOWN_N || downCount(reserve, logFile) >= DOWN_N) return { id, reserve: false };
   return { id: reserve, reserve: true };
 }
 
-module.exports = { ROLES, DEFAULTS, FILE_NAME, RESERVE, validModelId, read, get, save, filePath, downCount, effective };
+module.exports = { ROLES, DEFAULTS, FILE_NAME, RESERVE, validModelId, read, get, save, filePath, downCount, effective, reserveOn, setReserve };
 
 if (require.main === module) {
   const [cmd, role] = process.argv.slice(2);
