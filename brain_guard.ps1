@@ -8,6 +8,8 @@
 # 4) Правка ядра: запрос из brain\core_requests.md, который хозяин разрешил в аудите, берёт инженер (lib\core_requests.js:
 #    снимок файлов и тесты «до» → инженер правит со своим конфигом brain\opencode.core.json → тесты «после»; стало хуже — откат
 #    его правки и запись почему в data\core_tasks\<id>.result.md). Разрешённые запросы идут раньше заявок на навыки, инженер один.
+# 5) Помощник: когда у учителя нет случаев, модель учителя берёт заявку на навык параллельно инженеру (конфиг brain\opencode.helper.json:
+#    только brain\learned и ответ в skill_requests). Не берёт ядро, behavior_* и «переделать»; появился случай — доделывает и уступает учителю.
 # Модели учителя и инженера берутся из data\models.json (вкладка «Модели» в аудите) ПРИ КАЖДОМ запуске — через models_config.js.
 # Параметров вроде -EngModel/-TeachModel больше нет: источник один.
 param(
@@ -91,7 +93,61 @@ function BrainProcs {  # opencode-мозги среди потомков наш�
 $lastSize = LogSize; $lastGrow = Get-Date
 $eng = $null   # текущий запуск инженера: @{ proc; name; started }
 $tch = $null   # текущий запуск учителя: @{ proc; id; started }
-$engWait = $tchWait = Get-Date; $engHits = $tchHits = 0   # пауза после лимита и сколько лимитов подряд
+$hlp = $null   # текущий запуск помощника (модель учителя на заявке навыка): как $eng
+$engWait = $tchWait = $hlpWait = Get-Date; $engHits = $tchHits = $hlpHits = 0   # пауза после лимита и сколько лимитов подряд
+
+# Заявка на навык, которую можно взять (ставит замок <имя>.working). Помощнику — без behavior_* и без «переделать».
+function PickReq([bool]$helper) {
+  foreach ($f in Get-ChildItem "$req\*.md" -ErrorAction SilentlyContinue | ? { $_.Name -notmatch '\.done\.md$' } | Sort-Object LastWriteTime) {
+    $name = $f.BaseName
+    if ($name -notmatch '^[a-z0-9_]+$') { continue }
+    $done = "$req\$name.done.md"; $lock = "$req\$name.working"
+    if ((Test-Path $done) -and (Get-Item $done).LastWriteTime -ge $f.LastWriteTime) { continue }   # уже отвечено, заявку не меняли
+    if ((Test-Path $lock) -and ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes -lt ($EngTimeoutMin + 5)) { continue }  # берёт другой
+    if ($helper) {
+      if ($name -match '^behavior_') { continue }   # поведение одно на всю муху — только инженер
+      $txt = try { Get-Content $f.FullName -Raw -Encoding UTF8 } catch { '' }
+      if ($txt -match 'переделать|переделка') { continue }   # переделка после провала — инженеру
+    }
+    Set-Content $lock (Get-Date -Format s)
+    return $name
+  }
+  $null
+}
+# Запуск исполнителя на заявку навыка: инженер (opencode.engineer.json) или помощник (opencode.helper.json)
+function StartSkill([string]$name, [string]$model, [string]$cfg) {
+  $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
+  $elog = "$fb\data\engineer-$name.log"
+  $elAt = try { (Get-Item $elog -ErrorAction Stop).Length } catch { 0 }   # журнал дописывается: техсбой ищем только в этом запуске
+  # свой конфиг opencode; проектный opencode.json не подмешивать
+  $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$cfg`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $model `"$prompt`" 2>&1 | node `"$fb\tools\tstamp.js`" >> `"$elog`"" `
+         -WorkingDirectory $fb -WindowStyle Hidden -PassThru
+  @{ proc = $p; name = $name; started = Get-Date; model = $model; log = $elog; logAt = $elAt }
+}
+# Итог заявки навыка: $true — запуск закончен (ответ есть, техсбой — заявка снова в очереди, или завис)
+function SkillEnd($e, [string]$who) {
+  $done = "$req\$($e.name).done.md"
+  $over = (IdleMin $e.log $e.started) -ge $EngTimeoutMin
+  if (-not ($e.proc.HasExited -or $over)) { return $false }
+  if (-not $e.proc.HasExited) { taskkill /PID $e.proc.Id /T /F | Out-Null; GLog "$who`: $($e.name) — завис: журнал молчит $EngTimeoutMin мин" }
+  # технический сбой (модель упала или недоступна, завис) — это не ответ: заявка снова в очередь, до 3 раз подряд
+  $tf = "$req\$($e.name).tech"; $retry = $false
+  $answered = (Test-Path $done) -and (Get-Item $done).LastWriteTime -ge $e.started
+  if (-not $answered) {
+    $tech = if ($over) { 'завис' } else { TechErr $e.log $e.logAt }
+    $tries = 0; if (Test-Path $tf) { $tries = [int](Get-Content $tf -TotalCount 1) }
+    if ($tech -and $tries -lt 3) { Set-Content $tf ($tries + 1); $retry = $true; GLog "$who`: $($e.name) — техсбой ($tech), заявка в очереди, повтор $($tries + 1) из 3" }
+    else { Set-Content $done "# $($e.name): не готово`r`nИнженер не ответил (упал или завис: журнал молчал $EngTimeoutMin мин). Журнал: data\engineer-$($e.name).log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова." -Encoding UTF8 }
+  }
+  if ($answered -and $e.helper) { Add-Content $done "`r`nсделал: помощник (модель учителя $($e.model))" -Encoding UTF8 }
+  if (-not $retry) { Remove-Item $tf -Force -ErrorAction SilentlyContinue }
+  Remove-Item "$req\$($e.name).working" -Force -ErrorAction SilentlyContinue
+  if (-not $retry) { GLog "$who`: $($e.name) — закончил" }
+  $true
+}
+function PendingCases {   # ждущие случаи учителя (ошибка чтения — считаем, что есть: учитель важнее)
+  try { $q = Get-Content "$fb\data\teacher_queue.json" -Raw -Encoding UTF8 | ConvertFrom-Json; @($q.cases | ? { $_.status -eq 'pending' }).Count } catch { 1 }
+}
 function Teach([string[]]$a) {   # lib\teacher_triggers.js: ответ — одна строка JSON (ASCII)
   try { $out = & node "$fb\lib\teacher_triggers.js" @a 2>$null | Select-Object -Last 1; if ($out) { $out | ConvertFrom-Json } } catch { GLog "учитель: очередь не ответила: $($_.Exception.Message)"; $null }
 }
@@ -139,23 +195,7 @@ while ($true) {
     }
   }
   elseif ($eng) {
-    $done = "$req\$($eng.name).done.md"
-    $over = (IdleMin $eng.log $eng.started) -ge $EngTimeoutMin
-    if ($eng.proc.HasExited -or $over) {
-      if (-not $eng.proc.HasExited) { taskkill /PID $eng.proc.Id /T /F | Out-Null; GLog "инженер: $($eng.name) — завис: журнал молчит $EngTimeoutMin мин" }
-      # технический сбой (модель упала или недоступна, завис) — это не ответ инженера: заявка снова в очередь, до 3 раз подряд
-      $tf = "$req\$($eng.name).tech"; $retry = $false
-      if (-not (Test-Path $done) -or (Get-Item $done).LastWriteTime -lt $eng.started) {
-        $tech = if ($over) { 'завис' } else { TechErr $eng.log $eng.logAt }
-        $tries = 0; if (Test-Path $tf) { $tries = [int](Get-Content $tf -TotalCount 1) }
-        if ($tech -and $tries -lt 3) { Set-Content $tf ($tries + 1); $retry = $true; GLog "инженер: $($eng.name) — техсбой ($tech), заявка в очереди, повтор $($tries + 1) из 3" }
-        else { Set-Content $done "# $($eng.name): не готово`r`nИнженер не ответил (упал или завис: журнал молчал $EngTimeoutMin мин). Журнал: data\engineer-$($eng.name).log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова." -Encoding UTF8 }
-      }
-      if (-not $retry) { Remove-Item $tf -Force -ErrorAction SilentlyContinue }
-      Remove-Item "$req\$($eng.name).working" -Force -ErrorAction SilentlyContinue
-      if (-not $retry) { GLog "инженер: $($eng.name) — закончил" }
-      $eng = $null; $engHits = 0
-    }
+    if (SkillEnd $eng 'инженер') { $eng = $null; $engHits = 0 }
   }
   if (-not $eng -and (Get-Date) -ge $engWait) {
     $c = Core @('take')   # сначала разрешённые хозяином правки ядра (снимок и тесты «до» — около минуты)
@@ -171,23 +211,12 @@ while ($true) {
     }
   }
   if (-not $eng -and (Get-Date) -ge $engWait) {
-    foreach ($f in Get-ChildItem "$req\*.md" -ErrorAction SilentlyContinue | ? { $_.Name -notmatch '\.done\.md$' } | Sort-Object LastWriteTime) {
-      $name = $f.BaseName
-      if ($name -notmatch '^[a-z0-9_]+$') { continue }
-      $done = "$req\$name.done.md"; $lock = "$req\$name.working"
-      if ((Test-Path $done) -and (Get-Item $done).LastWriteTime -ge $f.LastWriteTime) { continue }   # уже отвечено, заявку не меняли
-      if ((Test-Path $lock) -and ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes -lt ($EngTimeoutMin + 5)) { continue }  # берёт другой сторож
-      Set-Content $lock (Get-Date -Format s)
+    $name = PickReq $false
+    if ($name) {
       $engModel = RoleModel 'engineer'   # заново для каждой заявки: смена в аудите подхватывается со следующей
-      $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly. Request file: brain/skill_requests/$name.md"
-      $elog = "$fb\data\engineer-$name.log"
-      $elAt = try { (Get-Item $elog -ErrorAction Stop).Length } catch { 0 }   # журнал дописывается: техсбой ищем только в этом запуске
-      # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет); проектный opencode.json не подмешивать
-      $p = Start-Process cmd.exe -ArgumentList '/c', "set `"OPENCODE_CONFIG=$fb\brain\opencode.engineer.json`"&& set `"OPENCODE_DISABLE_PROJECT_CONFIG=1`"&& opencode run --auto -m $engModel `"$prompt`" 2>&1 | node `"$fb\tools\tstamp.js`" >> `"$elog`"" `
-             -WorkingDirectory $fb -WindowStyle Hidden -PassThru
-      $eng = @{ proc = $p; name = $name; started = Get-Date; model = $engModel; log = $elog; logAt = $elAt }
-      GLog "инженер: взял заявку $name (pid $($p.Id), модель $engModel)"
-      break
+      # у инженера свой конфиг opencode (ему можно писать в behavior/, мозгу — нет)
+      $eng = StartSkill $name $engModel "$fb\brain\opencode.engineer.json"
+      GLog "инженер: взял заявку $name (pid $($eng.proc.Id), модель $engModel)"
     }
   }
 
@@ -210,7 +239,25 @@ while ($true) {
       $tch = $null; $tchHits = 0
     }
   }
-  if (-not $tch -and (Get-Date) -ge $tchWait) {
+  # --- 4. помощник: модель учителя на заявке навыка, пока у учителя нет случаев ---
+  if ($hlp -and -not $hlp.proc.HasExited -and (LimitStuck $hlp.model $hlp.started)) {
+    taskkill /PID $hlp.proc.Id /T /F | Out-Null
+    Remove-Item "$req\$($hlp.name).working" -Force -ErrorAction SilentlyContinue   # заявка без ответа — возьмётся снова
+    $min = LimitPause $hlpHits; $hlpHits++; $hlpWait = (Get-Date).AddMinutes($min)
+    GLog "помощник: $($hlp.name) — лимит запросов модели, повтор через $min мин"
+    $hlp = $null
+  }
+  if ($hlp -and (SkillEnd $hlp 'помощник')) { $hlp = $null; $hlpHits = 0 }
+  if (-not $hlp -and -not $tch -and (Get-Date) -ge $hlpWait -and (Get-Date) -ge $tchWait -and (PendingCases) -eq 0) {
+    $name = PickReq $true
+    if ($name) {
+      $hlpModel = RoleModel 'teacher'
+      $hlp = StartSkill $name $hlpModel "$fb\brain\opencode.helper.json"; $hlp.helper = $true
+      GLog "помощник (модель учителя): взял заявку $name (pid $($hlp.proc.Id), модель $hlpModel)"
+    }
+  }
+
+  if (-not $tch -and -not $hlp -and (Get-Date) -ge $tchWait) {   # помощник занят — учитель ждёт, пока тот доделает заявку
     $c = Teach @('take')
     if ($c -and $c.id) {
       $teachModel = RoleModel 'teacher'   # заново для каждого случая: смена в аудите подхватывается со следующего
