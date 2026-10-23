@@ -208,6 +208,21 @@ module.exports = async () => {
     assert.strictEqual(e0.extra.ok, false); assert.strictEqual(w0.log.placed, 0); assert.strictEqual(w0.log.dug, 0);
   }
 
+  // ---- верстак в клетке стены: свой — снимается и клетка строится, чужой — не трогаем ----
+  {
+    const FULL0 = { cobblestone: 110, spruce_log: 12, spruce_planks: 49, spruce_door: 1, glass_pane: 5, torch: 2, dirt: 6 };
+    const wall = BP.instantiate(hut, 0, 64, 0, 0).cells.find(k => k.kind === 'block' && k.block === 'cobblestone' && k.ly === 1);
+    const key = `${wall.x},${wall.y},${wall.z}`;
+    for (const own of [true, false]) {
+      const w = mkWorld({ inv: FULL0 });
+      w.set(wall.x, wall.y, wall.z, 'crafting_table');
+      w.ctx.ownBlocks = { get: k => own && k === key ? { name: 'crafting_table' } : undefined };
+      const r = await BP.buildBlueprint(w.ctx, task(), { name: 'hut_west', x: 0, y: 64, z: 0 }).catch(e => e.extra);
+      if (own) { assert.strictEqual(w.get(wall.x, wall.y, wall.z).name, 'cobblestone', 'свой верстак заменён'); assert(r.ok, JSON.stringify(r).slice(0, 300)); }
+      else { assert.strictEqual(w.get(wall.x, wall.y, wall.z).name, 'crafting_table', 'чужой верстак на месте'); assert(!r.ok); }
+    }
+  }
+
   // ---- полная стройка хижины с препятствиями, повтор, поворот ----
   const FULL = { cobblestone: 110, spruce_log: 12, spruce_planks: 49, spruce_door: 1, glass_pane: 5, torch: 2, dirt: 6 };
   for (const rot of [0, 90]) {
