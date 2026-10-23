@@ -182,6 +182,14 @@ function testFiles(dir) {
   assert(det.ok && /текст/.test(det.request) && /готово/.test(det.answer) && det.log.some(x => /Готово, навык записан/.test(x.text)));
   assert(!A.engineerDetail(cfg, '../notes').ok, 'путь за пределы папки не принимается');
   assert(!A.engineerDetail(cfg, 'нет_такой').ok);
+  // «Отправить инженеру снова»: только «не готово»/«готово», не «в работе» и не «ждёт»; заявка становится новее ответа
+  fs.writeFileSync(path.join(sr, 'd_bad.tech'), '2');
+  assert(!A.resendSkill(cfg, 'b_work').ok && !A.resendSkill(cfg, 'a_wait').ok && !A.resendSkill(cfg, '../x').ok && !A.resendSkill(cfg, 'нет').ok);
+  assert(A.resendSkill(cfg, 'd_bad', 'проверь craft через :3200/check').ok);
+  const dbad = fs.readFileSync(path.join(sr, 'd_bad.md'), 'utf8');
+  assert(/ПОВТОР от хозяина/.test(dbad) && /d_bad: не готово/.test(dbad) && /проверь craft/.test(dbad));
+  assert(!fs.existsSync(path.join(sr, 'd_bad.tech')), 'счётчик техсбоев обнулён');
+  assert.strictEqual(A.engineerList(cfg).find(i => i.name === 'd_bad').status, 'waiting');
   // самый свежий night-лог (по времени изменения) и все «brain start» в нём (читаются кусками)
   w(path.join(data, 'night-20261021-100000.log'), '===== [21.10.2026 10:00:00,00] brain start =====\n', now - 100000);
   const filler = ('x'.repeat(99) + '\n').repeat(12000); // > 1 МБ между запусками

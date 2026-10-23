@@ -491,7 +491,7 @@ function renderEngineer(d) {
   if (!d.items.length) return h + '<div class="box dim">Заявок нет.</div>' + renderCore(d.core);
   h += '<table><tr><th>Навык</th><th>Статус</th><th>Когда</th><th>О чём</th></tr>';
   for (const i of d.items) {
-    h += `<tr class="click" data-req="${esc(i.name)}"><td><b>${esc(i.name)}</b></td><td><span class="tag ${STC[i.status]}">${esc(i.statusRu)}</span></td><td>${tm(i.ts)}<div class="dim small">${ago(i.ts, d.now)}</div></td><td class="small">${esc(i.verdict || i.title)}</td></tr>`;
+    h += `<tr class="click" data-req="${esc(i.name)}"><td><b>${esc(i.name)}</b></td><td><span class="tag ${STC[i.status]}">${esc(i.statusRu)}</span>${i.status === 'notdone' ? `<div style="margin-top:4px"><button class="btn2" data-resend="${esc(i.name)}" title="Отдать заявку инженеру ещё раз (можно дописать уточнение)">Отправить инженеру снова</button></div>` : ''}</td><td>${tm(i.ts)}<div class="dim small">${ago(i.ts, d.now)}</div></td><td class="small">${esc(i.verdict || i.title)}</td></tr>`;
     if (openReq === i.name) h += `<tr><td colspan="4"><div id="reqDetail" class="detail dim">загружаю…</div></td></tr>`;
   }
   return h + '</table>' + renderCore(d.core);
@@ -806,6 +806,17 @@ function renderCore(c) {
   }
   return h + '</table>';
 }
+async function resendSkill(name, btn) {
+  const note = prompt(`Отдать заявку «${name}» инженеру ещё раз.\nМожно дописать уточнение (что исправить, на что смотреть) — или оставить пустым:`, '');
+  if (note === null) return;
+  btn.disabled = true; btn.textContent = 'отправляю…';
+  try {
+    const r = await fetch('/api/skill_requests/resend', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, note }) });
+    const j = await r.json();
+    if (!j.ok) alert('Не отправлено: ' + (j.error || '?'));
+  } catch (e) { alert('Не отправлено: ' + e.message); }
+  tick();
+}
 async function approveCore(id, btn) {
   btn.disabled = true; btn.textContent = 'сохраняю…';
   try {
@@ -955,6 +966,8 @@ document.addEventListener('click', e => {
     if (ab.dataset.redo && !confirm('Этот запрос уже сделан, тесты прошли. Отдать инженеру переделать заново?')) return;
     approveCore(ab.dataset.approve, ab); return;
   }
+  const rb = e.target.closest('button[data-resend]');
+  if (rb) { e.stopPropagation(); resendSkill(rb.dataset.resend, rb); return; }
   const tc = e.target.closest('tr[data-core]');
   if (tc) { openCore = openCore === tc.dataset.core ? null : tc.dataset.core; tick(); }
   const tr = e.target.closest('tr[data-req]');

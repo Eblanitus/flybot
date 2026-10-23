@@ -1,7 +1,8 @@
 // «Аудит»: локальная страница, где видно, что делает каждая роль мухи (тело, автопилот и рефлексы, мозг, инженер, учитель, сторож),
 // и можно написать мозгу. Голый Node (http, fs), без npm-зависимостей. Порт 3300, только 127.0.0.1.
-// Файлы мухи только читает. Три записи: POST /owner_msg в тело (через его HTTP-API), вкладка «Модели» — файл data/models.json (модель мозга, учителя, инженера)
-// и кнопка «Разрешить» у запроса на правку ядра — файл data/core_requests_state.json (lib/core_requests.js; сам brain/core_requests.md не меняется).
+// Файлы мухи только читает. Четыре записи: POST /owner_msg в тело (через его HTTP-API), вкладка «Модели» — файл data/models.json (модель мозга, учителя, инженера),
+// кнопка «Разрешить» у запроса на правку ядра — файл data/core_requests_state.json (lib/core_requests.js; сам brain/core_requests.md не меняется)
+// и «Отправить инженеру снова» у заявки «не готово» — дописывает «ПОВТОР от хозяина» в brain/skill_requests/<имя>.md (сторож возьмёт её заново).
 // Все запросы к телу и исполнителю идут с заголовком X-Observer: 1 — тело не считает их признаком «мозг жив».
 // Запуск: node audit/server.js   (или audit.cmd в корне проекта)
 'use strict';
@@ -458,7 +459,7 @@ function engineerList(cfg) {
     else if (done != null && (req == null || req <= done + 1000)) {
       ts = done;
       let first = ''; try { first = fs.readFileSync(path.join(dir, name + '.done.md'), 'utf8').split(/\r?\n/).find(l => l.trim()) || ''; } catch (e) {}
-      verdict = first.replace(/^#+\s*/, '').slice(0, 160);
+      verdict = first.replace(/^﻿/, '').replace(/^#+\s*/, '').slice(0, 160);
       status = /не\s*готов|не\s*удал|провал|ошибк|failed|не\s*получил|отказ/i.test(first) ? 'notdone' : 'done';
     } else { status = 'waiting'; ts = req != null ? req : done; }
     let title = ''; try { title = (fs.readFileSync(path.join(dir, name + '.md'), 'utf8').split(/\r?\n/).find(l => /^#\s/.test(l)) || '').replace(/^#\s*/, '').slice(0, 200); } catch (e) {}
@@ -467,6 +468,26 @@ function engineerList(cfg) {
   return items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
 }
 const STATUS_RU = { waiting: 'ждёт', working: 'в работе', done: 'готово', notdone: 'не готово' };
+
+// Хозяин отдаёт заявку инженеру ещё раз (вместо сторожа и учителя): «ПОВТОР от хозяина» в конце заявки — она становится новее
+// ответа, и сторож берёт её снова (brain_guard.ps1 PickReq); счётчик техсбоев (<имя>.tech) обнуляется. Ответ .done.md остаётся — история.
+function resendSkill(cfg, name, note) {
+  if (typeof name !== 'string' || !/^[a-z0-9_]+$/.test(name)) return { ok: false, error: 'плохое имя заявки' };
+  const dir = path.join(cfg.brainDir, 'skill_requests');
+  const it = engineerList(cfg).find(i => i.name === name);
+  if (!it || it.reqTs == null) return { ok: false, error: 'нет такой заявки' };
+  if (it.status === 'working') return { ok: false, error: 'инженер уже над ней работает' };
+  if (it.status === 'waiting') return { ok: false, error: 'заявка и так ждёт инженера' };
+  const text = String(note || '').replace(/\r/g, '').trim().slice(0, 3000);
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  const when = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  try {
+    fs.appendFileSync(path.join(dir, name + '.md'), `\n\n## ПОВТОР от хозяина (${when})\n` +
+      `Прошлый ответ (${name}.done.md): ${it.verdict || '—'}. Хозяин отдаёт заявку ещё раз.\n` + (text ? text + '\n' : ''));
+    try { fs.unlinkSync(path.join(dir, name + '.tech')); } catch (e) {}
+  } catch (e) { return { ok: false, error: 'не удалось записать заявку: ' + (e && e.message || e) }; }
+  return { ok: true, name };
+}
 
 function engineerDetail(cfg, name) {
   if (!/^[\w.-]+$/.test(name || '')) return { ok: false, error: 'плохое имя заявки' };
@@ -1100,6 +1121,20 @@ function createServer(opts) {
         });
         return;
       }
+      if (req.method === 'POST' && url.pathname === '/api/skill_requests/resend') {
+        const origin = req.headers.origin;
+        if (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) { req.resume(); return sendJson(res, 403, { ok: false, error: 'чужой сайт' }); }
+        if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) { req.resume(); return sendJson(res, 415, { ok: false, error: 'нужен Content-Type: application/json' }); }
+        let s = ''; let big = false;
+        req.on('data', c => { if (big) return; s += c; if (s.length > 8000) { big = true; req.resume(); sendJson(res, 413, { ok: false, error: 'слишком большой запрос' }); } });
+        req.on('end', () => {
+          if (big) return;
+          let b; try { b = JSON.parse(s || '{}'); } catch (e) { return sendJson(res, 400, { ok: false, error: 'bad json' }); }
+          const r = resendSkill(cfg, b && b.name, b && b.note);
+          return sendJson(res, r.ok ? 200 : 400, r);
+        });
+        return;
+      }
       if (req.method === 'GET' && url.pathname.startsWith('/api/')) {
         const r = await api(cfg, url.pathname.slice(5), url.searchParams);
         return r == null ? sendJson(res, 404, { ok: false, error: 'not found' }) : sendJson(res, 200, r);
@@ -1137,7 +1172,7 @@ module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
   parseVerboseModels, parsePlainFree, parseOpencodeProcs, parseGuardProcs, roleStatus, apiConsole, loadSkills, modelErrors, loadFreeModels, apiModels, saveModels,
-  engineerList, engineerDetail, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, loadCore, api, taskRu
+  engineerList, engineerDetail, resendSkill, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, loadCore, api, taskRu
 };
 
 if (require.main === module) {
