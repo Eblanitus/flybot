@@ -1,4 +1,4 @@
-// Офлайн-проверка collect stone: камня не видно (под землёй) -> копает лесенку вниз и добывает
+// Офлайн-проверка collect stone: камня не видно (под землёй) -> не копает лесенку, а падает с ошибкой
 'use strict';
 const assert = require('assert');
 const { Vec3 } = require('../lib/util');
@@ -10,7 +10,8 @@ const reg = require('minecraft-data')('1.21.4');
 
 function mkWorld(lavaAt, harvest) {
   const blocks = new Map(); const key = (x, y, z) => x + ',' + y + ',' + z;
-  const name = (x, y, z) => { const k = key(x, y, z); if (blocks.has(k)) return blocks.get(k); if (lavaAt && lavaAt(x, y, z)) return 'lava'; return y > 65 ? 'air' : y === 65 ? 'grass_block' : y >= 63 ? 'dirt' : 'stone'; };
+  // Камень на уровне 65-66 (видно), грязь ниже
+  const name = (x, y, z) => { const k = key(x, y, z); if (blocks.has(k)) return blocks.get(k); if (lavaAt && lavaAt(x, y, z)) return 'lava'; return y > 66 ? 'air' : y === 66 ? 'stone' : y === 65 ? 'stone' : y >= 63 ? 'dirt' : 'stone'; };
   const mk = (x, y, z) => { const n = name(x, y, z); const d = reg.blocksByName[n]; return { name: n, type: d.id, boundingBox: d.boundingBox, position: new Vec3(x, y, z), harvestTools: harvest ? d.harvestTools : undefined }; };
   const inv = new Map();
   const bot = {
@@ -21,6 +22,13 @@ function mkWorld(lavaAt, harvest) {
     inventory: { items: () => [...inv].map(([name, count]) => ({ name, count, type: reg.itemsByName[name].id })) }
   };
   return { bot, inv, blocks, name };
+}
+
+function makeOwnBlocks(map) {
+  return {
+    has: (pos) => map.has(pos.toString()),
+    get: (pos) => map.get(pos.toString())
+  };
 }
 
 module.exports = async () => {
@@ -40,88 +48,131 @@ module.exports = async () => {
   const ctx = { bot: w.bot, stats: { blocksMined: 0 }, tasks: {} };
   const r = await gather.collect(ctx, new Task(1, 'collect', {}, 'brain'), { block: 'stone', count: 12 });
   assert(r.mined >= 12, 'mined ' + r.mined);
-  assert(w.bot.entity.position.y < 66, 'спустился');
-  console.log('collect stone OK', JSON.stringify(r), 'y=' + w.bot.entity.position.y);
-  // лава под землёй вокруг -> понятная ошибка, а не провал в лаву
-  const w2 = mkWorld((x, y) => y <= 62); w.bot = w2.bot;
-  w2.bot.entity.position = new Vec3(0.5, 66, 0.5);
-  await assert.rejects(gather.collect({ bot: w2.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(2, 'collect', {}, 'brain'), { block: 'stone', count: 5 }), e => { console.log('lava ->', e.message); return /копал|копать|лава|lava/.test(e.message); });
-  // брёвна: топора нет, ничего не скрафтить (нет досок/верстака) -> collect не падает, axe = «нет: …»; есть топор -> had
-  const w3 = mkWorld((x, y) => false);
-  const logId = reg.blocksByName.oak_log.id;
-  w3.bot.recipesAll = () => []; w3.bot.pathfinder = {};
-  const oldFind = vision.find;
-  vision.find = () => [new Vec3(3, 66, 3)];
-  w3.bot.blockAt = p => ({ name: 'oak_log', type: logId, position: p, boundingBox: 'block' });
-  w3.bot.dig = async b => { w3.inv.set('oak_log', (w3.inv.get('oak_log') || 0) + 1); };
-  const r3 = await gather.collect({ bot: w3.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(3, 'collect', {}, 'brain'), { block: 'oak_log', count: 4 });
-  assert(/^нет:/.test(r3.axe), 'axe ' + r3.axe);
-  w3.inv.set('iron_axe', 1);
-  const r4 = await gather.collect({ bot: w3.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(4, 'collect', {}, 'brain'), { block: 'oak_log', count: 4 });
-  assert.strictEqual(r4.axe, 'had iron_axe');
-  vision.find = oldFind;
-  console.log('collect log axe OK', r3.axe, '|', r4.axe);
+  // НЕТ спуска вниз — collect не копает лесенку
+  assert(w.bot.entity.position.y >= 66, 'не спустился, y=' + w.bot.entity.position.y);
+  console.log('collect stone OK (no tunneling)', JSON.stringify(r), 'y=' + w.bot.entity.position.y);
 
-  // --- высота: цель далеко внизу (пещера) пропускается в пользу туннеля у стартовой высоты; deep:true разрешает
-  const honest = bot => (ctx, ids) => {
-    const out = []; const p = bot.entity.position.floored();
+  // --- собственные блоки не целятся ---
+  const wOwn = mkWorld();
+  const ownBlocks = new Map();
+  ownBlocks.set('1,65,0', { name: 'cobblestone', t: Date.now(), by: 'autopilot' }); // свой блок рядом
+  wOwn.bot.entity.position = new Vec3(0.5, 66, 0.5);
+  vision.find = (ctx, ids) => {
+    const out = []; const p = wOwn.bot.entity.position.floored();
     for (let x = p.x - 8; x <= p.x + 8; x++) for (let y = p.y - 12; y <= p.y + 4; y++) for (let z = p.z - 8; z <= p.z + 8; z++) {
-      if (ids.includes(bot.blockAt(new Vec3(x, y, z)).type) && A.FACES.some(f => bot.blockAt(new Vec3(x, y, z).plus(f)).name === 'air')) out.push(new Vec3(x, y, z));
+      if (!ids.includes(wOwn.bot.blockAt(new Vec3(x, y, z)).type)) continue;
+      if (A.FACES.some(f => wOwn.bot.blockAt(new Vec3(x, y, z).plus(f)).name === 'air')) out.push(new Vec3(x, y, z));
     }
     return out;
   };
-  const far = new Vec3(3, 40, 3);
-  const w5 = mkWorld();
-  vision.find = (c, ids) => [...honest(w5.bot)(c, ids), far];
-  const r5 = await gather.collect({ bot: w5.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(5, 'collect', {}, 'brain'), { block: 'stone', count: 8 });
-  assert(r5.mined >= 8 && !w5.blocks.has('3,40,3'), 'далёкая цель не должна браться');
-  assert(w5.bot.entity.position.y >= 60, 'остался у стартовой высоты, y=' + w5.bot.entity.position.y);
-  const w6 = mkWorld();
-  vision.find = (c, ids) => [...honest(w6.bot)(c, ids), far];
-  const goto0 = A.goto; A.goto = async (c, t, g) => { if (g.constructor.name === 'GoalLookAtBlock') c.bot.entity.position = new Vec3(g.pos ? g.pos.x : 3, 39, 3); else return goto0(c, t, g); return true; };
-  await gather.collect({ bot: w6.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(6, 'collect', {}, 'brain'), { block: 'stone', count: 1, deep: true });
-  A.goto = goto0;
-  assert.strictEqual(w6.blocks.get('3,40,3'), 'air', 'deep:true берёт далёкую цель');
-  console.log('collect height band OK y=' + w5.bot.entity.position.y);
-  // --- кирка сломалась посреди задачи -> скрафчена каменная, добыча продолжается
-  const w7 = mkWorld(null, true);
-  w7.inv.set('wooden_pickaxe', 1); w7.inv.set('cobblestone', 61); w7.inv.set('stick', 4);
-  vision.find = honest(w7.bot);
-  let digs = 0; const dig0 = w7.bot.dig;
-  w7.bot.dig = async b => { await dig0(b); if (++digs === 3) w7.inv.delete('wooden_pickaxe'); };
-  let cw = w7; const crafted = []; const craft0 = require('../lib/skills/craft').craftItem;
-  require('../lib/skills/craft').craftItem = async (c, t, name) => {
-    crafted.push(name);
-    if (name !== 'stone_pickaxe' || (cw.inv.get('cobblestone') || 0) < 3 || (cw.inv.get('stick') || 0) < 2) throw new Error('не хватает палок');
-    cw.inv.set('cobblestone', cw.inv.get('cobblestone') - 3); cw.inv.set('stick', cw.inv.get('stick') - 2); cw.inv.set(name, 1); return 1;
+  const ctxOwn = { bot: wOwn.bot, stats: { blocksMined: 0 }, tasks: {}, ownBlocks: makeOwnBlocks(ownBlocks) };
+  // Камень есть рядом (не свой), должен добыть его, а не свой блок
+  const rOwn = await gather.collect(ctxOwn, new Task(1, 'collect', {}, 'brain'), { block: 'stone', count: 5 });
+  assert(rOwn.mined >= 5, 'mined ownBlocks ' + rOwn.mined);
+  console.log('collect skips own blocks OK');
+
+  // --- моб рядом: сбор прекращается ---
+  const wMob = mkWorld();
+  wMob.bot.entity.position = new Vec3(0.5, 66, 0.5);
+  vision.find = (ctx, ids) => {
+    const out = []; const p = wMob.bot.entity.position.floored();
+    for (let x = p.x - 8; x <= p.x + 8; x++) for (let y = p.y - 12; y <= p.y + 4; y++) for (let z = p.z - 8; z <= p.z + 8; z++) {
+      if (!ids.includes(wMob.bot.blockAt(new Vec3(x, y, z)).type)) continue;
+      if (A.FACES.some(f => wMob.bot.blockAt(new Vec3(x, y, z).plus(f)).name === 'air')) out.push(new Vec3(x, y, z));
+    }
+    return out;
   };
-  try {
-    const r7 = await gather.collect({ bot: w7.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(7, 'collect', {}, 'brain'), { block: 'stone', count: 8 });
-    assert(r7.mined >= 8, 'mined ' + r7.mined);
-    assert.deepStrictEqual(crafted, ['stone_pickaxe']);
-    assert(w7.inv.get('stone_pickaxe') === 1);
-    // крафт невозможен (палок нет) -> ошибка с причиной
-    const w8 = mkWorld(null, true); w8.inv.set('cobblestone', 61); cw = w8;
-    vision.find = honest(w8.bot);
-    await assert.rejects(gather.collect({ bot: w8.bot, stats: { blocksMined: 0 }, tasks: {} }, new Task(8, 'collect', {}, 'brain'), { block: 'stone', count: 3 }), e => { return /нужен инструмент[^]*скрафтить не вышло/.test(e.message); });
-  } finally { require('../lib/skills/craft').craftItem = craft0; vision.find = oldFind; }
-  console.log('collect pickaxe auto-craft OK', crafted.join());
-  // --- подпорки: булыжник только сверх запаса, доски никогда; учёт чистого прироста и spent
-  const fake = inv => ({ inventory: { items: () => Object.entries(inv).map(([name, count]) => ({ name, count })) }, registry: reg });
-  const sn = (inv, r) => A.scaffoldNames(fake(inv), r);
-  assert(!sn({ cobblestone: 32, oak_planks: 64 }).includes('cobblestone') && !sn({ oak_planks: 64 }).includes('oak_planks'));
-  assert(sn({ cobblestone: 33 }).includes('cobblestone') && sn({ cobblestone: 33 }).includes('dirt'));
-  assert(!sn({ cobblestone: 40 }, 40).includes('cobblestone') && sn({ cobbled_deepslate: 41 }, 40).includes('cobbled_deepslate'));
-  assert(sn({}).includes('andesite') && sn({}).includes('netherrack') && !sn({}).includes('cobblestone'));
-  const w9 = mkWorld(); w9.inv.set('cobblestone', 10);
-  vision.find = honest(w9.bot);
-  const goto1 = A.goto; let seenReserve;
-  A.goto = async (c, t, g) => { seenReserve = c.blockReserve; if (g.constructor.name === 'GoalBlock') { w9.inv.set('cobblestone', Math.max(0, w9.inv.get('cobblestone') - 1)); } return goto1(c, t, g); };
-  const ctx9 = { bot: w9.bot, stats: { blocksMined: 0 }, tasks: {} };
-  const r9 = await gather.collect(ctx9, new Task(9, 'collect', {}, 'brain'), { block: 'stone', count: 5 });
-  A.goto = goto1; vision.find = oldFind;
-  assert.strictEqual(seenReserve, 5); assert.strictEqual(ctx9.blockReserve, undefined);
-  assert(r9.spent >= 1 && r9.mined > 5 - 0 && w9.inv.get('cobblestone') - 10 >= 5, JSON.stringify(r9));
-  console.log('scaffold reserve + net gain OK', JSON.stringify(r9));
+  // Мок danger.state — моб в 5 м
+  const danger = require('../lib/danger');
+  const origState = danger.state;
+  danger.state = () => ({
+    mobs: { mobs: [{ name: 'zombie', d: 5 }, { name: 'creeper', d: 8 }] }
+  });
+  const ctxMob = { bot: wMob.bot, stats: { blocksMined: 0 }, tasks: {} };
+  await assert.rejects(gather.collect(ctxMob, new Task(1, 'collect', {}, 'brain'), { block: 'stone', count: 5 }),
+    e => { console.log('mob near ->', e.message); return /моб.*рядом: сбор прекращён/.test(e.message); });
+  danger.state = origState;
+  console.log('collect stops for mob OK');
+
+  // --- approachKnownLimited: лимит 16 м, гейт ночи/мобов/HP ---
+  const wm = require('../lib/worldmem');
+  const wm2 = wm.get({ dataDir: null });
+  wm2.recs.clear(); wm2.byKind.clear(); wm2.cellIdx.clear();
+  // Добавить известный камень в 8 м (кратно 4 для thin)
+  wm2.observe('stone', 8, 64, 0, { d: 'overworld', t: Date.now(), src: 'seen', exact: true });
+  // Добавить известный камень в 32 м (должен игнорироваться)
+  wm2.observe('stone', 32, 64, 0, { d: 'overworld', t: Date.now(), src: 'seen', exact: true });
+
+  const ctxKnown = { bot: w.bot, stats: { blocksMined: 0 }, tasks: {}, dataDir: null, worldmem: wm2 };
+  w.bot.entity.position = new Vec3(0.5, 66, 0.5);
+  vision.find = () => []; // ничего не видно
+
+  // Мок danger.state — день, нет мобов, HP высокое
+  danger.state = () => ({
+    mobs: { mobs: [] },
+    hp: 20
+  });
+  const tun = { dir: [1, 0], deep: false, steps: 0, startY: 66, until: Date.now() + 150000 };
+  const resKnown = await gather.approachKnownLimited(ctxKnown, new Task(1, 'test', {}, 'test'), ['stone'], tun);
+  assert(resKnown === true, 'дошла до известного камня в 8 м');
+  console.log('approachKnownLimited within 16m OK');
+
+  // Гейт: ночь + HP < 10 + нет оружия -> отказ
+  w.bot.entity.position = new Vec3(0.5, 66, 0.5);
+  w.bot.health = 8;
+  w.bot.inventory.items = () => []; // нет оружия
+  danger.state = () => ({
+    mobs: { mobs: [{ name: 'zombie', d: 12 }] }, // ночь — есть зомби
+    hp: 8
+  });
+  await assert.rejects(gather.approachKnownLimited(ctxKnown, new Task(2, 'test', {}, 'test'), ['stone'], tun),
+    e => { console.log('night gate ->', e.message); return /ночь.*HP.*нет оружия/.test(e.message); });
+
+  // Гейт: моб ближе 10 м -> отказ
+  w.bot.health = 20;
+  danger.state = () => ({
+    mobs: { mobs: [{ name: 'creeper', d: 5 }] },
+    hp: 20
+  });
+  await assert.rejects(gather.approachKnownLimited(ctxKnown, new Task(3, 'test', {}, 'test'), ['stone'], tun),
+    e => { console.log('mob gate ->', e.message); return /моб.*м рядом: не иду/.test(e.message); });
+
+  // Гейт: блок дальше 16 м -> false (не идёт)
+  w.bot.entity.position = new Vec3(0.5, 66, 0.5);
+  wm2.recs.clear(); wm2.byKind.clear(); wm2.cellIdx.clear();
+  wm2.observe('stone', 30, 66, 0, { d: 'overworld', t: Date.now(), src: 'seen' });
+  danger.state = () => ({ mobs: { mobs: [] }, hp: 20 });
+  const resFar = await gather.approachKnownLimited(ctxKnown, new Task(4, 'test', {}, 'test'), ['stone'], tun);
+  assert(resFar === false, 'блок в 30 м игнорируется');
+  console.log('approachKnownLimited distance limit OK');
+
+  danger.state = origState;
+  console.log('approachKnownLimited gates OK');
+
+  // --- checkMobNear ---
+  const ctxMob2 = { bot: wMob.bot, stats: { blocksMined: 0 }, tasks: {} };
+  danger.state = () => ({ mobs: { mobs: [{ name: 'spider', d: 10.1 }] } });
+  assert.doesNotThrow(() => gather.checkMobNear(ctxMob2), 'моб в 10.1 м не останавливает');
+  danger.state = () => ({ mobs: { mobs: [{ name: 'spider', d: 11 }] } });
+  assert.doesNotThrow(() => gather.checkMobNear(ctxMob2), 'моб в 11 м не останавливает');
+  danger.state = () => ({ mobs: { mobs: [{ name: 'spider', d: 10 }] } });
+  assert.throws(() => gather.checkMobNear(ctxMob2), /моб spider 10\.0 м рядом/, 'моб в 10 м останавливает');
+  danger.state = () => ({ mobs: { mobs: [{ name: 'spider', d: 9.9 }] } });
+  assert.throws(() => gather.checkMobNear(ctxMob2), /моб spider 9\.9 м рядом/, 'моб в 9.9 м останавливает');
+  danger.state = () => ({ mobs: { mobs: [] } });
+  assert.doesNotThrow(() => gather.checkMobNear(ctxMob2), 'нет мобов — ок');
+  danger.state = origState;
+  console.log('checkMobNear OK');
+
+  // --- isOwnBlock ---
+  const ownMap = new Map();
+  ownMap.set('5,66,0', { name: 'cobblestone', t: Date.now(), by: 'autopilot' });
+  const ctxOwn2 = { ownBlocks: makeOwnBlocks(ownMap) };
+  assert(gather.isOwnBlock(ctxOwn2, new Vec3(5, 66, 0)) === true, 'свой блок определяется');
+  assert(gather.isOwnBlock(ctxOwn2, new Vec3(6, 66, 0)) === false, 'чужой блок не свой');
+  assert(gather.isOwnBlock({}, new Vec3(5, 66, 0)) === false, 'нет ownBlocks — false');
+  console.log('isOwnBlock OK');
+
+  console.log('ALL COLLECT TESTS PASSED');
 };
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });

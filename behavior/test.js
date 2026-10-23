@@ -301,6 +301,10 @@ module.exports = async function selfTest() {
   assert(gs && gs.key === 'go_base' && gs.kind === 'learned' && gs.name === 'go_safe', 'go_safe есть — дорогу ведёт он: ' + JSON.stringify(gs));
   assert.strictEqual(gs.params.max_sec, T.goSafeMaxSec, 'предел времени go_safe — из порогов');
   assert.strictEqual(decide({ ...farBase, goSafe: true }).name, 'go_safe', 'не goto');
+  assert.strictEqual(decide(farBase).params.priority, true, 'go_base имеет приоритет');
+  assert.strictEqual(decide({ ...farBase, goSafe: true }).params.priority, true, 'go_safe имеет приоритет');
+  const buildFar = { ...base, build: { name: 'hut', x: 100, y: 64, z: 100, rot: 0, sig: 'b' }, buildDist: 50 };
+  assert.strictEqual(decide(buildFar).params.priority, true, 'build_go имеет приоритет');
   // ---- v0.2 «простой страшнее смерти»: давление простоя стройки (idleBuildMin) ----
   const bg = { x: 0, y: 64, z: 0, r: 96 };
   const hut = { name: 'build_hut', params: { x: 5, z: 5 }, kind: 'learned', sig: 'h' };
@@ -389,5 +393,21 @@ module.exports = async function selfTest() {
     build: { name: 'hut', x: 0, y: 64, z: 0, rot: 0, sig: 'S', need: { cobblestone: 10 } }, buildDist: 3, outlook: null, crashed: {}, idleBuildMin: 0 };
   const nightAct = D(nightBase);
   assert.ok(!nightAct || nightAct.key !== 'build_gather', 'ночью с need — не вызывается build_gather (вернулось: ' + (nightAct ? nightAct.key : 'null') + ')');
+
+  // (1) wait_night with creeper 3m at night -> action, not wait
+  const wnCreeper = { ...nightBase, hostilesNear: 1, hostile: { name: 'creeper', d: 3 }, running: { name: 'wait_night', key: 'wait_night', kind: 'body' } };
+  const wnAct = D(wnCreeper);
+  assert.ok(wnAct && wnAct.key !== 'wait_night', 'wait_night with creeper 3m -> action, not waiting');
+
+  // (2) free body, creeper 6m at night -> action
+  const freeCreeper = { ...nightBase, idle: true, task: null, running: null, hostilesNear: 1, hostile: { name: 'creeper', d: 6 } };
+  const freeAct = D(freeCreeper);
+  assert.ok(freeAct && freeAct.key !== 'wait_night', 'free body with creeper 6m -> action');
+
+  // (3) shelter = open pit (sheltered: false), HP 20, creeper 3m -> action, not waiting
+  const openPit = { ...nightBase, sheltered: false, hostilesNear: 1, hostile: { name: 'creeper', d: 3 } };
+  const pitAct = D(openPit);
+  assert.ok(pitAct && pitAct.key !== 'wait_night', 'open pit with creeper 3m -> action');
+
   return { ok: true };
 };

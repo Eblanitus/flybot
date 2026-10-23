@@ -40,7 +40,7 @@ module.exports = async () => {
   V.setRegistry(null);
   const reg = V.registry();
   assert.strictEqual(reg.errors.length, 0, JSON.stringify(reg.errors));
-  const want = { escape: ['pillar', 'sprint_away', 'zigzag'], shelter: ['dig', 'smart', 'walls'], climb: ['path', 'pillar'], descend: ['path', 'stairs'], home: ['direct', 'hops', 'short_hops'], dig: ['look', 'near'], place: ['close', 'near', 'pillar'] };
+  const want = { escape: ['pillar', 'sprint_away', 'zigzag'], shelter: ['dig', 'smart', 'walls'], climb: ['path', 'pillar'], descend: ['path', 'stairs'], home: ['direct', 'hops', 'short_hops'], dig: ['look', 'near', 'safe'], place: ['close', 'near', 'pillar'] };
   for (const [f, vs] of Object.entries(want)) assert.deepStrictEqual([...V.family(f).variants.keys()].sort(), vs, f);
   const ap = (f, n, sit) => V.family(f).variants.get(n).applies({}, { ceiling: 5, blocks: 0, ...sit });
   const oldGoto = A.goto;
@@ -130,6 +130,77 @@ module.exports = async () => {
       assert.strictEqual(D.kindOf('oak_log'), 'log'); assert.strictEqual(D.kindOf('iron_ore'), 'ore');
       const st = V.stats(ctx, 'dig').stats.dig;
       assert(st.log.look.ok === 1 && st.log.near.ok === 1, 'подход записан по виду блока: ' + JSON.stringify(st));
+    }
+    // ---- dig safe variant ----
+    {
+      const D = require('../lib/variants/dig/_core');
+      // 1. цель под ногами — отказ
+      {
+        const { bot, ctx } = fakeBot((x, y, z) => (x === 0 && y === 66 && z === 0 ? 'stone' : flat(x, y)));
+        bot.entity.position = new Vec3(0.5, 66, 0.5);
+        const ownBlocks = new Map();
+        ownBlocks.set('0,66,0', { name: 'stone', t: Date.now(), by: 'autopilot' });
+        const dangerState = { mobs: { mobs: [] } };
+        try {
+          await D.approach(ctx, task(), new Vec3(0, 66, 0), { style: 'safe', ownBlocks, danger: dangerState });
+          throw new Error('should have thrown');
+        } catch (e) {
+          assert(/цель под ногами/.test(e.message), 'safe отказывает под ногами: ' + e.message);
+        }
+      }
+      // 2. цель — свой блок — отказ
+      {
+        const { bot, ctx } = fakeBot((x, y, z) => (x === 2 && y === 66 && z === 0 ? 'stone' : flat(x, y)));
+        bot.entity.position = new Vec3(0.5, 66, 0.5);
+        const ownBlocks = new Map();
+        ownBlocks.set('2,66,0', { name: 'stone', t: Date.now(), by: 'autopilot' });
+        const dangerState = { mobs: { mobs: [] } };
+        try {
+          await D.approach(ctx, task(), new Vec3(2, 66, 0), { style: 'safe', ownBlocks, danger: dangerState });
+          throw new Error('should have thrown');
+        } catch (e) {
+          assert(/свой блок/.test(e.message), 'safe отказывает свой блок: ' + e.message);
+        }
+      }
+      // 3. перепад под целью — отказ
+      {
+        const gen = (x, y, z) => (x === 5 && y === 66 && z === 0 ? 'stone' : (y < 63 ? 'stone' : 'air'));
+        const { bot, ctx } = fakeBot(gen);
+        bot.entity.position = new Vec3(0.5, 66, 0.5);
+        const ownBlocks = new Map();
+        const dangerState = { mobs: { mobs: [] } };
+        try {
+          await D.approach(ctx, task(), new Vec3(5, 66, 0), { style: 'safe', ownBlocks, danger: dangerState });
+          throw new Error('should have thrown');
+        } catch (e) {
+          assert(/пропасть/.test(e.message), 'safe отказывает пропасть: ' + e.message);
+        }
+      }
+      // 4. моб очень близко — отказ
+      {
+        const { bot, ctx } = fakeBot((x, y, z) => (x === 5 && y === 66 && z === 0 ? 'stone' : flat(x, y)));
+        bot.entity.position = new Vec3(0.5, 66, 0.5);
+        const ownBlocks = new Map();
+        const dangerState = { mobs: { mobs: [{ name: 'creeper', d: 2 }] } };
+        try {
+          await D.approach(ctx, task(), new Vec3(5, 66, 0), { style: 'safe', ownBlocks, danger: dangerState });
+          throw new Error('should have thrown');
+        } catch (e) {
+          assert(/моб.*рядом: safe отказывает/.test(e.message), 'safe отказывает моб рядом: ' + e.message);
+        }
+      }
+      // 5. успешно: цель рядом, безопасная позиция найдена
+      {
+        const { bot, ctx } = fakeBot((x, y, z) => (x === 5 && y === 66 && z === 0 ? 'stone' : flat(x, y)));
+        bot.entity.position = new Vec3(0.5, 66, 0.5);
+        const ownBlocks = new Map();
+        const dangerState = { mobs: { mobs: [] } };
+        const log = []; A.goto = fakeGoto(bot, log);
+        const r = await D.approach(ctx, task(), new Vec3(5, 66, 0), { style: 'safe', ownBlocks, danger: dangerState });
+        assert(r.reached && r.variant === 'safe', 'safe успешно подошёл: ' + JSON.stringify(r));
+        const st = V.stats(ctx, 'dig').stats.dig;
+        assert(st.stone.safe.ok === 1, 'safe записан в статистику: ' + JSON.stringify(st));
+      }
     }
     // ---- place ----
     {

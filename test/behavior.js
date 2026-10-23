@@ -203,6 +203,18 @@ function dangerTests() {
   assert.strictEqual(dm.damage.ttdSec, 10);
   assert.strictEqual(dm.damage.hits, 2);
 
+  // сталагмит (pointed_dripstone): 2 урона/с при HP 20 -> 10 с
+  const ds = C({ hp: 20, feet: 'pointed_dripstone' });
+  assert.strictEqual(ds.dripstone.onDripstone, true);
+  assert.strictEqual(ds.dripstone.dps, 2);
+  assert.strictEqual(ds.dripstone.ttdSec, 10);
+  assert.strictEqual(ds.worst.kind, 'dripstone');
+  // без указалок — нет опасности
+  assert.strictEqual(C({ hp: 20, feet: 'stone' }).dripstone.onDripstone, false);
+  assert.strictEqual(C({ hp: 20, feet: 'stone' }).dripstone.ttdSec, null);
+  // head в указалках тоже считается
+  assert.strictEqual(C({ hp: 20, head: 'pointed_dripstone' }).dripstone.onDripstone, true);
+
   // самое срочное из нескольких: в лаве и тонет
   assert.strictEqual(C({ head: 'water', headUnderSec: 14, feet: 'lava' }).worst.kind, 'lava');
   assert.ok(/броня/.test(calm.note), 'нет пометки, что броня не учтена');

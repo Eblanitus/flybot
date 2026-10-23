@@ -200,7 +200,7 @@ function decide(s) {
       return learned('build_gather', 'gather_list', { items, max_sec: T.buildGatherSec }, `добираю для постройки ${b.name}: ${items.replace(/,/g, ', ')}${tail}`);
     }
     if (s.buildDist != null && s.buildDist > T.buildNearDist)
-      return body('build_go', 'goto', { x: b.x, y: b.y, z: b.z, r: T.buildNearDist / 2, timeout: T.baseTimeoutSec, label: 'к постройке', fail: 'до постройки не дошла' }, `иду к постройке ${b.name} (${Math.round(s.buildDist)} м)${tail}`);
+      return body('build_go', 'goto', { x: b.x, y: b.y, z: b.z, r: T.buildNearDist / 2, timeout: T.baseTimeoutSec, label: 'к постройке', fail: 'до постройки не дошла', priority: true }, `иду к постройке ${b.name} (${Math.round(s.buildDist)} м)${tail}`);
     return body('build', 'build_blueprint', { name: b.name, x: b.x, y: b.y, z: b.z, rot: b.rot }, `строю ${b.name} у ${b.x} ${b.y} ${b.z}${b.rot ? ' rot=' + b.rot : ''}${tail}`);
   };
   const job = b ? buildAct : g ? goalAct : null; // дело от мозга: постройка или старая цель
@@ -344,8 +344,8 @@ function decide(s) {
     // а после добавления остальных дел решаем, чем заняться
     if (!dirtyRoad) {
       const act = s.goSafe
-        ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec }, 'иду на базу осторожно (go_safe)')
-        : body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec }, 'иду на базу');
+        ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec, priority: true }, 'иду на базу осторожно (go_safe)')
+        : body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec, priority: true }, 'иду на базу');
       add(45 + Math.min(25, (s.baseDist - s.base.r) / 8) + (duskSoon ? 20 : 0), act);
     }
   }
@@ -774,7 +774,12 @@ function create(ctx) {
     const now = Date.now();
     if (now - lastWait < 60000) return;
     lastWait = now;
-    note(`мало HP (${st.hp}) — жду (${st.sheltered ? 'в укрытии' : 'без укрытия'}${st.hasFood ? '' : ', еды нет'})`);
+    const hpLow = st.hp < T.apLowHp;
+    if (hpLow) {
+      note(`мало HP (${st.hp}) — жду (${st.sheltered ? 'в укрытии' : 'без укрытия'}${st.hasFood ? '' : ', еды нет'})`);
+    } else {
+      note(`опасность${st.hostile ? ` (${st.hostile.name} ${st.hostile.d} м)` : ''} — ждать нельзя (HP ${st.hp}, ${st.sheltered ? 'в укрытии' : 'без укрытия'})`);
+    }
   };
 
   // L052: моб рядом ночью, а укрытие есть и ударов нет — честно пишем (раз в минуту), что стоим в укрытии,
