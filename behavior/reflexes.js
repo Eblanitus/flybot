@@ -96,7 +96,8 @@ function clearRefusal(ctx, action) {
 // Тактику не зашиваем: варианты упорядочены старым правилом (это лишь prior), выбирает опыт (experience.js) — что выживало в такой обстановке
 function defensePrior(ctx, att, underHit) {
   const bot = ctx.bot;
-  const canFight = !!att && F.distTo(bot, att) <= T.defenseFightDist && isAutoTarget(att);
+  // behavior_reflexes_fight_nowpn: голыми руками не воюем — без оружия бой не предлагаем вовсе
+  const canFight = !!att && F.distTo(bot, att) <= T.defenseFightDist && isAutoTarget(att) && hasWeapon(bot);
   const o = outlookOf(ctx, att);
   const losing = o ? !o.win : bot.health < T.defenseLowHp; // А: бой проигран по оценке (без оценки — порог HP)
   const opts = losing ? ['escape', 'shelter'] : (!hasWeapon(bot) && (hostilesNear(bot, T.crowdR) >= T.crowdN || timeInfo(bot).isNight)) ? ['shelter', 'escape'] : canFight ? ['fight', 'shelter', 'escape'] : ['escape', 'shelter'];
@@ -213,6 +214,43 @@ async function startDefense(ctx, plan) {
   return r;
 }
 
+// Цикл mob_near (моб сближается): что делать — {skill, params, why}. Крипер/проигрыш/мало HP — уклонение;
+// бой — только с оружием (behavior_reflexes_fight_nowpn: голыми руками 20 HP против паука — смерть); без оружия — укрытие/отход
+function mobNearPlan(ctx, nearest, dist) {
+  const bot = ctx.bot;
+  const o = outlookOf(ctx, nearest);
+  const losing = o ? !o.win : bot.health < T.defenseLowHp;
+  const isCreeper = nearest.name === 'creeper';
+  const armed = hasWeapon(bot);
+  const canFight = armed && F.distTo(bot, nearest) <= T.defenseFightDist && isAutoTarget(nearest);
+  const d = Number(dist).toFixed(1);
+  if (isCreeper || losing || bot.health <= T.swatMinHp)
+    return { skill: 'escape', params: {}, why: `моб ${nearest.name} ${d} м — уклонение от ${isCreeper ? 'взрыва' : 'урона'}` };
+  if (canFight) return { skill: 'fight', params: { targetId: nearest.id, radius: T.fightRadius }, why: `моб ${nearest.name} ${d} м — бой` };
+  if (!armed) {
+    // вплотную копка-укрытие не успевает — отход; иначе укрытие
+    const close = dist < T.hitNoShelterDist || bannedActions(ctx).shelter || (ctx.shelterFailT && Date.now() - ctx.shelterFailT < T.shelterFailMs);
+    return close ? { skill: 'escape', params: {}, why: `моб ${nearest.name} ${d} м — нет оружия, отхожу` }
+      : { skill: 'shelter', params: {}, why: `моб ${nearest.name} ${d} м — нет оружия, укрываюсь` };
+  }
+  return { skill: 'shelter', params: {}, why: `моб ${nearest.name} ${d} м — укрытие` };
+}
+// HP < apLowHp и стрелок (скелет и пр.) ближе rangedLowHpDist — побег, стиль чередуем (cover_escape / sprint_away):
+// прошлый побег не оторвал — следующий другой. escape_to_base при низком HP исключён в combat.chooseVariant.
+function rangedLowHpPlan(ctx, hostiles) {
+  const bot = ctx.bot;
+  if (!bot || bot.health >= T.apLowHp || !bot.entity) return null;
+  const p = bot.entity.position;
+  const r = (hostiles || []).filter(e => F.RANGED.has(entName(e)) && F.posOf(e))
+    .map(e => ({ e, d: F.posOf(e).distanceTo(p) })).filter(x => x.d <= T.rangedLowHpDist).sort((a, b) => a.d - b.d)[0];
+  if (!r) return null;
+  const styles = ['cover_escape', 'sprint_away'];
+  const n = ctx._rangedEscN = (ctx._rangedEscN || 0) + 1;
+  const style = styles[(n - 1) % styles.length];
+  return { params: { style }, mob: entName(r.e), dist: r.d,
+    why: `${entName(r.e)} ${r.d.toFixed(1)} м, HP ${Math.round(bot.health)} < ${T.apLowHp} — ухожу из-под стрел (${style})` };
+}
+
 // Вредная/нежелательная еда
 const FOOD_BLACKLIST = new Set(['poisonous_potato', 'pufferfish', 'spider_eye', 'chicken', 'suspicious_stew', 'chorus_fruit',
   'enchanted_golden_apple', 'golden_apple', 'rotten_flesh']);
@@ -262,7 +300,8 @@ function attach(api) {
     if (!needs) { if (bot.food > T.hungerWarnResetFood) hungerWarned = false; return; }
     if (Date.now() < ctx.combatUntil) return; // не есть в бою
     if (bot.targetDigBlock || (bot.pathfinder.isMining && bot.pathfinder.isMining())) return; // не есть во время копания
-    const food = pickFood(bot, { desperate: bot.food <= T.desperateFood });
+    // behavior_eat_desperate_hp: ранена (HP <= eatHurtHp) — гнилое мясо/сырая курица лучше, чем ждать с HP 1
+    const food = pickFood(bot, { desperate: bot.food <= T.desperateFood || bot.health <= T.eatHurtHp });
     if (!food) {
       if (bot.food <= T.desperateFood && !hungerWarned) { hungerWarned = true; ctx.events.push('danger', { kind: 'hunger', food: bot.food, msg: 'голод и нечего есть' }); }
       return;
@@ -320,8 +359,10 @@ function attach(api) {
     const canFight = !lowHpAgainstPlayer && hasWeapon(bot) && bot.health >= T.playerFightHp && others === 0;
     const opts = lowHpAgainstPlayer ? ['shelter', 'goto', 'escape'] : (canFight ? ['fight', 'escape'] : ['escape', 'shelter']);
     const skill = lowHpAgainstPlayer ? (hasBlocks ? 'shelter' : 'goto') : (canFight ? 'fight' : 'escape');
-    const params = lowHpAgainstPlayer && !hasBlocks ? { x: -393, y: 67, z: 36, r: 2, label: 'на базу от игрока', priority: true } : (lowHpAgainstPlayer ? { mode: 'walls' } : {});
-    const whyText = lowHpAgainstPlayer ? 'reflex: utechei ot igroka (sprint_away/zigzag k ukrytiu/basе)' : `игрок ${name} ударил${playerDist < 10 ? ' (близко, низкий HP)' : ''}`;
+    // behavior_escape_owner_priority: база — из «База:» в notes.md (автопилот её знает), без неё — прежняя точка
+    const hb = (ctx.autopilot && ctx.autopilot.base) || { x: -393, y: 67, z: 36 };
+    const params = lowHpAgainstPlayer && !hasBlocks ? { x: hb.x, y: hb.y, z: hb.z, r: 2, label: 'на базу от игрока', priority: true } : (lowHpAgainstPlayer ? { mode: 'walls' } : {});
+    const whyText = lowHpAgainstPlayer ? `игрок ${name} бьёт, HP ${Math.round(bot.health)} — ухожу от игрока ${hasBlocks ? 'в укрытие (стены)' : `к базе ${hb.x} ${hb.y} ${hb.z}`}` : `игрок ${name} ударил${playerDist < 10 ? ' (близко, низкий HP)' : ''}`;
     const plan = canFight
       ? { skill: 'fight', params: { target: low, radius: AG.CHASE_MAX, flee_hp: T.playerFleeHp, timeout: T.playerFightTimeout }, why: `игрок ${name} ударил`, options: opts }
       : { skill: skill, params: params, why: whyText, options: opts };
@@ -330,10 +371,10 @@ function attach(api) {
   });
 
   // ---- Самооборона от моба ----
-  api.handle('mob_hurt', async ({ att, source, cause }) => {
-    // stalagmite damage: cause === 'сталагмит', att === null
-    if (cause === 'сталагмит') {
-      const plan = { skill: 'escape', params: {}, why: 'урон от сталагмита', options: ['escape', 'shelter'] };
+  api.handle('mob_hurt', async ({ att, source, cause, sure, what }) => {
+    // указалки: сталагмит под ногами или упавший сталактит (what: 'сталактит') — уходим с места, не бой
+    if (cause === 'сталагмит' || cause === 'сталактит' || what === 'сталактит') {
+      const plan = { skill: 'escape', params: {}, why: what === 'сталактит' || cause === 'сталактит' ? 'урон от упавшего сталактита — ухожу из-под свода' : 'урон от сталагмита', options: ['escape', 'shelter'] };
       ctx.events.push('info', { msg: `рефлекс: escape (${plan.why})`, reflex: true });
       await startDefense(ctx, plan);
       return;
@@ -341,6 +382,11 @@ function attach(api) {
     if (att && !isAutoTarget(att) && att === source) return; // эндермен, голем и т.п. — не трогаем
     const plan = mobHurtPlan(ctx, att);
     if (!plan) return;
+    // обидчик угадан (sure:false — сервер не назвал, взят ближайший моб): в бой с догадкой не лезем — уходим
+    if (sure === false && plan.skill === 'fight') {
+      plan.skill = 'escape'; plan.params = {}; plan.why += '; обидчик не точно известен — ухожу, не дерусь';
+      if (!plan.options.includes('escape')) plan.options.unshift('escape');
+    }
     if (plan.shelterVoid) { // L052: не «в укрытии, стою», а причина — удар отменяет «укрытие», действуем как обычно
       ctx.events.push('info', { msg: 'рефлекс: в укрытии, но по муху бьют — укрытия нет, ухожу', reflex: true });
     }
@@ -385,29 +431,21 @@ function attach(api) {
       const threshold = isProtectedTask 
         ? (isCreeper ? 5 : T.defenseCloseDist) 
         : (isCreeper ? T.creeperInterruptDist : T.reflexInterruptDist);
+      // behavior_reflexes_escape_skeleton_lowhp: HP < apLowHp и стрелок ближе rangedLowHpDist — уходим из-под стрел,
+      // не ждём 6 м; после неудачного побега (задача кончилась) следующий тик — снова побег другим стилем
+      const ranged = rangedLowHpPlan(ctx, hostiles);
+      if (ranged) {
+        if (bannedActions(ctx).escape) return;
+        if (cur0 && typeof ctx.tasks.stop === 'function') { try { await ctx.tasks.stop('стрелок, мало HP — рефлекс прерывает'); } catch (e) {} }
+        ctx.events.push('info', { msg: `рефлекс: escape (${ranged.why})`, reflex: true, action: 'escape', dist: ranged.dist, mob: ranged.mob });
+        await startDefense(ctx, { skill: 'escape', params: ranged.params, why: ranged.why, options: ['escape', 'shelter'] });
+        return;
+      }
       if (dist > threshold) return;
       // Если моб дальше порога защитного действия — не трогаем
       if (dist > T.defenseFightDist) return;
-      // Определяем outlook (пойдёт ли бой)
-      const o = outlookOf(ctx, nearest);
-      const losing = o ? !o.win : bot.health < T.defenseLowHp;
-      // Выбираем skill: для крепера всегда уклонение/укрытие,
-      // для остальных — по outlook/LowHP
-      let skill, params, why;
-      const canFight = !!nearest && F.distTo(bot, nearest) <= T.defenseFightDist && isAutoTarget(nearest);
-      if (isCreeper || losing || bot.health <= T.swatMinHp) {
-        skill = 'escape';
-        params = {};
-        why = `моб ${nearest.name} ${dist.toFixed(1)} м — уклонение от ${isCreeper ? 'взрыва' : 'урона'}`;
-      } else if (canFight) {
-        skill = 'fight';
-        params = { targetId: nearest.id, radius: T.fightRadius };
-        why = `моб ${nearest.name} ${dist.toFixed(1)} м — бой`;
-      } else {
-        skill = 'shelter';
-        params = {};
-        why = `моб ${nearest.name} ${dist.toFixed(1)} м — укрытие`;
-      }
+      const plan = mobNearPlan(ctx, nearest, dist);
+      const { skill, params, why } = plan;
       if (bannedActions(ctx)[skill]) return; // это действие только что не вышло — не повторяем его каждые 2 с
       // Прерываем текущую задачу тела (если есть), чтобы сделать место защите
       const curTask = ctx.tasks.current;
@@ -436,5 +474,5 @@ function attach(api) {
   return { detach() { if (swimJump) { try { bot.setControlState('jump', false); } catch (e) {} swimJump = false; } } };
 }
 
-module.exports = { attach, mobHurtPlan, defensePrior, pickFood, FOOD_BLACKLIST, hasWeapon, hostilesNear,
+module.exports = { attach, mobHurtPlan, mobNearPlan, rangedLowHpPlan, defensePrior, pickFood, FOOD_BLACKLIST, hasWeapon, hostilesNear,
   busyInfo, failState, bannedActions, noteRefusal, clearRefusal, startDefense, inShelter, attackerDist, shelterTooSlow, outlookOf };

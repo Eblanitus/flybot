@@ -48,6 +48,8 @@ function mkWorldCustom(blockFn, harvest) {
 }
 
 module.exports = async () => {
+  // подмены общих модулей вернуть в конце: иначе следующие тесты цепочки (chest) ходят подменённым goto
+  const saved = { goto: A.goto, pickupDrops: A.pickupDrops, find: vision.find, forget: vision.forget, dstate: require('../lib/danger').state };
   const w = mkWorld();
   // «честное зрение»: видны только блоки камня, соседствующие с воздухом, в радиусе
   vision.find = (ctx, ids) => {
@@ -348,6 +350,7 @@ module.exports = async () => {
 
   danger.state = origState;
 
+  Object.assign(A, { goto: saved.goto, pickupDrops: saved.pickupDrops }); Object.assign(vision, { find: saved.find, forget: saved.forget }); danger.state = saved.dstate;
   console.log('ALL COLLECT TESTS PASSED');
 };
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });

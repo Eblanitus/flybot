@@ -1,2 +1,5 @@
-﻿# behavior_escape_owner_priority: не готово
-Инженер не ответил (упал или завис: журнал молчал 10 мин). Журнал: data\engineer-behavior_escape_owner_priority.log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова.
+# behavior_escape_owner_priority: готово (частично; новые варианты — в lib/, заявкой ядру)
+Версия: behavior/reflexes.js (правка поведения)
+Уже было (behavior/reflexes.js, обработчик player_attack): игрок бьёт при HP <= 5 ближе 10 м — укрытие стенами (есть блоки) или goto на базу с priority, журнал «рефлекс: утечки от игрока (… к укрытию/базе)»; из закрытого укрытия при игроке вплотную (< 3 м) — уходим.
+Изменено: reflexes.js:363 — база берётся из «База:» (ctx.autopilot.base), зашитые -393 67 36 — только запасные; причина в журнале по-русски: «игрок X бьёт, HP N — ухожу от игрока в укрытие / к базе x y z».
+Не сделано: новые варианты escape «sprint_away_from_player» / «zigzag_away_from_player» — это lib/variants/escape/ (зона ядра, правка lib/ мне запрещена). Нужна заявка инженеру ядра. Проверено офлайн: behavior/test.js (selfTest) — новые проверки по «Как проверить»; node test/behavior.js, test/autopilot.js, test/build_goal.js, test/defense.js — ok; npm test — всё ok, кроме test/offline.js (внутри test/chest.js: «сундук не открыл окно» — не поведение). Бот не запускался: правка включится после перезагрузки поведения хозяином.

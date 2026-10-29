@@ -1,2 +1,3 @@
-﻿# behavior_autopilot_lowhp_no_build: не готово
-Инженер не ответил (упал или завис: журнал молчал 10 мин). Журнал: data\engineer-behavior_autopilot_lowhp_no_build.log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова.
+# behavior_autopilot_lowhp_no_build: готово (уже покрыто)
+Версия: behavior/autopilot.js (правка поведения)
+Запрет стройки/добора при HP < 10 и еде < 18 уже был (survivalBan/workBan, escapePlayerFailed, проверки в behavior/test.js). Он остаётся (autopilot.js:326): без регена работа не берётся. Добавлено только, что ожидание имеет потолок 120 с, после него — еда/охота/база, а не простой. Проверки обновлены: постройка при HP 8 без еды не берётся (без моба — не build, с мобом — lowhp_shelter). Проверено офлайн: behavior/test.js (selfTest) — новые проверки по «Как проверить»; node test/behavior.js, test/autopilot.js, test/build_goal.js, test/defense.js — ok; npm test — всё ok, кроме test/offline.js (внутри test/chest.js: «сундук не открыл окно» — не поведение). Бот не запускался: правка включится после перезагрузки поведения хозяином.

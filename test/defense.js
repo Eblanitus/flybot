@@ -74,7 +74,7 @@ async function testExperience() {
   const key = E.situation(ctx).key;
   assert(/^night\|outdoors\|none\|nowpn\|low\|zombie\|1$/.test(key), key);
   // prior (мало HP): escape первым, без опыта выбирается он
-  assert.deepStrictEqual(R.defensePrior(ctx, bot.entities[5]), ['escape', 'shelter', 'fight']);
+  assert.deepStrictEqual(R.defensePrior(ctx, bot.entities[5]), ['escape', 'shelter'], 'без оружия бой не предлагаем (behavior_reflexes_fight_nowpn)');
   let plan = R.mobHurtPlan(ctx, bot.entities[5]); assert.strictEqual(plan.skill, 'escape', 'без опыта — prior');
   // опыт: escape умирал 4 раза, shelter выживал 3 — теперь выбирается shelter
   for (let i = 0; i < 4; i++) { E.start(ctx, 'escape', 'reflex'); ctx.exp.pending[ctx.exp.pending.length - 1].t0 -= 6000; E.onDeath(ctx); }

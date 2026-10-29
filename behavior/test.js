@@ -16,32 +16,34 @@ module.exports = async function selfTest() {
     freeBed: false, animals: 0, recoverable: false, blocked: {}, goal: null, goalDone: false };
   assert.strictEqual(decide(base).name, 'day_routine');
   assert.strictEqual(decide({ ...base, enemies: [{ name: 'Bob', d: 5, why: 'бил', aggressor: true }] }).key, 'fight_player');
-  assert.strictEqual(decide({ ...base, hp: 5 }).key, 'lowhp_shelter');
+  // заявки 23.10 (простой страшнее смерти): «мало HP — укрываюсь» — только при угрозе (моб рядом/удары/темно); здесь зомби в 9 м
+  const mob9 = { hostilesNear: 1, hostile: { name: 'zombie', d: 9 } };
+  assert.strictEqual(decide({ ...base, ...mob9, hp: 5 }).key, 'lowhp_shelter');
   assert.strictEqual(decide({ ...base, task: { name: 'collect', source: 'brain' } }), null);
   assert.strictEqual(decide({ ...base, on: false }), null);
   // мало HP: блоки — раньше укрытия (без них shelter падает «блоков на стены мало»)
-  assert.strictEqual(decide({ ...base, hp: 5, blocks: 0 }).key, 'lowhp_dirt');
-  assert.strictEqual(decide({ ...base, hp: 5, blocks: 0 }).name, 'collect');
-  assert.strictEqual(decide({ ...base, hp: 5, blocks: 0 }).params.count, T.apLowHpBlocks);
+  assert.strictEqual(decide({ ...base, ...mob9, hp: 5, blocks: 0 }).key, 'lowhp_dirt');
+  assert.strictEqual(decide({ ...base, ...mob9, hp: 5, blocks: 0 }).name, 'collect');
+  assert.strictEqual(decide({ ...base, ...mob9, hp: 5, blocks: 0 }).params.count, T.apLowHpBlocks);
   // блоков хватает — укрываемся
-  assert.strictEqual(decide({ ...base, hp: 5, blocks: T.apLowHpBlocks }).key, 'lowhp_shelter');
+  assert.strictEqual(decide({ ...base, ...mob9, hp: 5, blocks: T.apLowHpBlocks }).key, 'lowhp_shelter');
   // причина «под ямой пустота (пещера)» — вниз не копаем, укрытие стенами
   const cave = { lowhp_shelter: { reason: 'под ямой пустота (пещера); блоков на стены мало (0/4)', count: 1 } };
-  let a = decide({ ...base, hp: 5, blocks: T.apLowHpBlocks, failInfo: cave });
+  let a = decide({ ...base, ...mob9, hp: 5, blocks: T.apLowHpBlocks, failInfo: cave });
   assert.strictEqual(a.key, 'lowhp_shelter'); assert.strictEqual(a.params.mode, 'walls', 'пещера под ногами — копать нельзя');
   // одна и та же причина дважды — тактику меняем: отойти в сторону, а не звать то же самое
-  a = decide({ ...base, hp: 5, blocks: T.apLowHpBlocks, failInfo: { lowhp_shelter: { reason: 'под ямой пустота (пещера)', count: 2 } } });
-  assert.strictEqual(a.key, 'lowhp_move'); assert.strictEqual(a.name, 'explore');
-  a = decide({ ...base, hp: 5, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt (добыто 0/10)', count: 2 } } });
+  a = decide({ ...base, ...mob9, hasWeapon: false, hp: 5, blocks: T.apLowHpBlocks, failInfo: { lowhp_shelter: { reason: 'под ямой пустота (пещера)', count: 2 } } });
+  assert.strictEqual(a.key, 'lowhp_move'); assert.strictEqual(a.name, 'explore'); // без оружия — побега нет, отходим
+  a = decide({ ...base, ...mob9, hasWeapon: false, hp: 5, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt (добыто 0/10)', count: 2 } } });
   assert.strictEqual(a.key, 'lowhp_move', 'земля не идёт — меняем тактику');
   // еле жива и есть нечего — наружу не ходим: ждём (укрыться нечем)
   assert.strictEqual(decide({ ...base, hp: 2, food: 0, hasFood: false, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt', count: 2 } } }), null);
   // пауза после провала уважается: заблокированный ключ не берём
-  assert.strictEqual(decide({ ...base, hp: 5, blocks: 0, blocked: { lowhp_dirt: true } }), null);
+  assert.notStrictEqual((decide({ ...base, ...mob9, hp: 5, blocks: 0, blocked: { lowhp_dirt: true } }) || {}).key, 'lowhp_dirt'); // на паузе — другое (побег), не то же самое
   // побег при низком HP (L014): сначала укрытие; из укрытия, ночью, без оружия и на «еле жива» — не бежим
-  const low = { ...base, hp: 5, blocks: T.apLowHpBlocks };
+  const low = { ...base, ...mob9, hp: 5, blocks: T.apLowHpBlocks };
   assert.strictEqual(decide({ ...low, hostilesNear: 1 }).key, 'lowhp_shelter', 'сначала укрытие, не побег');
-  const stuck = { ...base, hp: 5, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt', count: 2 } } };
+  const stuck = { ...base, ...mob9, hp: 5, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt', count: 2 } } };
   assert.strictEqual(decide({ ...stuck, hostilesNear: 1 }).key, 'lowhp_escape', 'днём с оружием — побег');
   assert.strictEqual(decide({ ...stuck, hostilesNear: 1, sheltered: true }), null, 'из укрытия не бежим — ждём');
   assert.strictEqual(decide({ ...stuck, hostilesNear: 1, isNight: true, phase: 'ночь' }), null, 'ночью побега нет — стены и ждём утра');
@@ -233,8 +235,13 @@ module.exports = async function selfTest() {
   nd = decide({ ...nz, hitRecent: true, hostilesNear: 0, hostile: null });
   assert.ok(nd && nd.key !== 'wait_night', 'свежие удары — не wait_night');
   assert.strictEqual(nd.key, 'night_escape', 'в укрытии, но по муху били — выхожу и отхожу');
-  // мобов нет — яму копаем как раньше (дистанция/условия прежние)
-  assert.strictEqual(decide({ ...nz, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true }).key, 'night_shelter_dig', 'мобов нет — закапываюсь');
+  // behavior_reflexes_shelter_no_mobs: мобов нет — укрытие не дело: работа ночью (туннель), а не яма
+  nd = decide({ ...nz, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true });
+  assert.ok(nd && !/^night_shelter|^wait_night$/.test(nd.key), 'мобов нет — не закапываюсь: ' + JSON.stringify(nd));
+  // дел нет совсем (туннель упал, камня хватает) — яма как запасной вариант остаётся
+  assert.strictEqual(decide({ ...nz, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true, crashed: { night_mine: {} } }).key, 'night_shelter_dig', 'дел нет — закапываюсь');
+  // HP низкий ночью — укрытие по-прежнему выше работы
+  assert.strictEqual(decide({ ...nz, hp: 8, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true }).key, 'lowhp_shelter', 'мало HP ночью — укрываюсь');
   // все варианты защиты на паузе — не берём ни яму, ни ночную работу, ни wait_night
   assert.strictEqual(decide({ ...nz, hostilesNear: 1, hostile: { name: 'zombie', d: 7.2 }, blocked: { night_fight: true, night_shelter: true, night_escape: true } }), null, 'защита на паузе — ничего не начинаем');
   // в закрытом укрытии ударов нет — без оружия ждём моба в укрытии (не вместо wait_night — журнальная строка в тике)
@@ -253,7 +260,10 @@ module.exports = async function selfTest() {
   assert.ok(f1.passiveTtdSec != null && f1.passiveTtdSec * 1000 < T.shelterBuildMs, 'не отбиваясь — умрёт раньше, чем выкопает укрытие');
   // автопилот: оценка решает, порог — нет
   assert.notStrictEqual((decide({ ...base, hp: 6, outlook: f4 }) || {}).key, 'lowhp_shelter', 'HP 6, бой по силам — не «мало HP»');
-  assert.strictEqual(decide({ ...base, hp: 15, outlook: { win: false, passiveTtdSec: 3, hitsToDie: 2 } }).key, 'lowhp_shelter', 'HP 15, но встреча проиграна и умрёт за 3 с — «мало HP»');
+  assert.strictEqual(decide({ ...base, ...mob9, hp: 15, outlook: { win: false, passiveTtdSec: 3, hitsToDie: 2 } }).key, 'lowhp_shelter', 'HP 15, но встреча проиграна и умрёт за 3 с — «мало HP»');
+  // fullhp_wait: HP 20, встреча «проиграна» (крипер 11 м — вне hostileR), есть постройка — дело, а не ожидание
+  nd = decide({ ...base, hp: 20, food: 20, outlook: { win: false, passiveTtdSec: 3, hitsToDie: 1 }, build: { name: 'hut', x: 0, y: 64, z: 0, rot: 0, sig: 'h', need: null }, buildDist: 3 });
+  assert.ok(nd && nd.key === 'build', 'HP 20 без моба рядом — строю, не жду: ' + JSON.stringify(nd));
   nd = decide({ ...nz, hp: 8, hostilesNear: 1, hostile: { name: 'zombie', d: 6 }, outlook: { win: true, passiveTtdSec: 5 } });
   assert.strictEqual(nd.key, 'night_fight', 'HP 8 (ниже порога 12), но бой выигран — отбиваемся');
   nd = decide({ ...nz, hp: 20, sheltered: false, hostilesNear: 3, hostile: { name: 'zombie', d: 6 }, outlook: { win: false, ttdSec: 4, passiveTtdSec: 8 } });
@@ -325,7 +335,7 @@ module.exports = async function selfTest() {
   const nb = { ...nz, base: bg, baseDist: 10, goal: hut };
   assert.strictEqual(decide({ ...nb, idleBuildMin: T.idleBreakWaitMin }).key, 'goal', 'ночь у базы, простой — цель, а не wait_night/night_mine');
   assert.strictEqual(decide({ ...nb, sheltered: false, idleBuildMin: 10 }).key, 'goal', 'ночь у базы без укрытия, простой — цель, а не укрытие');
-  assert.strictEqual(decide({ ...nb, sheltered: false }).key, 'night_shelter_dig', 'простоя нет — укрытие как раньше');
+  assert.ok(/^(goal|night_mine)$/.test(decide({ ...nb, sheltered: false }).key), 'простоя нет, мобов нет — дело (цель/туннель), не укрытие (shelter_no_mobs)');
   assert.ok(decide({ ...nb, freeBed: true, idleBuildMin: 10 }).key !== 'sleep', 'простой — не сон');
   const wn = { ...nb, running: { name: 'wait_night', key: 'wait_night', kind: 'body' } };
   nd = decide({ ...wn, idleBuildMin: T.idleBreakWaitMin });
@@ -341,7 +351,10 @@ module.exports = async function selfTest() {
   assert.strictEqual(decide({ ...wn, idleBuildMin: 40, hitRecent: true }).key, 'night_escape', 'били — защита, не цель');
   assert.notStrictEqual((decide({ ...nb, idleBuildMin: 40, hp: 5 }) || {}).key, 'goal', 'мало HP ночью — не цель');
   assert.strictEqual(decide({ ...wn, idleBuildMin: 40, hp: 5 }), null, 'мало HP — wait_night не прерываем ради цели');
-  assert.strictEqual(decide({ ...base, goal: hut, idleBuildMin: 40, hp: 5 }).key, 'lowhp_shelter', 'мало HP днём — укрытие, не цель');
+  assert.strictEqual(decide({ ...base, ...mob9, goal: hut, idleBuildMin: 40, hp: 5 }).key, 'lowhp_shelter', 'мало HP днём и моб рядом — укрытие, не цель');
+  // shelter_no_mobs (3): HP 10 (и ниже) без мобов днём, сыта (реген идёт) — работа, не укрытие
+  assert.strictEqual(decide({ ...base, goal: hut, hp: 10 }).key, 'goal', 'HP 10 без мобов днём — цель');
+  assert.strictEqual(decide({ ...base, goal: hut, hp: 6 }).key, 'goal', 'HP 6 без мобов днём, сыта — цель (реген идёт)');
   // (д) ночью вне базы (или без базы, или точка цели вне базы) — цели нет
   assert.notStrictEqual(decide({ ...nb, baseDist: 300, idleBuildMin: 40 }).key, 'goal', 'ночью вне базы — не цель');
   assert.notStrictEqual(decide({ ...nb, base: null, baseDist: null, idleBuildMin: 40 }).key, 'goal', 'ночью без базы — не цель');
@@ -413,16 +426,27 @@ module.exports = async function selfTest() {
   // (4) zero HP / crit without food: waits < 2 min, then triggers emergency action (e.g. explore or go_base) instead of hanging indefinitely
   const zeroHpState = { ...base, hp: 0, hasFood: false, sheltered: true, failInfo: {} };
   assert.strictEqual(D(zeroHpState), null, 'zero HP without food: waits initially (< 2 min)');
-  zeroHpState.failInfo.lowhp_waitCount = 65;
+  zeroHpState.waitSec = T.apWaitMaxSec + 10; // тело стоит дольше потолка (тик считает waitSince)
   const emergencyAct = D(zeroHpState);
   assert.ok(emergencyAct !== null, 'zero HP without food after > 2 min: does not hang, triggers emergency action');
+  // fullhp_wait (2): HP 10 ниже порога? нет — HP 9, еда 4, еды нет: до потолка ждём, после — выживание (охота/база/поиск еды)
+  const hungry = { ...base, hp: 9, food: 4, hasFood: false, sheltered: true };
+  assert.strictEqual(D({ ...hungry, waitSec: 30 }), null, 'голодна, HP 9 — сначала ждём (меньше потолка)');
+  nd = D({ ...hungry, waitSec: T.apWaitMaxSec + 1 });
+  assert.ok(nd && /^(hunt|go_base|lowhp_emergency_explore)$/.test(nd.key), 'после потолка — выживание: ' + JSON.stringify(nd));
+  assert.strictEqual(D({ ...hungry, animals: 2, waitSec: 0 }).key, 'hunt', 'есть животные — охочусь сразу, не жду');
+  // eat_desperate_hp: мало HP, нет регена, съедобное есть — рефлексу даём apEatWaitSec, потом едим сами
+  assert.strictEqual(D({ ...base, hp: 3, food: 10, hasFood: true, sheltered: true, waitSec: T.apEatWaitSec + 1 }).key, 'lowhp_eat', 'HP 3, еда есть — ем сам');
+  assert.strictEqual(D({ ...base, hp: 3, food: 10, hasFood: true, sheltered: true, waitSec: T.apEatWaitSec + 1 }).params.desperate, true, 'ем и гнилое');
 
   // ---- behavior_autopilot_lowhp_no_build (заявка учителя): низкий HP + нет еды на регенерацию — только восстановление ----
   console.error('STEP lowhp block start');
   const buildPad = { name: 'base_pad', x: -395, y: 67, z: 34, rot: 0, sig: 'bp' };
   const goalStone = { name: 'collect', params: { block: 'stone', count: 60 }, kind: 'body', sig: 'g' };
   // постройка от мозга при HP<10 и еде<18 не берётся — укрытие, а не «строю base_pad»
-  assert.strictEqual(decide({ ...base, hp: 8, food: 10, hasFood: false, blocks: T.apLowHpBlocks, build: buildPad, buildDist: 3 }).key, 'lowhp_shelter', 'постройка от мозга при низком HP без еды — не брать');
+  nd = decide({ ...base, hp: 8, food: 10, hasFood: false, blocks: T.apLowHpBlocks, build: buildPad, buildDist: 3 });
+  assert.ok(!nd || !/^build/.test(nd.key), 'постройка от мозга при низком HP без еды — не брать: ' + JSON.stringify(nd));
+  assert.strictEqual(decide({ ...base, ...mob9, hp: 8, food: 10, hasFood: false, blocks: T.apLowHpBlocks, build: buildPad, buildDist: 3 }).key, 'lowhp_shelter', 'и моб рядом — укрытие');
   // в закрытом укрытии при низком HP без еды — ждём, не выходим на постройку к месту в поле
   assert.strictEqual(decide({ ...base, hp: 8, food: 10, hasFood: false, sheltered: true, build: buildPad, buildDist: 3 }), null, 'в укрытии при низком HP без еды — ждём, не выходим на постройку');
   // сбор (цель мозга) при низком HP без еды — запрет; давление простоя не отменяет запрет
@@ -440,6 +464,59 @@ module.exports = async function selfTest() {
   assert.strictEqual(decide({ ...afterEscape, base: { x: -393, y: 67, z: 36, r: 96 }, baseDist: 300 }).key, 'go_base', 'после неудачного побега — уход на базу, а не сбор');
   // в закрытом укрытии при critique HP и игроке рядом — ждём, не выходим на постройку
   assert.strictEqual(decide({ ...base, hp: 2, food: 0, hasFood: false, sheltered: true, enemies: [enemy], build: buildPad, buildDist: 3 }), null, 'укрытие при critique HP и игроке рядом — ждём, не строим');
+
+  // ---- заявки 23.10 (простой страшнее смерти): рефлексы ----
+  // fight_nowpn: (1) паук 5 м, HP 20, днём, без оружия — укрытие/отход, не бой; (2) с мечом — бой как раньше; (3) defensePrior без оружия — без fight
+  const spider = { id: 4, type: 'hostile', name: 'spider', position: V(5, 64, 0) };
+  const nowpnBot = fakeBot({ entities: { 4: spider } });
+  let mp = R.mobNearPlan(fakeCtx(nowpnBot), spider, 5);
+  assert.ok(mp.skill !== 'fight' && /shelter|escape/.test(mp.skill), 'без оружия паук 5 м — не бой: ' + JSON.stringify(mp));
+  const z5 = zombie(5);
+  const swordBot = fakeBot({ entities: { 3: z5 }, inventory: { items: () => [{ name: 'iron_sword', count: 1 }], slots: [] } });
+  mp = R.mobNearPlan(fakeCtx(swordBot), z5, 5);
+  assert.strictEqual(mp.skill, 'fight', 'с мечом против зомби — бой как раньше: ' + JSON.stringify(mp));
+  assert.ok(!R.defensePrior(fakeCtx(fakeBot({ entities: { 3: z5 } })), z5).includes('fight'), 'defensePrior без оружия — без fight');
+  // escape_skeleton_lowhp: HP < 10, скелет в 12 м — побег сразу (не ждём 6 м), стиль чередуется; HP 20 — правила нет
+  const skel = { id: 5, type: 'hostile', name: 'skeleton', position: V(12, 64, 0) };
+  const skCtx = fakeCtx(fakeBot({ health: 6, entities: { 5: skel } }));
+  const rp1 = R.rangedLowHpPlan(skCtx, [skel]), rp2 = R.rangedLowHpPlan(skCtx, [skel]);
+  assert.ok(rp1 && rp2 && rp1.params.style !== rp2.params.style, 'стрелок при HP 6 — побег, второй раз другим стилем: ' + JSON.stringify([rp1, rp2]));
+  assert.ok(!/escape_to_base/.test(rp1.params.style), 'не escape_to_base');
+  assert.strictEqual(R.rangedLowHpPlan(fakeCtx(fakeBot({ health: 20, entities: { 5: skel } })), [skel]), null, 'HP 20 — правила нет');
+  // mob_near (автопилот): (1) ночь, идёт wait_night, крипер 5 м, в укрытии, без оружия — защита, не null; (2) крипер 15 м — ждём дальше
+  const wnC = { ...nz, hasWeapon: false, sheltered: true, running: { name: 'wait_night', key: 'wait_night', kind: 'body' }, task: { name: 'wait_night', source: 'autopilot' } };
+  nd = decide({ ...wnC, hostilesNear: 1, hostile: { name: 'creeper', d: 5 } });
+  assert.ok(nd && nd.key !== 'wait_night' && nd.preempt, 'крипер 5 м при wait_night — защита: ' + JSON.stringify(nd));
+  assert.strictEqual(decide({ ...wnC, hostilesNear: 0, hostile: null }), null, 'крипер 15 м (вне hostileR) — wait_night продолжается');
+  // collect_dusk: идущий сбор и моб ближе safetyWorkDist — бросаем дело (preempt), с причиной
+  nd = decide({ ...base, running: { key: 'collect_stone', name: 'collect', kind: 'body' }, task: { name: 'collect', source: 'autopilot' }, hostilesNear: 1, hostile: { name: 'zombie', d: 4 } });
+  assert.ok(nd && /^safety_/.test(nd.key) && nd.preempt && /бросаю/.test(nd.why), 'моб у сбора — бросаю сбор: ' + JSON.stringify(nd));
+  assert.strictEqual(decide({ ...base, running: { key: 'collect_stone', name: 'collect', kind: 'body' }, task: { name: 'collect', source: 'autopilot' }, hostilesNear: 1, hostile: { name: 'zombie', d: 9 } }), null, 'моб далеко — сбор идёт');
+  assert.ok(decide({ ...base, cobble: 0, crashed: { day_routine: {} } }).params.radius <= 48, 'сбор камня — всегда с пределом радиуса');
+  // build_gather: прерванный добор — продолжаю (без паузы); пустой — сначала к постройке, потом пауза
+  const apG = { build: { name: 'hut', x: 0, y: 64, z: 0, rot: 0, sig: 'G' }, buildSt: NBS('G') };
+  apG.buildSt.need = { cobblestone: 20 };
+  let rg = BA(apG, { key: 'build_gather', sig: 'G' }, 'провал', 'вытеснен рефлексом', null, now2, false);
+  assert.ok(rg.resume && /прерван.*продолжаю/.test(rg.note) && apG.buildSt.need && !apG.buildSt.pauseUntil, 'прерван — продолжаю: ' + rg.note);
+  rg = BA(apG, { key: 'build_gather', sig: 'G' }, 'провал', 'не добрал: cobblestone x20', { collected: {}, crafted: {}, have: { cobblestone: 0 } }, now2, false);
+  assert.ok(/меняю место/.test(rg.note) && !apG.buildSt.pauseUntil, 'пусто — меняю место: ' + rg.note);
+  nd = decide({ ...base, ...BS(apG, now2), buildDist: 150 });
+  assert.strictEqual(nd.key, 'build_go', 'материала тут нет — иду к постройке');
+  rg = BA(apG, { key: 'build_gather', sig: 'G' }, 'провал', 'не добрал: cobblestone x20', { collected: {}, crafted: {}, have: { cobblestone: 0 } }, now2, false);
+  assert.ok(apG.buildSt.pauseUntil > now2 && /материала нет/.test(rg.note), 'и там пусто — честная пауза: ' + rg.note);
+  rg = BA({ build: apG.build, buildSt: Object.assign(NBS('G'), { need: { cobblestone: 20 } }) }, { key: 'build_gather', sig: 'G' }, 'ok', null, { collected: { cobblestone: 5 }, crafted: {}, have: { cobblestone: 5 } }, now2, true);
+  assert.ok(/ещё не хватает/.test(rg.note), 'ок, но не всё — добираю дальше, не «строю снова»: ' + rg.note);
+  // explore: после «спуск на N ур.» — ближе, и не по кругу
+  const drop = { explore: { reason: 'разведка: спуск на 9 ур. в С — внизу обрыв/пещера, дальше не иду', count: 1 } };
+  nd = decide({ ...noWork, failInfo: drop });
+  assert.ok(nd.key === 'explore' && nd.params.distance < T.exploreDist, 'после спуска — разведка ближе: ' + JSON.stringify(nd));
+  assert.notStrictEqual((decide({ ...noWork, failInfo: { explore: { ...drop.explore, count: T.failSameCount } } }) || {}).key, 'explore', 'спуск дважды — туда не разведываю');
+  // потолок ожидания: дел нет дольше apWaitMaxSec — шаг, а не ещё ожидание
+  const nothing = { ...noWork, failInfo: { explore: { ...drop.explore, count: T.failSameCount } } };
+  assert.strictEqual(decide({ ...nothing, waitSec: 10 }), null, 'дел нет — пока ждём');
+  assert.strictEqual(decide({ ...nothing, waitSec: T.apWaitMaxSec + 1 }).key, 'idle_move', 'дольше потолка — меняю место');
+  // eat_desperate_hp: ранена — гнилое мясо в ход (рефлекс), автопилот видит его как еду
+  assert.strictEqual(R.pickFood({ ...bot2, health: 8 }, { desperate: true }).name, 'rotten_flesh');
 
   return { ok: true };
 };

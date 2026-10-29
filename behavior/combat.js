@@ -15,8 +15,17 @@ function chooseMelee(ctx, sit, { style, exclude } = {}) {
 // Д: остальные семейства — тот же выбор (style от мозга, иначе лучший по счёту в этой обстановке).
 // Особые случаи — в вариантах семейства (lib/variants/<семейство>/*): встроенный escape_to_base
 // перенесён туда (core_task 29181f0b08: из версий поведения ../lib не резолвился).
+// behavior_reflexes_escape_skeleton_lowhp: при HP < apLowHp (или под землёй) от стрелка к базе не бежим — escape_to_base
+// это длинная дорога под стрелами по открытому месту (смерть 20261023-191254-90); берём укрытие от линии огня/рывок.
+// Других вариантов нет — прежний выбор (лучше уйти к базе, чем стоять).
 function chooseVariant(ctx, family, sit, opts = {}) {
-  return L('variants').choose(ctx, family, sit, opts);
+  const V = L('variants');
+  if (family === 'escape' && sit && (sit.ranged || sit.target === 'skeleton') && ((sit.hpNum != null && sit.hpNum < require('./thresholds').apLowHp) || sit.place === 'underground')) {
+    const exclude = new Set(opts.exclude || []); exclude.add('escape_to_base');
+    const ch = V.choose(ctx, family, sit, { ...opts, exclude });
+    if (ch) return ch;
+  }
+  return V.choose(ctx, family, sit, opts);
 }
 
 module.exports = { chooseMelee, chooseVariant };
