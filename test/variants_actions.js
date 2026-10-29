@@ -41,7 +41,7 @@ module.exports = async () => {
   V.setRegistry(null);
   const reg = V.registry();
   assert.strictEqual(reg.errors.length, 0, JSON.stringify(reg.errors));
-  const want = { escape: ['cave_escape', 'cover_escape', 'escape_to_base', 'pillar', 'sprint_away', 'wall_escape', 'zigzag'], shelter: ['dig', 'smart', 'walls'], climb: ['path', 'pillar'], descend: ['path', 'stairs'], home: ['direct', 'hops', 'short_hops'], dig: ['look', 'near', 'safe'], place: ['close', 'near', 'pillar'] };
+  const want = { escape: ['cave_escape', 'cover_escape', 'escape_to_base', 'pillar', 'sprint_away', 'wall_escape', 'zigzag'], shelter: ['dig', 'smart', 'walls'], climb: ['path', 'pillar'], descend: ['path', 'stairs'], home: ['direct', 'flat', 'hops', 'short_hops', 'up'], dig: ['look', 'near', 'safe'], place: ['close', 'near', 'pillar'] };
   for (const [f, vs] of Object.entries(want)) assert.deepStrictEqual([...V.family(f).variants.keys()].sort(), vs, f);
   const ap = (f, n, sit) => V.family(f).variants.get(n).applies({}, { ceiling: 5, blocks: 0, ...sit });
   const oldGoto = A.goto;

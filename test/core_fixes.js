@@ -1,4 +1,5 @@
-// Офлайн-проверки исправлений: craft большими количествами, dig_at по пустой клетке, explore с памятью неудач, shelter у обрыва.
+// Офлайн-проверки исправлений: craft большими количествами, dig_at по пустой клетке, explore с памятью неудач, shelter у обрыва,
+// explore у края, удар без названного источника и указалки, дорога home: застой/яма/край.
 // Запуск: node test/core_fixes.js (входит в node test/offline.js)
 'use strict';
 const assert = require('assert');
@@ -352,6 +353,140 @@ async function testNestedEmptyStats() {
   }
 }
 
+// ---------- explore у края (заявка 1029a35ad1) ----------
+// мир: пол y=63 (стоим на 64); gen(x, z) -> высота пола или null (пустота до самого низа)
+function edgeWorld(floorAt, { sinkTo = null } = {}) {
+  const goals = [];
+  const bot = {
+    entity: { position: new Vec3(0.5, 64, 0.5) }, inventory: { items: () => [] }, registry: { itemsByName: {} },
+    blockAt(p) {
+      const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z), f = floorAt(x, z);
+      const name = f != null && y <= f ? 'stone' : 'air';
+      return { name, boundingBox: name === 'stone' ? 'block' : 'empty', position: new Vec3(x, y, z) };
+    },
+    pathfinder: {
+      setGoal() {}, setMovements() {},
+      goto: async g => {
+        goals.push(g);
+        if (g.y != null) { bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5); return; } // GoalNear: возврат к старту
+        const f = floorAt(g.x, g.z);
+        bot.entity.position = new Vec3(g.x + 0.5, sinkTo != null ? sinkTo : (f != null ? f + 1 : 64), g.z + 0.5);
+      }
+    }
+  };
+  return { bot, goals, ctx: { bot, visited: new Set(), stats: {} } };
+}
+
+async function testExploreEdge() {
+  A.goto = REAL_GOTO;
+  const t0 = () => new Task(3, 'explore', {}, 'test');
+  // север (z < -8) — каньон на 24 уровня ниже: туда не идёт, в ответе есть drop
+  for (let i = 0; i < 4; i++) {
+    const w = edgeWorld((x, z) => (z < -8 ? 39 : 63));
+    const r = await gather.explore(w.ctx, t0(), { distance: 48 });
+    assert(r.moved >= 6 && r.drop === 0, 'ушла по ровному: ' + JSON.stringify(r));
+    for (const g of w.goals) assert(g.z >= -8, 'цель над каньоном: ' + g.x + ',' + g.z);
+  }
+  // островок 9x9 среди пустоты: все направления — обрыв, никуда не идёт, причина в ошибке
+  let w = edgeWorld((x, z) => (Math.abs(x) <= 4 && Math.abs(z) <= 4 ? 63 : null));
+  await assert.rejects(() => gather.explore(w.ctx, t0(), { distance: 48 }), e => /обрыв/.test(e.message) && /у края не пошла/.test(e.message));
+  assert.strictEqual(w.goals.length, 0, 'к обрыву не ходила');
+  // склон, которого не видно заранее (pathfinder увёл на 10 уровней вниз): задача — провал «спуск», не «moved»
+  w = edgeWorld(() => 63, { sinkTo: 54 });
+  await assert.rejects(() => gather.explore(w.ctx, t0(), { distance: 48 }), e => /спуск на 10 ур\./.test(e.message) && e.extra && e.extra.returned === true);
+  console.log('explore у края: OK');
+}
+
+// ---------- удар без названного источника + указалки (заявки da72d0ebb1, f5e0fc0f33) ----------
+function hurtBot({ feet = 'stone' } = {}) {
+  const EventEmitter = require('events');
+  const bot = new EventEmitter();
+  bot._client = new EventEmitter();
+  Object.assign(bot, {
+    username: 'FlyTest', health: 20, food: 20,
+    entity: { id: 1, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0), height: 1.8 }, entities: {},
+    blockAt: p => ({ name: Math.floor(p.y) === 64 ? feet : 'air', position: p.floored() })
+  });
+  bot.entities[1] = bot.entity;
+  const got = [];
+  const events = [];
+  const ctx = { bot, ready: false, stats: { damageTaken: 0 }, exp: { stats: {}, recent: [], pending: [], log: [] }, events: { push: (type, d) => events.push({ type, d }) },
+    behaviorHost: { emit: (name, p) => got.push({ name, p }) }, markVisited() {}, tasks: {} };
+  const session = { timers: [] };
+  require('../lib/body_events').attach(ctx, session);
+  for (const tm of session.timers) clearInterval(tm);
+  return { bot, ctx, got, events };
+}
+let hurtMobId = 50;
+const hostile = (bot, name, x) => { const e = { id: hurtMobId++, name, type: 'hostile', position: new Vec3(x, 64, 0.5), height: 1.95 }; bot.entities[e.id] = e; return e; };
+
+async function testHurtUnknownSource() {
+  // без источника, зомби в 3 м — mob_hurt ушёл в поведение (att = зомби, sure=false)
+  let w = hurtBot(); const z = hostile(w.bot, 'zombie', 3.5);
+  w.bot.emit('entityHurt', w.bot.entity, undefined);
+  assert.strictEqual(w.got.length, 1, JSON.stringify(w.got.map(g => g.name)));
+  assert(w.got[0].name === 'mob_hurt' && w.got[0].p.att === z && w.got[0].p.sure === false, 'att=зомби, sure=false');
+  // тот же удар повторно приходит damage_event-ом с невидимым источником — второй mob_hurt не шлём
+  w.bot._client.emit('damage_event', { entityId: 1, sourceCauseId: 999 });
+  assert.strictEqual(w.got.length, 1, 'двойной mob_hurt');
+  // без источника и без мобов рядом (падение, огонь) — не нападение
+  w = hurtBot(); w.bot.emit('entityHurt', w.bot.entity, undefined);
+  assert.strictEqual(w.got.length, 0);
+  // враг далеко (20 м) — тоже не нападение
+  w = hurtBot(); hostile(w.bot, 'zombie', 20.5); w.bot.emit('entityHurt', w.bot.entity, undefined);
+  assert.strictEqual(w.got.length, 0, 'враг в 20 м — не он');
+  // источник назван — как раньше
+  w = hurtBot(); const sk = hostile(w.bot, 'skeleton', 9); w.bot.emit('entityHurt', w.bot.entity, sk);
+  assert(w.got.length === 1 && w.got[0].p.att === sk && w.got[0].p.sure === true);
+  // сталагмит под ногами: источник «сталагмит», поведение получает удар (рефлекс: сойти)
+  w = hurtBot({ feet: 'pointed_dripstone' }); w.bot.emit('entityHurt', w.bot.entity, undefined);
+  assert(w.ctx.lastDamage.cause === 'сталагмит' && w.got.length === 1 && w.got[0].p.cause === 'сталагмит', JSON.stringify(w.got));
+  // упавший сталактит: источник — falling_block, не моб и не «без источника»
+  w = hurtBot(); const fb = { id: 70, name: 'falling_block', type: 'object', position: new Vec3(0.5, 65, 0.5) }; w.bot.entities[70] = fb;
+  w.bot.emit('entityHurt', w.bot.entity, fb);
+  assert(w.ctx.lastDamage.cause === 'сталактит' && w.got.length === 1 && w.got[0].p.cause === 'сталагмит' && w.got[0].p.what === 'сталактит', JSON.stringify(w.got));
+  console.log('удар без источника / указалки: OK');
+}
+
+// ---------- дорога (home): застой и яма (заявка 892391944e) ----------
+async function testHomeStallPit() {
+  const C = require('../lib/variants/home/_core');
+  const V = require('../lib/variants');
+  // pathfinder «думает» и стоит: раньше 2×120 с молчания, теперь отказ после stallMs с причиной «застой»
+  let release = null;
+  const bot = {
+    entity: { position: new Vec3(0.5, 56, 0.5) }, inventory: { items: () => [] }, registry: { itemsByName: {} },
+    pathfinder: { setMovements() {}, setGoal(g) { if (g === null && release) release(); }, goto: () => new Promise((_, rej) => { release = () => { const e = new Error('The goal was changed before it could be completed!'); e.name = 'GoalChanged'; rej(e); }; }) }
+  };
+  A.goto = REAL_GOTO;
+  const t1 = Date.now();
+  await assert.rejects(() => C.travel({ bot, sprintMovements: {} }, task(), { x: 0, y: 67, z: 58, timeout: 420, stallMs: 300 }, { leg: 64 }),
+    e => /застой/.test(e.message) && /цель на 11 м выше/.test(e.message) && e.extra && e.extra.stuckSec != null && e.extra.rise === 11);
+  assert(Date.now() - t1 < 5000, 'отказ быстро: ' + (Date.now() - t1));
+  // в яме (под землёй), цель на 11 м выше: пешие варианты неприменимы, остаётся up; на улице — пешие тоже
+  const fam = V.family('home');
+  const apps = sit => [...fam.variants.values()].filter(v => v.applies({}, { ceiling: 5, blocks: 0, ...sit })).map(v => v.name).sort();
+  assert.deepStrictEqual(apps({ place: 'underground', rise: 11, trip: 58 }), ['up']);
+  assert(apps({ place: 'outdoors', rise: 11, trip: 58 }).includes('hops') && apps({ place: 'outdoors', rise: 11, trip: 58 }).includes('up'));
+  assert(!apps({ place: 'outdoors', rise: 0, trip: 58 }).includes('up'));
+  assert(fam.def.sitKeys({ place: 'underground', phase: 'day', trip: 58, rise: 11 })[0] === 'underground|day|near|up', 'в ключе счёта видно «цель выше»');
+  // up: подъём не вышел (пути нет, блоков нет) — отказ с числами, без стояния
+  const fb = {
+    username: 'FlyTest', health: 20, food: 20, entity: { id: 1, position: new Vec3(0.5, 56, 0.5), velocity: new Vec3(0, 0, 0), height: 1.8 }, entities: {},
+    inventory: { items: () => [], slots: {} }, registry: { itemsByName: {} },
+    blockAt: p => ({ name: Math.floor(p.y) < 56 ? 'stone' : 'air', boundingBox: Math.floor(p.y) < 56 ? 'block' : 'empty', position: p.floored(), skyLight: 0 }),
+    pathfinder: { setMovements() {}, setGoal() {}, goto: async () => { const e = new Error('No path'); e.name = 'NoPath'; throw e; } }
+  };
+  await assert.rejects(() => fam.variants.get('up').run({ bot: fb, stats: {} }, task(), { x: 0, y: 67, z: 58, fail: 'до постройки не дошла' }),
+    e => /до постройки не дошла: цель на 11 м выше, подъём не вышел \(поднялась на 0\)/.test(e.message) && e.extra.rise === 11);
+  // flat: впереди каньон, обхода стороной нет — отказ «вниз не иду», а не шаг вниз
+  const cb = { entity: { position: new Vec3(0.5, 64, 0.5) }, inventory: { items: () => [] }, registry: { itemsByName: {} }, food: 20,
+    blockAt: p => { const y = Math.floor(p.y), z = Math.floor(p.z), f = z < -2 ? 40 : 63; const n = y <= f ? 'stone' : 'air'; return { name: n, boundingBox: n === 'stone' ? 'block' : 'empty', position: p.floored() }; },
+    pathfinder: { setMovements() {}, setGoal() {}, goto: async () => { throw new Error('не должна идти'); } } };
+  await assert.rejects(() => fam.variants.get('flat').run({ bot: cb }, task(), { x: 0, y: 64, z: -60 }), e => /обхода стороной нет — вниз не иду/.test(e.message));
+  console.log('дорога: застой/яма/край: OK');
+}
+
 module.exports = async () => {
   await testCraft();
   await testDigAtEmpty();
@@ -359,5 +494,8 @@ module.exports = async () => {
   await testShelterCliff();
   await testNightMine();
   await testNestedEmptyStats();
+  await testExploreEdge();
+  await testHurtUnknownSource();
+  await testHomeStallPit();
 };
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });
