@@ -1,2 +1,8 @@
-﻿# collect_tool_alt_ensure: не готово
-Инженер не ответил (упал или завис: журнал молчал 10 мин). Журнал: data\engineer-collect_tool_alt_ensure.log. Можно уточнить заявку и сохранить её заново — инженер возьмётся снова.
+# collect_tool_alt_ensure: готово
+Версия: collect_tool_alt_v5 (новая; прежние collect_tool_alt_v2…v4, collect_tool_ensure, collect_alt_tool_v4 не покрывали заявку)
+Запуск: curl.exe -s "http://127.0.0.1:3200/go?name=collect_tool_alt_v5&block=cobblestone&count=10"
+Params: block+count или items="block:count,…"; radius, deep, style — как у collect; max_sec — потолок, по умолчанию 300; explores — сколько раз уходить искать деревья, по умолчанию 3 (0 — не искать).
+Почему не покрыто: проверка v3/v4/collect_tool_ensure/collect_alt_tool_v4/collect_eblanitus на фальшивом теле с пустой сумкой и лесом рядом — все падают «не удалось скрафтить верстак: не хватает spruce_planks x2» (крафтят только 4 доски из одного бревна, а на верстак+кирку+палки нужно 9) и не делают explore, если брёвен не видно.
+Что делает: кирка нужна и её нет — одна команда `craft wooden_pickaxe` (тело само делает доски, палки и верстак); не хватило дерева — `collect log` (любое бревно, до 3 шт.), при «не вижу» — explore и повтор (до explores раз), потом снова craft; только после этого копает. Брёвен нет — отказ «нет брёвен для крафта кирки: … (искала, explore ×N)», а не «нужен инструмент». Прирост считает по инвентарю до/после. Успех: `{ok:true, collected:{cobblestone:N}, crafted:{wooden_pickaxe:1}, pickaxeEnsured:true}`; провал: `{ok:false, error, missing, collected, crafted}`; ok:true только если добрана каждая цель.
+Ограничения: умеет только деревянную кирку; блокировка build_blueprint до проверки запаса — это gather_list (v8+ уже отказывает с missing) и autopilot (behavior/), здесь не меняется.
+Как проверено (офлайн): пустая сумка + лес — ok, crafted wooden_pickaxe, cobblestone 3; брёвен нет — отказ про брёвна после 3 explore; лес появляется после 2 explore — ok; кирка уже есть — craft не зовётся; dirt — без кирки; explores=0 — без explore. Проверка полей навыка (как worker.js) прошла.

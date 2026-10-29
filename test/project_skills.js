@@ -4,6 +4,8 @@
 'use strict';
 const assert = require('assert');
 const L = n => require('../brain/learned/' + n);
+// какую версию хижины проверяем: build_hut (22.10) ставил крышу от центра и не мог её достроить, исправление — v13 (от края к центру)
+const HUT = 'build_hut_v13';
 
 const AIR = /^(air|cave_air|short_grass|snow|torch|wall_torch)$/;
 const NONSOLID = /^(air|cave_air|short_grass|snow|torch|wall_torch|water|lava)$/;
@@ -185,7 +187,7 @@ async function testDeposit() {
 async function testHut() {
   const full = { cobblestone: 100, spruce_log: 10, spruce_planks: 60, spruce_door: 1 };
   let w = mkWorld(full);
-  let r = await L('build_hut').run(w, { x: -397, z: 29, y: 66, dry: 1 });
+  let r = await L(HUT).run(w, { x: -397, z: 29, y: 66, dry: 1 });
   // пол — трава, навык (brain/learned, правка 22.10) считает его стоящим; стены 69 - 8 брёвен = 61 булыжник; 8 брёвен; крыша 49; дверь
   assert(r.ok && r.dry, JSON.stringify(r));
   assert.deepStrictEqual(r.need, { cobblestone: 61, spruce_log: 8, spruce_planks: 49, spruce_door: 1 }, JSON.stringify(r.need));
@@ -193,18 +195,18 @@ async function testHut() {
   assert.strictEqual(Object.keys(r.missing).length, 0);
   // нет двери и мало досок — навык (brain/learned, правка 22.10) строит из того, что есть, и честно говорит, чего не хватило; копки нет
   w = mkWorld({ cobblestone: 100, spruce_log: 10, spruce_planks: 20 });
-  r = await L('build_hut').run(w, { x: -397, z: 29, y: 66 });
+  r = await L(HUT).run(w, { x: -397, z: 29, y: 66 });
   assert(!r.ok && r.missing.spruce_planks === 29 && !r.doorOk && /spruce_door/.test(r.doorWhy), JSON.stringify(r));
   assert.strictEqual(acts(w, 'dig_at').length, 0, 'без материалов не копает');
   // основной путь
   w = mkWorld(full);
-  r = await L('build_hut').run(w, { x: -397, z: 29, y: 66 });
+  r = await L(HUT).run(w, { x: -397, z: 29, y: 66 });
   assert(r.ok && r.built === r.total && r.doorOk, JSON.stringify(r));
   assert.strictEqual(w.get(-398, 67, 31), 'spruce_door');
   assert.strictEqual(w.get(-398, 68, 29), 'air', 'окно на запад');
   assert.strictEqual(w.get(-395, 67, 31), 'air', 'внутри пусто');
   // второй раз: всё стоит, ставить нечего
-  r = await L('build_hut').run(w, { x: -397, z: 29, y: 66, dry: 1 });
+  r = await L(HUT).run(w, { x: -397, z: 29, y: 66, dry: 1 });
   assert(r.already === r.total && !Object.keys(r.need).length, JSON.stringify(r));
   console.log('build_hut: OK');
 }
