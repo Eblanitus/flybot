@@ -23,7 +23,7 @@ const GAP_MS = 30 * 60 * 1000;
 const READY_MS = 3 * 60 * 1000;
 const CRASH_WINDOW_MS = 15 * 60 * 1000;
 const LOCK_STALE_MS = 15 * 60 * 1000;
-const BODY_CMD = `cd /d ${ROOT} && node bot.js localhost 25565 FlyBot_01 3199 >> data\\flybot.out.log 2>&1`;
+const BODY_CMD = `cd /d ${ROOT} && node tools\\rotate_log.js && node bot.js localhost 25565 FlyBot_01 3199 >> data\\flybot.out.log 2>&1`;
 
 const P = {
   state: path.join(DATA, 'body_restart.json'),

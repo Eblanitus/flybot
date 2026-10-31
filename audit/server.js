@@ -1147,7 +1147,7 @@ async function pultStatus(cfg) {
 // Команда «Запустить»: строка для cmd /c (окно отдельное, живёт после аудита)
 function launchCmd(cfg, what, loopPid) {
   const root = cfg.root || ROOT;
-  if (what === 'body') return `start "flybot-body" /min cmd /c "cd /d ${root} && node bot.js localhost 25565 FlyBot_01 3199 >> data\\flybot.out.log 2>&1"`;
+  if (what === 'body') return `start "flybot-body" /min cmd /c "cd /d ${root} && node tools\\rotate_log.js && node bot.js localhost 25565 FlyBot_01 3199 >> data\\flybot.out.log 2>&1"`;
   if (what === 'night') return `start "" "${path.join(root, 'night.cmd')}"`;
   if (what === 'eyes') return `start "" "${path.join(root, 'eyes.cmd')}"`;
   if (what === 'guard') {

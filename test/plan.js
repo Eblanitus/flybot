@@ -114,16 +114,16 @@ module.exports = async () => {
   console.log('planPick провал/пропуск: OK');
 
   // ---------- planPick: мозг ----------
-  st = emptyPlan(); st.doneAt = now - 3 * MIN;
+  st = emptyPlan(); st.doneAt = now - MIN / 2;
   r = pick({ brainOn: true, goal });
-  assert(r.via === 'goal' && r.waitMs > 6 * MIN && r.waitMs <= 7 * MIN, 'мозг включён: после build_done ждём его «Постройку»: ' + r.waitMs);
+  assert(r.via === 'goal' && r.waitMs > T.planBrainWaitMs - MIN && r.waitMs <= T.planBrainWaitMs, 'мозг включён: после build_done ждём его «Постройку»: ' + r.waitMs);
   r = pick({ brainOn: true, goal, own });
   assert.strictEqual(r.via, 'build', 'новая «Постройка:» мозга — главнее');
   r = pick({ brainOn: false, goal });
   assert.strictEqual(r.item, it1, 'мозг выключен — берём сразу');
   st.doneAt = now - T.planBrainWaitMs - 1;
   r = pick({ brainOn: true, goal });
-  assert.strictEqual(r.item, it1, 'прошло 10 минут — из очереди');
+  assert.strictEqual(r.item, it1, 'ожидание planBrainWaitMs прошло — из очереди');
   st.doneAt = 0;
   assert.strictEqual(pick({ brainOn: true }).item, it1, 'не было build_done — не ждём');
   console.log('planPick мозг: OK');
@@ -275,17 +275,17 @@ module.exports = async () => {
     assert.strictEqual(ap2.build.name, 'base_pad', 'base_pad: в старой копии он был [x], а память о нём не стоит — открыт');
     console.log('встраивание: рестарт и пропавшая секция OK');
 
-    // 5) мозг включён: после build_done ждёт 10 мин; выключен — берёт сразу; повтор проваленного через 6 ч
+    // 5) мозг включён: после build_done ждёт planBrainWaitMs (2 мин); выключен — берёт сразу; повтор проваленного через 6 ч
     const ap3 = mk(); setBrain(ap3, true);
     setNotes(ap3, notesTxt({ goal: 'collect block=dirt count=1', plan: ['- [ ] hut_west -400 67 30 rot=90', '- [ ] fence_line 9 9 9'] }));
     ap3.planState = emptyPlan();
-    ap3.planState.doneAt = Date.now() - 2 * MIN;
+    ap3.planState.doneAt = Date.now() - MIN / 2;
     await ap3.refreshGoal();
     assert(!ap3.build && ap3.goal && ap3.goal.name === 'collect', 'мозг включён, build_done только что — ждём, пока работает «Автопилот:» цели');
     assert(ap3.status().plan.brainWaitSec > 0, 'в статусе: ждём мозг');
     ap3.planState.doneAt = Date.now() - T.planBrainWaitMs - 1000;
     await ap3.refreshGoal();
-    assert.strictEqual(ap3.build.name, 'hut_west', '10 минут прошло — очередь');
+    assert.strictEqual(ap3.build.name, 'hut_west', 'ожидание мозга прошло — очередь');
     setBrain(ap3, false); ap3.planState.doneAt = Date.now(); ap3.build = null;
     await ap3.refreshGoal();
     assert.strictEqual(ap3.build.name, 'hut_west', 'мозг выключен — без ожидания');

@@ -30,7 +30,8 @@ module.exports = async () => {
   assert(r.wake === null && r.st.cursor === 3, 'после рестарта тела старый повод не будит: ' + JSON.stringify(r));
   st = r.st;
   r = pickWake({ events: [{ id: 4, t: '11:00:00', type: 'day_report', day: 3, line: 'день 3: 40 блоков' }], lastId: 4, notes: withBuild, st, now: now + 5000 });
-  assert(r.wake && /новый день/.test(r.wake.reason), 'day_report будит');
+  assert.strictEqual(r.wake, null, 'day_report мозг не будит (31.10: ~18 пробуждений за ночь)');
+  assert.strictEqual(r.st.cursor, 4);
   st = r.st;
   // хозяин: owner_msg и chat от eblanitus228
   r = pickWake({ events: [{ id: 5, t: '11:01:00', type: 'chat', from: 'eblanitus228', text: 'построй маяк' }], lastId: 5, notes: withBuild, st, now: now + 6000 });

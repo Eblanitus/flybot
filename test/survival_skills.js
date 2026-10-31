@@ -465,6 +465,44 @@ async function testFarmPlot() {
   r = await skill.run(h.api, { size: 3 });
   assert(r.ok && r.tilled === 8 && r.planted === 0 && r.missing.wheat_seeds, JSON.stringify(r));
   console.log('  farm_plot: OK');
+
+  // ---- farm_plot_v1: dry=1 (пашня без воды) ----
+  const V = require('../brain/versions');
+  assert.deepStrictEqual(V.parseName('farm_plot_v1'), { base: 'farm_plot', n: 1 });
+  const v1 = L('farm_plot_v1');
+  assert(v1.name === 'farm_plot' && typeof v1.run === 'function' && v1.params.dry, 'farm_plot_v1 грузится, params.dry есть');
+  assert(/^\/\/ версия: .+/.test(require('fs').readFileSync(require('path').join(__dirname, '../brain/learned/farm_plot_v1.js'), 'utf8').split('\n', 1)[0]), 'первая строка — «// версия:»');
+  const bare = world => [...world.state.farmland].filter(k => { const [x, , z] = k.split(',').map(Number); return !world.state.crops.has(x + ',65,' + z); }).length;
+  const mkV = (inv, world, extra) => { const hs2 = {}; const hh = mk({ inv, eyes: {}, pos, handlers: hs2 }); Object.assign(hs2, farmHandlers(world, hh.st, extra)); return hh; };
+  // dry=0 без воды — отказ, как у базы
+  w = farmWorld({ water: false });
+  h = mkV({ wheat_seeds: 5, wooden_hoe: 1 }, w);
+  r = await v1.run(h.api, { x: 10, z: 10, size: 3 });
+  assert(!r.ok && r.missing.water && !h.has('till') && !h.has('plant'), JSON.stringify(r));
+  // dry=1, воды нет, семян 5 на 9 клеток: вспахано и засеяно ровно 5, голой пашни нет
+  w = farmWorld({ water: false });
+  h = mkV({ wheat_seeds: 5, wooden_hoe: 1 }, w);
+  r = await v1.run(h.api, { x: 10, z: 10, size: 3, dry: 1 });
+  assert(r.ok && r.dry === true && r.tilled === 5 && r.planted === 5 && r.unseeded === 0, JSON.stringify(r));
+  assert.strictEqual(w.state.farmland.size, 5);
+  assert.strictEqual(bare(w), 0, 'пустой вспаханной клетки нет');
+  assert(h.calls('plant').length >= 1 && !(h.st.inv.wheat_seeds > 0), 'семена израсходованы');
+  // dry=1, семян хватает на всё: вспахано 9, засеяно 9
+  w = farmWorld({ water: false });
+  h = mkV({ wheat_seeds: 12, wooden_hoe: 1 }, w);
+  r = await v1.run(h.api, { x: 10, z: 10, size: 3, dry: 1 });
+  assert(r.ok && r.tilled === 9 && r.planted === 9 && bare(w) === 0, JSON.stringify(r));
+  // dry=1, семян нет: ничего не пашет
+  w = farmWorld({ water: false });
+  h = mkV({ wooden_hoe: 1 }, w);
+  r = await v1.run(h.api, { x: 10, z: 10, size: 3, dry: 1 });
+  assert(!r.ok && r.dry === true && r.tilled === 0 && !h.has('till') && w.state.farmland.size === 0, JSON.stringify(r));
+  // dry=1, но вода есть — как обычно (8 клеток у воды)
+  w = farmWorld();
+  h = mkFarm({ wheat_seeds: 12, wooden_hoe: 1 }, w);
+  r = await v1.run(h.api, { size: 3, dry: 1 });
+  assert(r.ok && r.dry === true && r.dryPlot === false && r.tilled === 8 && r.planted === 8, JSON.stringify(r));
+  console.log('  farm_plot_v1 (dry): OK');
 }
 
 module.exports = async () => {

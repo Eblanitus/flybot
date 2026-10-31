@@ -116,6 +116,7 @@ $eng = $null   # текущий запуск инженера: @{ proc; name; st
 $tch = $null   # текущий запуск учителя: @{ proc; id; started }
 $hlp = $null   # текущий запуск помощника (модель учителя на заявке навыка): как $eng
 $engWait = $tchWait = $hlpWait = Get-Date; $engHits = $tchHits = $hlpHits = 0   # пауза после лимита и сколько лимитов подряд
+$holdNoteAt = [datetime]::MinValue   # когда в последний раз писали «ядро держит …» (не чаще раза в 30 мин)
 
 # Заявка на навык, которую можно взять (ставит замок <имя>.working). Помощнику — без behavior_* и без «переделать».
 function PickReq([bool]$helper) {
@@ -236,6 +237,7 @@ while ($true) {
   $bodyBusy = $bodyLock -and ((Get-Date) - $bodyLock.LastWriteTime).TotalMinutes -lt 15
   if ($engOn -and -not $eng -and -not $bodyBusy -and (Get-Date) -ge $engWait) {
     $c = Core @('take')   # сначала разрешённые хозяином правки ядра (снимок и тесты «до» — около минуты)
+    if ($c -and $c.hold -and ((Get-Date) - $holdNoteAt).TotalMinutes -ge 30) { GLog "ядро держит $($c.hold) — разрешённую правку инженер не берёт (data/core_hold; снять: node tools/core_hold.js off)"; $holdNoteAt = Get-Date }
     if ($c -and $c.id) {
       $engModel = RoleModel 'engineer'
       $prompt = "You are the engineer of the Minecraft bot FlyBot_01. Read brain/ENGINEER_PROMPT.md and follow it exactly (section about core edits). Core task file: $($c.taskFile)"

@@ -83,6 +83,99 @@ function run() {
   return root;
 }
 
+// Флаг core_hold и бережный откат: чужие правки за время работы инженера не теряются (31.10 так стёрлись правки двух кодеров).
+function gentle() {
+  const OK = { ok: true, results: [{ file: 'test/a.js', ok: true }] };
+  const BAD = { ok: false, results: [{ file: 'test/a.js', ok: false, tail: 'AssertionError: сломано' }] };
+  const w = (root, rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), text); };
+  const rd = (root, rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+  // журнал инженера, как его пишет opencode через tools/tstamp.js: время, цвет, «← Edit|Write <файл>»
+  const engLog = (root, id, lines) => w(root, 'data/engineer-core-' + id + '.log', lines.map(l => '[12:30:52] \x1b[0m← \x1b[0m' + l + '\n').join(''));
+  // свежий корень с одним разрешённым запросом; чужой файл behavior/x.js уже есть
+  const fresh = ctl => {
+    const root = mk(); w(root, 'behavior/x.js', 'чужое 1\n');
+    const cfg = { root, now: () => Date.UTC(2026, 9, 31, 12, 0, 0), runTests: () => ctl.tests, rerunTest: (r, f) => { ctl.reruns.push(f); return ctl.flaky; } };
+    const id = C.list(cfg).items[0].id; assert(C.approve(cfg, id).ok);
+    return { root, cfg, id };
+  };
+
+  // --- флаг: take отказывает, пока он стоит; старый (> 12 ч) игнорируется; снятие возвращает инженера ---
+  let ctl = { tests: OK, reruns: [], flaky: false };
+  let { root, cfg, id } = fresh(ctl);
+  C.setHold(cfg, 'Claude (два кодера)');
+  let t = C.take(cfg);
+  assert(t.busy && /Claude \(два кодера\) с 2026-10-31T12:00:00/.test(t.hold), 'ядро держат: busy и кто');
+  assert(!fs.existsSync(path.join(root, 'data', 'core_tasks', id)), 'снимок не снимали');
+  assert.strictEqual(C.list(cfg).items[0].status, 'approved', 'запрос остался ждать');
+  const old = (cfg.now() - 13 * 3600 * 1000) / 1000;
+  fs.utimesSync(C.paths(cfg).hold, old, old);
+  assert.strictEqual(C.readHold(cfg), null, 'флаг старше 12 ч не считается');
+  assert.strictEqual(C.take(cfg).id, id, 'забытый флаг инженера не держит');
+  C.finish(cfg, id, 'limit');   // запрос снова «разрешён»
+  C.setHold(cfg, 'Claude'); assert(C.take(cfg).busy);
+  assert(C.clearHold(cfg).cleared && !C.readHold(cfg)); assert.strictEqual(C.take(cfg).id, id, 'флаг снят — инженер берёт');
+
+  // --- откат по журналу инженера: чужие behavior/x.js и test/new.js целы, добавленное инженером убрано ---
+  engLog(root, id, ['Edit lib/blackbox.js', 'Write lib/new.js']);
+  w(root, 'lib/blackbox.js', 'сломано\n'); w(root, 'lib/new.js', 'новый инженера\n');
+  w(root, 'behavior/x.js', 'чужое 2\n'); w(root, 'test/new.js', 'чужой тест\n');
+  ctl.tests = BAD;
+  let f = C.finish(cfg, id, 'ok');
+  assert.strictEqual(f.status, 'reverted');
+  assert.strictEqual(rd(root, 'lib/blackbox.js'), 'module.exports = 1;\n', 'файл инженера откачен');
+  assert(!fs.existsSync(path.join(root, 'lib/new.js')), 'добавленное инженером убрано');
+  assert.strictEqual(rd(root, 'behavior/x.js'), 'чужое 2\n', 'чужая правка цела');
+  assert.strictEqual(rd(root, 'test/new.js'), 'чужой тест\n', 'чужой новый тест не удалён');
+  const pre = path.join(root, 'data', 'core_tasks', id, 'pre_restore');
+  assert.strictEqual(rd(pre, 'lib/blackbox.js'), 'сломано\n', 'до отката всё скопировано');
+  assert.strictEqual(rd(pre, 'behavior/x.js'), 'чужое 2\n');
+  const note = C.list(cfg).items[0].note;
+  assert(/откачено: lib\/blackbox\.js/.test(note) && /убрано добавленное: lib\/new\.js/.test(note) && /сохранено[^;]*behavior\/x\.js[^;]*test\/new\.js/.test(note) && /pre_restore/.test(note), note);
+  assert(/Чужие файлы/.test(fs.readFileSync(path.join(root, 'data', 'core_tasks', id + '.result.md'), 'utf8')));
+
+  // --- файл инженера, тронутый ещё раз уже после сравнения (пока шли тесты), не откатываем ---
+  ctl = { tests: OK, reruns: [], flaky: false };
+  ({ root, cfg, id } = fresh(ctl)); C.take(cfg);
+  engLog(root, id, ['Edit lib/blackbox.js']); w(root, 'lib/blackbox.js', 'инженер\n');
+  cfg.runTests = () => { w(root, 'lib/blackbox.js', 'инженер + чужое во время тестов\n'); return BAD; };
+  f = C.finish(cfg, id, 'ok');
+  assert.strictEqual(f.status, 'reverted'); assert.strictEqual(rd(root, 'lib/blackbox.js'), 'инженер + чужое во время тестов\n');
+  assert(/менялось уже после проверки\): lib\/blackbox\.js/.test(C.list(cfg).items[0].note));
+
+  // --- журнала нет: берём файлы из .done.md; остальное — чужое ---
+  ctl = { tests: OK, reruns: [], flaky: false };
+  ({ root, cfg, id } = fresh(ctl)); C.take(cfg);
+  w(root, 'data/core_tasks/' + id + '.done.md', '# готово\nизменено: lib/blackbox.js\n');
+  w(root, 'lib/blackbox.js', 'сломано\n'); w(root, 'behavior/x.js', 'чужое 3\n'); w(root, 'lib/foreign.js', 'не упомянут\n');
+  ctl.tests = BAD; f = C.finish(cfg, id, 'ok');
+  assert.strictEqual(f.status, 'reverted');
+  assert.strictEqual(rd(root, 'lib/blackbox.js'), 'module.exports = 1;\n');
+  assert.strictEqual(rd(root, 'behavior/x.js'), 'чужое 3\n'); assert.strictEqual(rd(root, 'lib/foreign.js'), 'не упомянут\n', 'не названный инженером не удаляем');
+
+  // --- ядро держат, следов инженера нет: ничего не откатываем и не гадаем ---
+  ctl = { tests: OK, reruns: [], flaky: false };
+  ({ root, cfg, id } = fresh(ctl)); C.take(cfg);
+  w(root, 'lib/blackbox.js', 'чьё-то\n'); C.setHold(cfg, 'Claude');
+  ctl.tests = BAD; f = C.finish(cfg, id, 'ok');
+  assert.strictEqual(f.status, 'failed'); assert.strictEqual(rd(root, 'lib/blackbox.js'), 'чьё-то\n');
+  assert(/ядро держат/.test(C.list(cfg).items[0].note));
+
+  // --- флак: тест упал, а при одном повторе проходит — не ухудшение; не проходит — откат, повтор был ровно один ---
+  ctl = { tests: OK, reruns: [], flaky: true };
+  ({ root, cfg, id } = fresh(ctl)); C.take(cfg);
+  engLog(root, id, ['Edit lib/blackbox.js']); w(root, 'lib/blackbox.js', 'module.exports = 3;\n');
+  ctl.tests = BAD; f = C.finish(cfg, id, 'ok');
+  assert.strictEqual(f.status, 'done'); assert.deepStrictEqual(ctl.reruns, ['test/a.js']);
+  assert.strictEqual(rd(root, 'lib/blackbox.js'), 'module.exports = 3;\n');
+  assert(/флак[^;]*test\/a\.js/.test(C.list(cfg).items[0].note));
+  ctl = { tests: OK, reruns: [], flaky: false };
+  ({ root, cfg, id } = fresh(ctl)); C.take(cfg);
+  engLog(root, id, ['Edit lib/blackbox.js']); w(root, 'lib/blackbox.js', 'module.exports = 3;\n');
+  ctl.tests = BAD; f = C.finish(cfg, id, 'ok');
+  assert.strictEqual(f.status, 'reverted'); assert.deepStrictEqual(ctl.reruns, ['test/a.js'], 'один повтор, не больше');
+  console.log('core requests hold/restore/flaky: OK');
+}
+
 async function audit(root) {
   const cfg = { ...A.DEFAULTS, root, dataDir: path.join(root, 'data'), brainDir: path.join(root, 'brain'), bodyUrl: 'http://127.0.0.1:9', runnerUrl: 'http://127.0.0.1:9' };
   const d = await A.api(cfg, 'core_requests', new URLSearchParams());
@@ -109,5 +202,5 @@ async function audit(root) {
   console.log('core requests audit: OK');
 }
 
-module.exports = async function () { const root = run(); await audit(root); };
+module.exports = async function () { const root = run(); gentle(); await audit(root); };
 if (require.main === module) module.exports().then(() => console.log('core_requests: all OK'), e => { console.error(e); process.exit(1); });

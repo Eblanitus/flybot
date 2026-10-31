@@ -1,7 +1,7 @@
 ﻿# Перезапуск тела мухи (bot.js) — чтобы включились правки ядра (lib/, bot.js). Мозг, сторож и night.cmd не трогает.
 # Командная строка тела — та же, что в night.cmd. Тело запускается в своём окне и живёт после закрытия этого.
 $fb = $PSScriptRoot
-$cmdline = "cd /d $fb && node bot.js localhost 25565 FlyBot_01 3199 >> data\flybot.out.log 2>&1"
+$cmdline = "cd /d $fb && node tools\rotate_log.js && node bot.js localhost 25565 FlyBot_01 3199 >> data\flybot.out.log 2>&1"
 
 # опасный момент — предупредить (день: HP >= 10, на земле, без врагов; ночь: в укрытии, HP >= 10, на земле)
 try {

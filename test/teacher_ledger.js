@@ -232,6 +232,51 @@ function testStale() {
   console.log('ledger stale: OK');
 }
 
+// откат/не сделано: заявка откачена тестами (core reverted/failed) или ответ «не готово» — это не «сделано, смотрим 48 ч»:
+// счёт снова копится с прежним балансом, повторной заявки сразу нет (пауза INVOICE_RETRY_MS), сообщение честное
+function testDead() {
+  const D = mkdirs();
+  let now = Date.UTC(2026, 9, 30, 12);
+  const cfg = { dataDir: D.dataDir, brainDir: D.brainDir, now: () => now };
+  const P = B.paths(cfg);
+  const C = require('../lib/core_requests');
+  fs.mkdirSync(D.dataDir, { recursive: true });
+  fs.writeFileSync(path.join(D.brainDir, 'core_requests.md'), ['# запросы', '', '## [2026-10-30] Откатили', 'текст', '', '## [2026-10-30] Не вышло', 'текст', ''].join('\n'));
+  const ids = C.parse(fs.readFileSync(path.join(D.brainDir, 'core_requests.md'), 'utf8')).map(r => r.id);
+  const cst = { version: 1, requests: { [ids[0]]: { status: 'reverted' }, [ids[1]]: { status: 'failed' } } };
+  fs.writeFileSync(path.join(D.dataDir, 'core_requests_state.json'), JSON.stringify(cst));
+  const mk = (slug, request) => ({ slug, title: slug, kind: request.kind, status: 'invoiced', postings: [{ t: now, min: 40, ev: '#1' }], resetAt: 0, request, invoicedAt: now, repeatedUpTo: now,
+    history: [{ request: request.name || 'core', kind: request.kind, name: request.name || null, id: request.id || null, at: now, outcome: 'ждёт инженера' }] });
+  const stt = B.load(P, now);
+  stt.accounts.core_rev = mk('core_rev', { kind: 'core', id: ids[0] });
+  stt.accounts.core_fail = mk('core_fail', { kind: 'core', id: ids[1] });
+  stt.accounts.skill_nr = mk('skill_nr', { kind: 'skill', name: 'skill_nr', at: now });
+  stt.accounts.skill_ok = mk('skill_ok', { kind: 'skill', name: 'skill_ok', at: now });
+  fs.writeFileSync(P.state, JSON.stringify(stt));
+  touch(path.join(D.req, 'skill_nr.md'), now - 1000, '# skill_nr\n');
+  touch(path.join(D.req, 'skill_nr.done.md'), now, '﻿# skill_nr: не готово\nИнженер не ответил\n');   // как пишет сторож (с BOM)
+  touch(path.join(D.req, 'skill_ok.md'), now - 1000, '# skill_ok\n');
+  touch(path.join(D.req, 'skill_ok.done.md'), now, '# skill_ok: готово\n');
+  assert.strictEqual(B.skillReqState(P, 'skill_nr', now), 'notready'); assert.strictEqual(B.skillReqState(P, 'skill_ok', now), 'done');
+  now += 60000;
+  const r = B.sweep(cfg);
+  const accs = B.load(P, now).accounts;
+  for (const s of ['core_rev', 'core_fail', 'skill_nr']) {
+    const a = accs[s];
+    assert.strictEqual(a.status, 'open', s + ': не «сделано, смотрим 48 ч»'); assert(!a.paidAt && !a.resetAt, s + ': оплата не засчитана');
+    assert(B.balance(a, now) > 39, s + ': баланс сохранён'); assert(a.retryAt >= now + 6 * H - 1000, s + ': пауза до новой заявки');
+    assert(a.history[0].outcome !== 'ждёт инженера' && a.history[0].outcome !== 'сделано, смотрим 48 ч', s + ': ' + a.history[0].outcome);
+  }
+  assert.strictEqual(accs.skill_ok.status, 'watching', '«готово» — как было');
+  assert(r.msgs.some(m => /core_rev/.test(m) && /откачена/.test(m) && /снова копится/.test(m)), r.msgs.join('|'));
+  assert(r.msgs.some(m => /core_fail/.test(m) && /не сделана/.test(m)) && r.msgs.some(m => /skill_nr.*не сделана/.test(m)));
+  assert(!r.msgs.some(m => /core_rev.*сделана — смотрим/.test(m)));
+  // пауза: счёт с балансом выше порога повторно не выставляется, через 6 ч — выставляется
+  assert(!B.due(cfg).due.some(d => /^(core_rev|core_fail|skill_nr)$/.test(d.slug)), 'сразу — нет');
+  now += 7 * H; assert(B.due(cfg).due.some(d => d.slug === 'core_rev'), 'через 6 ч — снова можно выставить счёт');
+  console.log('ledger dead: OK');
+}
+
 // хозяин: заявка сразу, мимо порога (даже при L ≥ 4) — и привязывается к счёту из проводки
 function testOwner() {
   const D = mkdirs();
@@ -282,7 +327,7 @@ async function testAudit(D) {
 (async () => {
   testParse(); testMath();
   const D = testFlow();
-  testStale(); testOwner(); testBroken();
+  testStale(); testDead(); testOwner(); testBroken();
   await testAudit(D);
   console.log('teacher_ledger: all OK');
 })().catch(e => { console.error(e); process.exit(1); });

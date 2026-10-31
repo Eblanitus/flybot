@@ -151,5 +151,60 @@ module.exports = async () => {
   assert.strictEqual(ap2.status().build.status, 'готово');
   assert(!events.some(e => /^(brain|wake)/.test(e.type)), 'мозг на провалы не будим');
   console.log('живой цикл постройки: OK');
+
+  // ---- v0.4 «Автопилот:» упал на нехватке «не хватает блоков: …» -> gather_list с ключом goal_gather, потом цель снова ----
+  assert.deepStrictEqual(lackOf('не хватает блоков: spruce_fence ×12, torch ×4', null), { spruce_fence: 12, torch: 4 }, 'lackOf: «не хватает блоков:»');
+  assert.deepStrictEqual(lackOf('не хватило блоков: spruce_fence x12, torch x4', null), { spruce_fence: 12, torch: 4 }, 'lackOf: «xN»');
+  const lamp = { name: 'lamp_posts', params: { x1: 1, z1: 2, x2: 30, z2: 2, every: 6 }, kind: 'learned', sig: 'lamp' };
+  const LERR = 'не хватает блоков: spruce_fence ×12, torch ×4';
+  const LRES = { ok: false, error: LERR, missing: { spruce_fence: 12, torch: 4 }, have: { spruce_fence: 0, torch: 0 } };
+  const gev = [];
+  const gctx = { events: { push: (type, data) => gev.push({ type, ...data }) }, tasks: { current: null, history: [], queue: [] }, lastProgressAt: 0 };
+  const apg = AP.create(gctx);
+  apg.goal = lamp; apg.goalSigSeen = 'lamp';
+  const gnow = Date.now();
+  const go = a => { apg._start({ ...a, kind: 'body' }); return apg.running.promise; }; // исполнителя :3200 в тесте нет — гоним через ctx.runSkill
+  const dg = ex => decide({ ...base, ...AP.goalState(apg, Date.now()), ...ex });
+  a = dg({});
+  assert(a.key === 'goal' && a.name === 'lamp_posts', 'сначала сама цель');
+  gctx.runSkill = async () => ({ ok: false, error: LERR, result: LRES });
+  await go(a);
+  assert(!apg.goalFail && !apg.until.goal, 'нехватка — не провал цели: паузы и деления шага нет');
+  a = dg({});
+  assert(a.key === 'goal_gather' && a.kind === 'learned' && a.name === 'gather_list' && a.params.items === 'spruce_fence:12,torch:4', 'провал по нехватке -> gather_list этих предметов: ' + JSON.stringify(a));
+  assert.strictEqual(apg.status().goalGather, 'lamp_posts: добираю spruce_fence ×12, torch ×4');
+  // ночью с угрозой добор не начинаем (как build_gather)
+  a = dg({ isNight: true, phase: 'ночь', nightIn: 0, hostilesNear: 1, hostile: { name: 'zombie', d: 20 } });
+  assert(!a || a.key !== 'goal_gather', 'ночью с мобом добор не начинаем');
+  // добор прерван — продолжаем без паузы и счёта
+  gctx.runSkill = async () => ({ ok: false, error: 'вытеснен командой мозга' });
+  await go(dg({}));
+  assert.strictEqual(dg({}).key, 'goal_gather', 'прерванный добор — нужда остаётся');
+  // добор дал всё нужное -> цель снова
+  gctx.runSkill = async () => ({ ok: true, result: { ok: true, collected: { spruce_log: 3 }, crafted: { spruce_fence: 12, torch: 4 }, have: { spruce_fence: 12, torch: 4 } } });
+  delete apg.until.goal_gather;
+  await go(dg({}));
+  assert(!apg.goalNeed, 'добор сделан — нужда снята');
+  assert.strictEqual(dg({}).key, 'goal', 'после добора — цель снова');
+  // добор каждый раз даёт часть, а цель снова падает на нехватке — после buildGatherMax доборов обычный провал цели (пауза, шаг вдвое меньше)
+  gctx.runSkill = async name => name === 'gather_list'
+    ? { ok: true, result: { ok: true, collected: { spruce_log: 1 }, have: { spruce_fence: 3, torch: 0 } } }
+    : { ok: false, error: LERR, result: LRES };
+  for (let i = 0; i < 12 && !apg.goalFail; i++) {
+    delete apg.until.goal_gather; delete apg.until.goal;
+    await go(dg({}));
+  }
+  assert(apg.goalFail && /добор не помогает/.test(apg.goalFail.reason), 'добор не помогает -> провал цели: ' + JSON.stringify(apg.goalFail));
+  assert(AP.goalState(apg, Date.now()).goalFailed && !AP.goalState(apg, Date.now()).goalNeed, 'пауза goalRetryMs, нужды нет');
+  // пустой добор -> провал цели с причиной «добор ничего не дал»
+  const ap3 = AP.create(gctx); ap3.goal = lamp; ap3.goalSigSeen = 'lamp';
+  AP.goalAfter(ap3, { sig: 'lamp', name: 'lamp_posts' }, 'провал', 'x', gnow, false, LERR, LRES);
+  const r3 = AP.goalGatherAfter(ap3, { sig: 'lamp' }, 'провал', 'не добрал: torch x4', { collected: {}, crafted: {}, have: { spruce_fence: 0, torch: 0 } }, gnow);
+  assert(r3.failed && /добор ничего не дал/.test(r3.failed) && ap3.goalFail && !ap3.goalNeed, 'пустой добор: ' + JSON.stringify(r3));
+  // нехватка без названия предметов и «Постройка:»-путь не затронуты: обычный провал цели как раньше
+  const ap4 = AP.create(gctx);
+  AP.goalAfter(ap4, { sig: 'g', name: 'collect' }, 'провал', 'нет кирки', gnow, false, 'нет кирки', null);
+  assert(ap4.goalFail && ap4.goalDiv === 2 && !ap4.goalNeed, 'не нехватка — шаг вдвое меньше, как раньше');
+  console.log('добор под цель «Автопилот:»: OK');
 };
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });

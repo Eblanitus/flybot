@@ -255,7 +255,7 @@ function testCodeResolve() {
   assert(h.accounts().goto_path, 'путь не найден → <навык>_path: ' + Object.keys(h.accounts()));
   failTwice('build_blueprint', 'не достроено: 20 из 176; нет в инвентаре: cobblestone; не хватило: cobblestone ×8', 120); h.mature();
   assert.strictEqual(h.cases('pending').length, 0);
-  assert(/не хватило материалов/.test(h.cases('done').pop().result) && !/проводки/.test(h.cases('done').pop().result));
+  assert(/нехватка ресурсов/.test(h.cases('done').pop().result) && !/проводки/.test(h.cases('done').pop().result));
   assert.deepStrictEqual(Object.keys(h.accounts()).sort(), ['gather_tool_missing', 'goto_path']);
   // справилась сама: тот же навык успешно завершился в течение 10 мин
   failTwice('shelter', 'укрытие не до конца закрыто (открыто: 1 2 3)', 130); h.scan();
@@ -330,6 +330,72 @@ function testCodeResolve() {
 }
 
 // бюджет запусков: 6 в час и 40 в сутки; хозяин и счёт мимо часового предела
+// 31.10: owner/invoice/day-вердикты без поля keep ронили разбор кодом; лимит модели (квота) не должен делать случай «failed»;
+// нехватка материала закрывается кодом как игровой процесс
+function testLimitAndKeep() {
+  let h = harness();
+  const failTwice = (name, reason, id) => { h.ev({ id, type: 'task_failed', name, reason }); h.now += 1000; h.ev({ id: id + 1, type: 'task_failed', name, reason }); h.now += 1000; };
+  // --- (а) сообщение хозяина созрело: вердикт model без keep — разбор кодом не падает, случай ждёт учителя
+  h.ev({ id: 5, type: 'owner_msg', from: 'eblanitus228 (из программы)', text: 'построй колодец' });
+  h.scan();
+  const s = h.mature();
+  assert(!(s.ledger || []).some(m => /разбор кодом .*не вышел/.test(m)), 'owner без keep: ' + JSON.stringify(s.ledger));
+  assert.strictEqual(h.st().cases.filter(c => c.type === 'owner' && c.status === 'pending').length, 1, 'хозяин — модели');
+
+  // --- (г) нехватка материала: закрыто кодом, без проводок и без модели
+  h = harness();
+  let id = 300;
+  for (const reason of ['не хватает блоков: cobblestone ×12', 'нечем ставить: нет факелов', 'кончились блоки (cobblestone)', 'не добрал: 3 из 8 oak_log']) {
+    failTwice('lamp_posts', reason, id); id += 2; h.mature();
+    assert.strictEqual(h.cases('pending').length, 0, reason + ' — не модели');
+    const done = h.cases('done').pop();
+    assert(done && done.byCode && /нехватка ресурсов — игровой процесс, не проблема/.test(done.result), reason + ': ' + (done && done.result));
+    h.now += 31 * 60000;   // пауза после разбора того же провала
+  }
+  assert.deepStrictEqual(Object.keys(h.accounts()), [], 'нехватка материала счетов не открывает');
+  // «нечем закрыть яму» и прочие неясные — по-прежнему модели
+  failTwice('shelter', 'нечем закрыть яму (блоков нет)', id); h.mature();
+  assert.strictEqual(h.cases('pending').length, 1, 'неясный провал — модели');
+
+  // --- (в) лимит запросов модели в журнале разбора: случай снова pending, повтор не раньше сброса квоты
+  h = harness();
+  h.bb('death', { cause: 'skeleton' }); h.scan(); h.mature();
+  let r = T.take(h.cfg); assert.strictEqual(r.type, 'death');
+  const logf = idc => path.join(h.D.dataDir, 'teacher-' + idc + '.log');
+  fs.writeFileSync(logf(r.id), '[09:00:02] > build\n[09:01:16] Error: You exceeded your current quota, please check your plan.\n[09:01:16] * Quota exceeded for metric: requests per day limit exceeded on Free Tier.\n[09:01:16] Please retry in 7h58m43.888830625s.\n');
+  let f = T.finish(h.cfg, r.id, 'ok');
+  assert.strictEqual(f.status, 'pending', 'лимит — не failed: ' + JSON.stringify(f)); assert(/лимит запросов/.test(f.limit));
+  let c = h.st().cases.find(x => x.id === r.id);
+  assert.strictEqual(c.limitTries, 1); assert(!c.finishedAt && c.status === 'pending');
+  const wait = c.notBefore - h.now;
+  assert(wait >= (7 * 3600 + 58 * 60 + 43) * 1000 && wait <= (8 * 3600 + 5 * 60) * 1000, 'ждём retry in ≈ 7ч58м: ' + wait);
+  assert.deepStrictEqual(Object.keys(h.accounts()), [], 'проводок за отложенный случай нет');
+  h.now += 3600 * 1000; h.scan();
+  assert(T.take(h.cfg).none, 'до сброса квоты случай не берётся');
+  h.now += 8 * 3600 * 1000; h.scan();
+  r = T.take(h.cfg); assert.strictEqual(r.id, c.id, 'после — берётся тот же случай');
+  assert(!('notBefore' in h.st().cases.find(x => x.id === r.id)), 'отметка снята');
+  // тот же журнал (старая часть) второй раз лимитом не считается: новый запуск без лимита и без отчёта — обычный провал
+  fs.appendFileSync(logf(r.id), '[17:00:00] модель молчит\n');
+  f = T.finish(h.cfg, r.id, 'ok'); assert.strictEqual(f.status, 'failed', 'без нового признака лимита — failed');
+  // «retry in» нет, 429 — пауза 6 ч
+  h.bb('death', { cause: 'creeper' }); h.now += 60000; h.scan(); h.mature();
+  r = T.take(h.cfg);
+  fs.writeFileSync(logf(r.id), 'Error: 429 Too Many Requests\n');
+  f = T.finish(h.cfg, r.id, 'ok'); assert.strictEqual(f.status, 'pending');
+  c = h.st().cases.find(x => x.id === r.id); assert.strictEqual(c.notBefore - h.now, T.DEFAULTS.LIMIT_PAUSE_MS, 'нет «retry in» — 6 ч');
+  // лимит упорно повторяется — после LIMIT_TRIES случай всё же failed
+  const h2 = harness(); h2.cfg.limits = { LIMIT_TRIES: 1 };
+  h2.bb('death', { cause: 'witch' }); h2.scan(); h2.mature();
+  r = T.take(h2.cfg); fs.writeFileSync(path.join(h2.D.dataDir, 'teacher-' + r.id + '.log'), 'Please retry in 34.5s\n');
+  assert.strictEqual(T.finish(h2.cfg, r.id, 'ok').status, 'pending');
+  c = h2.st().cases.find(x => x.id === r.id); assert.strictEqual(c.notBefore - h2.now, T.DEFAULTS.LIMIT_MIN_MS, 'короткий retry in — не меньше 2 мин');
+  h2.now += 3 * 60000; h2.scan(); r = T.take(h2.cfg);
+  fs.appendFileSync(path.join(h2.D.dataDir, 'teacher-' + r.id + '.log'), 'Please retry in 10s\n');
+  assert.strictEqual(T.finish(h2.cfg, r.id, 'ok').status, 'failed', 'LIMIT_TRIES исчерпан');
+  console.log('teacher limit/keep: OK');
+}
+
 function testBudget() {
   let h = harness();
   const cycle = (cause) => { h.ev({ id: 800 + ++h.n, type: 'death', cause, message: 'x', phase: 'день' }); h.now += 100000; h.scan(); return T.take(h.cfg); };
@@ -471,6 +537,7 @@ module.exports = async function () {
   testNeighbor();
   testIdle();
   testCodeResolve();
+  testLimitAndKeep();
   testBudget();
   await testAudit(D);
   await testConfigs();

@@ -165,8 +165,42 @@ module.exports = async () => {
     const ev5 = m5.events.find(e => e.type === 'day_report');
     assert.ok(ev5 && ev5.idleMin >= 10 && ev5.idleMaxMin >= 10 && /^простой: \d+ мин \(самый длинный \d+ мин\)$/.test(ev5.idle), JSON.stringify(ev5));
     assert.ok(/простой \d+ мин/.test(ev5.line), ev5.line);
+    // ---- v0.3: вырубка («.» чертежа) — прогресс; minHp, минуты при HP ≤ 4, еда на закате ----
+    const m6 = mk(fs.mkdtempSync(path.join(os.tmpdir(), 'flybot-daylog6-')));
+    m6.bot.registry = { foodsByName: { bread: {}, cooked_beef: {} } };
+    m6.bot.inventory = { items: () => [{ name: 'bread', count: 3 }, { name: 'cooked_beef', count: 2 }, { name: 'cobblestone', count: 40 }] };
+    m6.bot.health = 20;
+    const d6 = D.attach(m6.ctx, m6.session); m6.bot.emit('time');
+    let q = 1e12; d6.tickIdle(q); for (let i = 0; i < 6; i++) d6.tickIdle(q += 5000);     // 30 с простоя
+    assert.ok(d6.idle.ms >= 30000 && d6.state.minHp === 20, 'HP 20: minHp ' + d6.state.minHp);
+    m6.ctx.tasks.current = { name: 'build_blueprint' };
+    d6.onCut({ x: 1, y: 64, z: 0 }, 'stone'); d6.onCut({ x: 2, y: 64, z: 0 }, 'stone'); d6.onCut({ x: 3, y: 64, z: 0 }, 'dirt');
+    assert.strictEqual(d6.state.cut, 3); assert.deepStrictEqual(d6.state.cutItems, { stone: 2, dirt: 1 }); assert.strictEqual(d6.state.built, 0, 'вырубка не «построено»');
+    assert.strictEqual(d6.idle.ms, 0, 'вырубка сбрасывает простой'); assert.ok(m6.ctx.lastProgressAt > 0);
+    assert.strictEqual(d6.today().cut, 3); assert.ok(/вырублено 3/.test(d6.today().line), d6.today().line);
+    m6.ctx.tasks.current = { name: 'build_blueprint', source: 'reflex' }; d6.onCut({ x: 9, y: 64, z: 0 }, 'stone'); assert.strictEqual(d6.state.cut, 3, 'рефлекс вырубкой не считается');
+    // здоровье: событие health ловит быстрые провалы; тик копит минуты при HP ≤ 4 (мёртвый — не копится)
+    m6.bot.health = 3; m6.bot.emit('health'); assert.strictEqual(d6.state.minHp, 3);
+    for (let i = 0; i < 12; i++) d6.tickIdle(q += 5000);                                   // 60 с при HP 3
+    m6.bot.health = 0; for (let i = 0; i < 6; i++) d6.tickIdle(q += 5000);                // мёртв — минуты не идут
+    m6.bot.health = 4; for (let i = 0; i < 6; i++) d6.tickIdle(q += 5000);                // ровно 4 — ещё опасно (30 с)
+    m6.bot.health = 18; for (let i = 0; i < 6; i++) d6.tickIdle(q += 5000);               // здоров — не копится
+    assert.strictEqual(d6.state.lowHpMs, 90000, 'HP ≤ 4: ' + d6.state.lowHpMs); assert.strictEqual(d6.state.minHp, 0, 'minHp включает смерть (0)');
+    // еда на закате: до 12000 не меряем, после — первое значение за день, дальше не перезаписывается
+    assert.strictEqual(d6.state.duskFood, null);
+    m6.bot.time.timeOfDay = 12500; m6.bot.emit('time');
+    assert.strictEqual(d6.state.duskFood, 5, 'съедобных в сумке на закате (bread 3 + cooked_beef 2)');
+    m6.bot.inventory = { items: () => [] }; m6.bot.emit('time'); assert.strictEqual(d6.state.duskFood, 5, 'закат меряется один раз за день');
+    m6.bot.time.day = 6; m6.bot.time.timeOfDay = 5; m6.bot.emit('time');
+    const ev6 = m6.events.find(e => e.type === 'day_report');
+    assert.ok(ev6 && ev6.built === 0 && ev6.cut === 3 && !ev6.warn, 'день с одной вырубкой — не «0 блоков»: ' + JSON.stringify(ev6));
+    assert.ok(ev6.minHp === 0 && ev6.lowHpMin === 1.5 && ev6.duskFood === 5, JSON.stringify(ev6));
+    assert.ok(/построено 0 блоков, вырублено 3/.test(ev6.line), ev6.line);
+    const row6 = fs.readFileSync(path.join(m6.ctx.dataDir, 'days.log'), 'utf8').trim().split(/\r?\n/).map(JSON.parse)[0];
+    assert.ok(row6.cut === 3 && row6.minHp === 0 && row6.lowHpMin === 1.5 && row6.duskFood === 5, 'days.log');
+    assert.strictEqual(d6.state.minHp, null, 'новый день — minHp с нуля'); assert.strictEqual(d6.state.cut, 0); assert.strictEqual(d6.state.duskFood, null);
     // чертёж ставит ctx.buildingAt — проверка в test/blueprint.js
-    for (const ss of [session, m2.session, m3.session, m4.session, m5.session]) for (const tm of ss.timers) clearInterval(tm);
+    for (const ss of [session, m2.session, m3.session, m4.session, m5.session, m6.session]) for (const tm of ss.timers) clearInterval(tm);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   console.log('daylog: OK');
 };

@@ -21,7 +21,7 @@
 'use strict';
 const L = require('./core');
 const { entName, isAutoTarget, isHostile, Vec3 } = L('util');
-const { equipBestArmor, equipToolFor } = L('actions');
+const { equipBestArmor, equipToolFor, equipBestWeapon } = L('actions');
 const { timeInfo } = L('perception');
 const AG = L('aggressors');
 const F = L('felt');
@@ -148,7 +148,11 @@ function mobHurtPlan(ctx, att) {
   const opts = defensePrior(ctx, att, true);
   const o = outlookOf(ctx, att);
   if (cur && (o ? o.win : bot.health >= T.swatMinHp) && !lowHp && att && opts[0] === 'fight') { plan.swat = att; return plan; } // занят делом, бой выигран (А; без оценки — HP в норме) — отмахнуться
-  const ch = shelterTooSlow(ctx, att) ? { action: 'escape', why: `мало HP и враг вплотную — копка-укрытие не успевает, экстренный побег` } : E.choose(ctx, opts);
+  const mobName = att ? entName(att) : null;
+  let ch = shelterTooSlow(ctx, att) ? { action: 'escape', why: `мало HP и враг вплотную — копка-укрытие не успевает, экстренный побег` } : E.choose(ctx, opts);
+  // v0.4 (2.4): побег от такого моба недавно не оторвался (fled:false) — сразу укрытие (если оно в вариантах: не вплотную и не только что упало)
+  if (ch.action === 'escape' && mobName && escapeFailed(ctx, mobName) && opts.includes('shelter') && !shelterTooSlow(ctx, att))
+    ch = { action: 'shelter', why: `прошлый побег от ${mobName} не оторвался (fled:false) — сразу укрытие` };
   const params = ch.action === 'fight' ? { targetId: att.id, radius: T.fightRadius } : {};
   const note = shelterTooSlow(ctx, att) ? '; копка-укрытие не успевает' : '';
   // А: при критически низком HP (< 10) — escape использует экстренные варианты в зависимости от типа врага
@@ -180,11 +184,32 @@ function mobHurtPlan(ctx, att) {
     }
   }
   plan.skill = ch.action;
+  plan.mob = mobName;
   plan.params = params;
   plan.why = ch.why + note;
   plan.options = opts;
   plan.dist = attackerDist(bot, att);
   return plan;
+}
+
+// ---- v0.4 (2.4): побег, который не оторвал от моба (fled:false), помним по виду моба escapeFailMemMs — в следующий раз тот же моб → сразу укрытие ----
+function noteEscapeFail(ctx, mob) { if (mob) (ctx.escapeFail || (ctx.escapeFail = {}))[String(mob)] = Date.now(); }
+function escapeFailed(ctx, mob) {
+  const t = mob && ctx.escapeFail ? ctx.escapeFail[String(mob)] : 0;
+  return !!t && Date.now() - t < T.escapeFailMemMs;
+}
+// итоги побегов: запуск запомнен (ctx.escapeWatch: [{taskId, mob, t}]) — ищем task_done/task_failed этой задачи в журнале и смотрим result.fled
+function scanEscapes(ctx) {
+  const w = ctx.escapeWatch; if (!w || !w.length) return;
+  const buf = (ctx.events && ctx.events.buf) || [];
+  ctx.escapeWatch = w.filter(it => {
+    if (Date.now() - it.t > T.escapeFailMemMs) return false;
+    const ev = buf.find(e => e.taskId === it.taskId && (e.type === 'task_done' || e.type === 'task_failed'));
+    if (!ev) return true;
+    const r = ev.result;
+    if (r && r.fled === false) noteEscapeFail(ctx, it.mob);
+    return false;
+  });
 }
 
 // Ждём старта задачи, но не бесконечно: если тело занято и задача не пошла — это отказ (пишем в журнал)
@@ -210,13 +235,22 @@ async function startDefense(ctx, plan) {
     try { await tm.stop('вытеснен рефлексом'); } catch (e) {}
     ctx.events.push('info', { msg: `рефлекс: вытесняю ${was.what} — защита важнее`, reflex: true });
   }
+  // v0.4 (2.4, смерть 110846: в руке pointed_dripstone, меч в сумке): оружие в сумке есть, а в руке нет — сначала меч/топор в руку (быстро, до защиты)
+  try {
+    const b = ctx.bot, held = b && b.heldItem;
+    if (b && b.inventory && hasWeapon(b) && !(held && /_(sword|axe)$|^(trident|mace)$/.test(held.name))) await withTimeout(equipBestWeapon(b), 1500);
+  } catch (e) {}
   let r = null;
   try {
     r = await withTimeout(ctx.runSkill(plan.skill, plan.params, { source: 'reflex', force: true }), T.reflexStartMs);
   } catch (e) {
     r = { ok: false, error: String(e && e.message ? e.message : e) };
   }
-  if (r && r.ok !== false) { clearRefusal(ctx, plan.skill); return r; }
+  if (r && r.ok !== false) {
+    clearRefusal(ctx, plan.skill);
+    if (plan.skill === 'escape' && plan.mob && r.taskId) (ctx.escapeWatch || (ctx.escapeWatch = [])).push({ taskId: r.taskId, mob: String(plan.mob), t: Date.now() });
+    return r;
+  }
   const why = String((r && r.error) || 'неизвестно');
   const st = noteRefusal(ctx, plan.skill);
   const now = busyInfo(ctx);
@@ -250,7 +284,10 @@ function mobNearPlan(ctx, nearest, dist) {
         params.style = dist <= 6 && hasBlocks && !hasWeapon ? 'wall_escape' : (dist <= 8 ? 'zigzag' : 'sprint_away');
       }
     }
-    return { skill: 'escape', params, why: `моб ${nearest.name} ${d} м — уклонение от ${isCreeper ? 'взрыва' : 'урона'}` };
+    // v0.4 (2.4): побег от такого моба недавно не оторвался — сразу укрытие (не вплотную и не только что упавшее)
+    if (!isCreeper && escapeFailed(ctx, nearest.name) && dist >= T.hitNoShelterDist && !bannedActions(ctx).shelter && !(ctx.shelterFailT && Date.now() - ctx.shelterFailT < T.shelterFailMs))
+      return { skill: 'shelter', params: {}, mob: nearest.name, why: `моб ${nearest.name} ${d} м — прошлый побег от такого не оторвался, сразу укрытие` };
+    return { skill: 'escape', params, mob: nearest.name, why: `моб ${nearest.name} ${d} м — уклонение от ${isCreeper ? 'взрыва' : 'урона'}` };
   }
   if (canFight) return { skill: 'fight', params: { targetId: nearest.id, radius: T.fightRadius }, why: `моб ${nearest.name} ${d} м — бой` };
   if (!armed) {
@@ -261,7 +298,7 @@ function mobNearPlan(ctx, nearest, dist) {
       const hasBlocks = bot.inventory.items().filter(i => ['dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'stone', 'diorite', 'andesite', 'granite', 'tuff', 'coarse_dirt', 'deepslate', 'calcite', 'sandstone', 'blackstone'].includes(i.name)).reduce((a, i) => a + i.count, 0) >= 3;
       params.style = dist <= 6 && hasBlocks ? 'wall_escape' : 'zigzag';
     }
-    return close ? { skill: 'escape', params, why: `моб ${nearest.name} ${d} м — нет оружия, отхожу` }
+    return close ? { skill: 'escape', params, mob: nearest.name, why: `моб ${nearest.name} ${d} м — нет оружия, отхожу` }
       : { skill: 'shelter', params: {}, why: `моб ${nearest.name} ${d} м — нет оружия, укрываюсь` };
   }
   return { skill: 'shelter', params: {}, why: `моб ${nearest.name} ${d} м — укрытие` };
@@ -640,6 +677,7 @@ function attach(api) {
       const now = Date.now();
       if (now - lastCheck < 1500) return; // мини- débounce
       lastCheck = now;
+      try { scanEscapes(ctx); } catch (e) {} // итоги побегов: fled:false → ctx.escapeFail
       if (ctx.manualControl) return;
       const bot = ctx.bot;
       if (!bot.entity || !bot.entity.position) return;
@@ -668,14 +706,14 @@ function attach(api) {
         if (bannedActions(ctx).escape) return;
         if (cur0 && typeof ctx.tasks.stop === 'function') { try { await ctx.tasks.stop('стрелок, мало HP — рефлекс прерывает'); } catch (e) {} }
         ctx.events.push('info', { msg: `рефлекс: escape (${ranged.why})`, reflex: true, action: 'escape', dist: ranged.dist, mob: ranged.mob });
-        await startDefense(ctx, { skill: 'escape', params: ranged.params, why: ranged.why, options: ['escape', 'shelter'] });
+        await startDefense(ctx, { skill: 'escape', params: ranged.params, why: ranged.why, mob: ranged.mob, options: ['escape', 'shelter'] });
         return;
       }
       if (dist > threshold) return;
       // Если моб дальше порога защитного действия — не трогаем
       if (dist > T.defenseFightDist) return;
       const plan = mobNearPlan(ctx, nearest, dist);
-      const { skill, params, why } = plan;
+      const { skill, params, why, mob } = plan;
       if (bannedActions(ctx)[skill]) return; // это действие только что не вышло — не повторяем его каждые 2 с
       // Прерываем текущую задачу тела (если есть), чтобы сделать место защите
       const curTask = ctx.tasks.current;
@@ -684,7 +722,7 @@ function attach(api) {
       }
       ctx.events.push('info', { msg: `рефлекс: ${skill} (${why})`, reflex: true, action: skill, dist, mob: nearest.name });
       // Запускаем защиту с force:true, чтобы перебить чужую работу
-      await startDefense(ctx, { skill, params, why, options: [skill] });
+      await startDefense(ctx, { skill, params, why, mob, options: [skill] });
     });
   })();
 
@@ -708,5 +746,5 @@ function attach(api) {
   } };
 }
 
-module.exports = { attach, mobHurtPlan, mobNearPlan, rangedLowHpPlan, defensePrior, pickFood, needsEat, dripstoneCost, FOOD_BLACKLIST, hasWeapon, hostilesNear,
+module.exports = { noteEscapeFail, escapeFailed, scanEscapes, attach, mobHurtPlan, mobNearPlan, rangedLowHpPlan, defensePrior, pickFood, needsEat, dripstoneCost, FOOD_BLACKLIST, hasWeapon, hostilesNear,
   isDrowning, blockOverhead, findAirCell, rescuePlan, busyInfo, failState, bannedActions, noteRefusal, clearRefusal, startDefense, inShelter, attackerDist, shelterTooSlow, outlookOf };

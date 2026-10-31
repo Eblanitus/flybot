@@ -254,9 +254,11 @@ module.exports = async () => {
     // v0.2: каждый блок чертежа ставится в клетку ctx.buildingAt — итог дня считает его «построено» (lib/daylog.js)
     const origP = w.bot._placeBlockWithOptions; let bAt = 0, bMiss = 0;
     w.bot._placeBlockWithOptions = w.bot.placeBlock = async (ref, face, o) => { const d = ref.position.plus(face); if (w.ctx.buildingAt === `${d.x},${d.y},${d.z}`) bAt++; else bMiss++; return origP(ref, face, o); };
+    const cutSeen = []; w.ctx.daylog = { onCut: (p, n) => cutSeen.push(n) }; // v0.3: вырубка «.» сообщается итогу дня (lib/daylog.js onCut)
     const t = task();
     const res = await BP.buildBlueprint(w.ctx, t, { name: 'hut_west', x: 0, y: 64, z: 0, rot });
     assert(res.ok, JSON.stringify(res)); assert.deepStrictEqual(res.failed, []);
+    assert(res.cut >= 1 && cutSeen.length === res.cut && cutSeen.includes('stone'), `вырубка воздуха чертежа: result.cut=${res.cut}, daylog.onCut=${cutSeen}`);
     assert(bAt > 0 && bMiss === 0 && w.ctx.buildingAt == null, `блоки чертежа — в клетке buildingAt: ${bAt}/${bMiss}, после: ${w.ctx.buildingAt}`);
     assert.strictEqual(res.matched, 245); assert.strictEqual(res.total, 245);
     assert(res.removed >= 2, 'вырезано/заменено: ' + res.removed);

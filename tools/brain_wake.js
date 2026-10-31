@@ -3,8 +3,9 @@
 // в data/wake.md и выходит 0 (тогда петля запускает мозг на одно решение).
 //   node tools/brain_wake.js         — ждать повода
 //   node tools/brain_wake.js --now   — будить сразу (повод «вручную»)
-// Поводы — ТОЛЬКО: build_done (нужна следующая постройка), day_report (новый день — следующий шаг проекта),
-// owner_msg и chat от хозяина, в brain/notes.md нет строки «Постройка:» (не чаще NO_BUILD_MS), старт (нет курсора).
+// Поводы — ТОЛЬКО: build_done (нужна следующая постройка), owner_msg и chat от хозяина,
+// в brain/notes.md нет строки «Постройка:» (не чаще NO_BUILD_MS), старт (нет курсора).
+// day_report мозг НЕ будит (31.10: ~18 пробуждений за ночь, сторож убивал зависший мозг) — итог дня он читает при следующем пробуждении.
 // Провалы, простой, смерти, goal_report мозг НЕ будят — это дело мухи (её варианты, учитель, инженер).
 // Тело — BODY_URL (http://127.0.0.1:3199), GET /events?since=N раз в POLL_MS; тело недоступно — тихо ждём.
 // Курсор — data/brain_wake.json {cursor, at, seen, lastWakeAt}: id событий сбрасываются при рестарте тела
@@ -37,7 +38,7 @@ function reasonOf(e) {
     const at = Array.isArray(e.at) ? e.at.join(' ') : '';
     return { key: `build_done ${e.name} ${at}`, why: `build_done: ${e.name} у ${at} готова — нужна следующая постройка` };
   }
-  if (e.type === 'day_report') return { key: `day_report ${e.day}`, why: `новый день (итог дня ${e.day}) — следующий шаг проекта` };
+  // day_report — не повод (см. шапку): иначе мозг просыпается каждый игровой день
   if (isOwner(e)) {
     const text = short(e.text, 200);
     if (text.length < 2) return null;

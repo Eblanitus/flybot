@@ -9,7 +9,7 @@ cd /d "%~dp0"
 if not exist data mkdir data
 start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0brain_guard.ps1" -Log "%~dp0data\night.log"
 :loop
-curl.exe -s -m 3 http://127.0.0.1:3199/health >nul 2>&1 || start "flybot-body" /min cmd /c "cd /d %~dp0 && node bot.js localhost 25565 FlyBot_01 3199 >> data\flybot.out.log 2>&1"
+curl.exe -s -m 3 http://127.0.0.1:3199/health >nul 2>&1 || start "flybot-body" /min cmd /c "cd /d %~dp0 && node tools\rotate_log.js && node bot.js localhost 25565 FlyBot_01 3199 >> data\flybot.out.log 2>&1"
 curl.exe -s -m 3 http://127.0.0.1:3200/health >nul 2>&1 || start "flybot-brain-runner" /min cmd /c "cd /d %~dp0brain && node runner.js >> ..\data\runner.out.log 2>&1"
 timeout /t 5 /nobreak >nul
 set OPENCODE_DISABLE_CLAUDE_CODE=1& rem opencode must not read ~/.claude (Claude Code rules). Audit panel: brain off - no opencode, loop checks again in 30 s.     
