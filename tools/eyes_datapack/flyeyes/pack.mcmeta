@@ -1,0 +1,7 @@
+{
+  "pack": {
+    "description": "flyeyes: держит наблюдателя FlyEyes на мухе FlyBot_01",
+    "min_format": [101, 1],
+    "max_format": 101
+  }
+}

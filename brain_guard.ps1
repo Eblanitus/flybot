@@ -5,6 +5,8 @@
 #    она пишет brain\learned\<имя>.js, проверяет через :3200/check и отвечает в <имя>.done.md.
 # 3) Учитель: lib\teacher_triggers.js находит случаи (простой стройки — главный, смерть, почти-смерть, провал дважды, застряла, хозяин) и
 #    склеивает всплески; сторож запускает учителя на один случай за раз, отчёт — data\teacher\<id>-<тип>.md.
+#    Бухгалтерия (lib\teacher_ledger.js, внутри scan): случаи копятся на счетах, заявка — когда счёт набрал порог по загрузке инженера;
+#    заявку, которую муха переросла, снимает маркер <имя>.stale.md — PickReq её не берёт.
 # 4) Правка ядра: запрос из brain\core_requests.md, который хозяин разрешил в аудите, берёт инженер (lib\core_requests.js:
 #    снимок файлов и тесты «до» → инженер правит со своим конфигом brain\opencode.core.json → тесты «после»; стало хуже — откат
 #    его правки и запись почему в data\core_tasks\<id>.result.md). Разрешённые запросы идут раньше заявок на навыки, инженер один.
@@ -14,6 +16,9 @@
 #    сделанные правки ядра (bot.js, lib\, behavior\); не встало — откатывает правку. Пока лежит data\body_restart.lock, правку ядра не берём.
 # Модели учителя и инженера берутся из data\models.json (вкладка «Модели» в аудите) ПРИ КАЖДОМ запуске — через models_config.js.
 # Параметров вроде -EngModel/-TeachModel больше нет: источник один.
+# 7) Пульт (вкладка «Пульт» в аудите, data\switches.json через lib\switches.js) — читается каждые 30 с: выключенный учитель или
+#    инженер не запускается совсем (ни opencode, ни запасная модель); помощник — только когда включены оба. Идущую сессию не убиваем:
+#    доделывает. Сканирование случаев и бухгалтерия (Teach scan) идут и при выключенном учителе — это код; случаи ждут в очереди.
 param(
   [string]$Log,
   [int]$SilenceMin = 10,
@@ -21,6 +26,7 @@ param(
   [int]$TeachTimeoutMin = 10,   # то же для учителя
   [int]$LoopPid = 0   # перезапуск сторожа вручную: pid окна night.cmd (иначе петля — родительский процесс)
 )
+$env:OPENCODE_DISABLE_CLAUDE_CODE = '1'   # opencode не читает ~/.claude (там правила Claude Code: учитель и инженер подписывались «Модель: coder-haiku»)
 $fb   = 'C:\Users\user\flybot'
 $req  = "$fb\brain\skill_requests"
 $glog = "$fb\data\guard.log"
@@ -39,6 +45,19 @@ function RoleModel([string]$role) {
   elseif (-not $ModelLast[$role]) { GLog "модель $role`: models_config.js не ответил, беру запасную"; $ModelLast[$role] = $ModelFallback[$role] }
   else { GLog "модель $role`: models_config.js не ответил, оставляю прежнюю ($($ModelLast[$role]))" }
   $ModelLast[$role]
+}
+
+# Пульт: включена ли часть ('teacher' | 'engineer'). Выключено — только явное «off»; node не ответил — включено, как до пульта.
+function SwitchOn([string]$part) {
+  $v = $null
+  try { $v = (& node "$fb\lib\switches.js" get $part 2>$null | Select-Object -First 1) } catch {}
+  -not ($v -and ([string]$v).Trim() -eq 'off')
+}
+$SwPrev = @{}
+function SwitchNote([string]$part, [string]$name, [bool]$on) {   # в guard.log — только смена положения
+  if ($SwPrev.ContainsKey($part) -and $SwPrev[$part] -eq $on) { return }
+  if ($SwPrev.ContainsKey($part) -or -not $on) { GLog "пульт: $name $(if ($on) { 'включён — беру работу' } else { 'выключен — новую работу не беру, идущая доделывается' })" }
+  $SwPrev[$part] = $on
 }
 
 $loopPid = if ($LoopPid) { $LoopPid } else { (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId }
@@ -100,11 +119,13 @@ $engWait = $tchWait = $hlpWait = Get-Date; $engHits = $tchHits = $hlpHits = 0   
 
 # Заявка на навык, которую можно взять (ставит замок <имя>.working). Помощнику — без behavior_* и без «переделать».
 function PickReq([bool]$helper) {
-  foreach ($f in Get-ChildItem "$req\*.md" -ErrorAction SilentlyContinue | ? { $_.Name -notmatch '\.done\.md$' } | Sort-Object LastWriteTime) {
+  foreach ($f in Get-ChildItem "$req\*.md" -ErrorAction SilentlyContinue | ? { $_.Name -notmatch '\.(done|stale)\.md$' } | Sort-Object LastWriteTime) {
     $name = $f.BaseName
     if ($name -notmatch '^[a-z0-9_]+$') { continue }
     $done = "$req\$name.done.md"; $lock = "$req\$name.working"
     if ((Test-Path $done) -and (Get-Item $done).LastWriteTime -ge $f.LastWriteTime) { continue }   # уже отвечено, заявку не меняли
+    $stale = "$req\$name.stale.md"   # бухгалтерия учителя сняла заявку: муха справилась сама (то же правило — lib\teacher_ledger.js skillReqState)
+    if ((Test-Path $stale) -and (Get-Item $stale).LastWriteTime -ge $f.LastWriteTime) { continue }
     if ((Test-Path $lock) -and ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes -lt ($EngTimeoutMin + 5)) { continue }  # берёт другой
     if ($helper) {
       if ($name -match '^behavior_') { continue }   # поведение одно на всю муху — только инженер
@@ -171,6 +192,10 @@ while ($true) {
     $bodyRsAt = (Get-Date).AddMinutes(1)
   }
 
+  # --- 7. пульт: выключенная роль в opencode не ходит ---
+  $engOn = SwitchOn 'engineer'; $tchOn = SwitchOn 'teacher'
+  SwitchNote 'engineer' 'инженер' $engOn; SwitchNote 'teacher' 'учитель' $tchOn
+
   # --- 1. зависание мозга ---
   $size = LogSize
   if ($size -ne $lastSize) { $lastSize = $size; $lastGrow = Get-Date }
@@ -209,7 +234,7 @@ while ($true) {
   }
   $bodyLock = Get-Item "$fb\data\body_restart.lock" -ErrorAction SilentlyContinue
   $bodyBusy = $bodyLock -and ((Get-Date) - $bodyLock.LastWriteTime).TotalMinutes -lt 15
-  if (-not $eng -and -not $bodyBusy -and (Get-Date) -ge $engWait) {
+  if ($engOn -and -not $eng -and -not $bodyBusy -and (Get-Date) -ge $engWait) {
     $c = Core @('take')   # сначала разрешённые хозяином правки ядра (снимок и тесты «до» — около минуты)
     if ($c -and $c.id) {
       $engModel = RoleModel 'engineer'
@@ -222,7 +247,7 @@ while ($true) {
       GLog "ядро: инженер взял разрешённый запрос $($c.id) (pid $($p.Id), модель $engModel)"
     }
   }
-  if (-not $eng -and (Get-Date) -ge $engWait) {
+  if ($engOn -and -not $eng -and (Get-Date) -ge $engWait) {
     $name = PickReq $false
     if ($name) {
       $engModel = RoleModel 'engineer'   # заново для каждой заявки: смена в аудите подхватывается со следующей
@@ -233,7 +258,8 @@ while ($true) {
   }
 
   # --- 3. учитель ---
-  $null = Teach @('scan')
+  $s = Teach @('scan')   # заодно бухгалтерия учителя (lib\teacher_ledger.js): оплата, снятие, ПОВТОР, случаи-«счета»
+  if ($s -and $s.ledger) { foreach ($m in @($s.ledger)) { GLog "бухгалтерия: $m" } }
   if ($tch -and -not $tch.proc.HasExited -and (LimitStuck $tch.model $tch.started)) {
     taskkill /PID $tch.proc.Id /T /F | Out-Null
     $null = Teach @('finish', $tch.id, 'limit')   # случай обратно в очередь, без штрафа
@@ -260,16 +286,17 @@ while ($true) {
     $hlp = $null
   }
   if ($hlp -and (SkillEnd $hlp 'помощник')) { $hlp = $null; $hlpHits = 0 }
-  if (-not $hlp -and -not $tch -and (Get-Date) -ge $hlpWait -and (Get-Date) -ge $tchWait -and (PendingCases) -eq 0) {
+  if ($tchOn -and $engOn -and -not $hlp -and -not $tch -and (Get-Date) -ge $hlpWait -and (Get-Date) -ge $tchWait -and (PendingCases) -eq 0 -and -not (Teach @('budget')).over) {   # бюджет запусков модели учителя (6/час, 40/сутки): помощник считается в нём же
     $name = PickReq $true
     if ($name) {
       $hlpModel = RoleModel 'teacher'
       $hlp = StartSkill $name $hlpModel "$fb\brain\opencode.helper.json"; $hlp.helper = $true
+      $null = Teach @('note', 'helper')   # запуск помощника — в тот же бюджет
       GLog "помощник (модель учителя): взял заявку $name (pid $($hlp.proc.Id), модель $hlpModel)"
     }
   }
 
-  if (-not $tch -and -not $hlp -and (Get-Date) -ge $tchWait) {   # помощник занят — учитель ждёт, пока тот доделает заявку
+  if ($tchOn -and -not $tch -and -not $hlp -and (Get-Date) -ge $tchWait) {   # помощник занят — учитель ждёт, пока тот доделает заявку
     $c = Teach @('take')
     if ($c -and $c.id) {
       $teachModel = RoleModel 'teacher'   # заново для каждого случая: смена в аудите подхватывается со следующего

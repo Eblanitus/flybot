@@ -15,10 +15,13 @@
 //   — mob_hurt = удар: признак «в укрытии» не действует — зомби в 0.3 м из «укрытия» (голова открыта) бил 8 раз подряд и убил за 9 с;
 //   — при ударе и враге ближе hitNoShelterDist (2 м) копку-укрытие не начинаем и не ждём (раньше до правила не доходило: hold срабатывал первым);
 //   — в журнале вместо «в укрытии, стою» — причина: «в укрытии, но по муху бьют — укрытия нет, ухожу». L018 и L043 держатся.
+// Правка «утопление» (смерть 20261031-063950: стояла под льдом/потолком 45 с, голова в воде, goto не прерывался):
+//   — голова под водой дольше drownUnderMs и за drownStillMs высота не выросла — тону: бросаю задачу и pathfinder,
+//     плыву к ближайшему воздуху или ломаю то, что над головой; не помогло — блок под ноги; автопилот то же дело на минуты не берёт.
 'use strict';
 const L = require('./core');
-const { entName, isAutoTarget, isHostile } = L('util');
-const { equipBestArmor } = L('actions');
+const { entName, isAutoTarget, isHostile, Vec3 } = L('util');
+const { equipBestArmor, equipToolFor } = L('actions');
 const { timeInfo } = L('perception');
 const AG = L('aggressors');
 const F = L('felt');
@@ -96,10 +99,11 @@ function clearRefusal(ctx, action) {
 // Тактику не зашиваем: варианты упорядочены старым правилом (это лишь prior), выбирает опыт (experience.js) — что выживало в такой обстановке
 function defensePrior(ctx, att, underHit) {
   const bot = ctx.bot;
+  const lowHp = bot.health < T.apLowHp;
   // behavior_reflexes_fight_nowpn: голыми руками не воюем — без оружия бой не предлагаем вовсе
-  const canFight = !!att && F.distTo(bot, att) <= T.defenseFightDist && isAutoTarget(att) && hasWeapon(bot);
+  const canFight = !lowHp && !!att && F.distTo(bot, att) <= T.defenseFightDist && isAutoTarget(att) && hasWeapon(bot);
   const o = outlookOf(ctx, att);
-  const losing = o ? !o.win : bot.health < T.defenseLowHp; // А: бой проигран по оценке (без оценки — порог HP)
+  const losing = lowHp || (o ? !o.win : bot.health < T.defenseLowHp); // А: бой проигран по оценке (без оценки — порог HP)
   const opts = losing ? ['escape', 'shelter'] : (!hasWeapon(bot) && (hostilesNear(bot, T.crowdR) >= T.crowdN || timeInfo(bot).isNight)) ? ['shelter', 'escape'] : canFight ? ['fight', 'shelter', 'escape'] : ['escape', 'shelter'];
   if (canFight && !opts.includes('fight')) opts.push('fight');
   // L043: враг вплотную и HP низкий — копка-укрытие (3-4 с) не успевает: в вариантах её нет. Остаётся бой (если оружие есть) или отход.
@@ -139,11 +143,12 @@ function mobHurtPlan(ctx, att) {
   // L052: mob_hurt — по муху бьют прямо сейчас, признак «в укрытии» не действует, «стоять» нельзя
   // (зомби в 0.3 м при «укрытии» бил 8 раз подряд — 20→0 за 9 с). L043 («в укрытии стоим») держится,
   // пока по муху не бьют: здесь такое решение от удара больше не выходит, «стою» остаётся у защиты от игрока.
+  const lowHp = bot.health < T.apLowHp;
   const plan = { shelterVoid: inShelter(ctx) }; // признак укрытия был, удар его отменил — причина пойдёт в журнал
   const opts = defensePrior(ctx, att, true);
   const o = outlookOf(ctx, att);
-  if (cur && (o ? o.win : bot.health >= T.swatMinHp) && att && opts[0] === 'fight') { plan.swat = att; return plan; } // занят делом, бой выигран (А; без оценки — HP в норме) — отмахнуться
-  const ch = E.choose(ctx, opts);
+  if (cur && (o ? o.win : bot.health >= T.swatMinHp) && !lowHp && att && opts[0] === 'fight') { plan.swat = att; return plan; } // занят делом, бой выигран (А; без оценки — HP в норме) — отмахнуться
+  const ch = shelterTooSlow(ctx, att) ? { action: 'escape', why: `мало HP и враг вплотную — копка-укрытие не успевает, экстренный побег` } : E.choose(ctx, opts);
   const params = ch.action === 'fight' ? { targetId: att.id, radius: T.fightRadius } : {};
   const note = shelterTooSlow(ctx, att) ? '; копка-укрытие не успевает' : '';
   // А: при критически низком HP (< 10) — escape использует экстренные варианты в зависимости от типа врага
@@ -163,6 +168,15 @@ function mobHurtPlan(ctx, att) {
     } else if (isNight) {
       // Ночь, враг ближнего боя — столб
       params.style = 'pillar'; // предпочитаем столб: мобы ближнего боя не достают
+    } else {
+      // День / подземелье, враг ближнего боя (зомби и др.) при низком HP — агрессивный разрыв дистанции и отход
+      if (dist != null && dist <= 6 && hasBlocks && !hasWeapon) {
+        params.style = 'wall_escape';
+      } else if (dist != null && dist <= 8) {
+        params.style = 'zigzag';
+      } else {
+        params.style = 'sprint_away';
+      }
     }
   }
   plan.skill = ch.action;
@@ -224,13 +238,30 @@ function mobNearPlan(ctx, nearest, dist) {
   const armed = hasWeapon(bot);
   const canFight = armed && F.distTo(bot, nearest) <= T.defenseFightDist && isAutoTarget(nearest);
   const d = Number(dist).toFixed(1);
-  if (isCreeper || losing || bot.health <= T.swatMinHp)
-    return { skill: 'escape', params: {}, why: `моб ${nearest.name} ${d} м — уклонение от ${isCreeper ? 'взрыва' : 'урона'}` };
+  if (isCreeper || losing || bot.health <= T.swatMinHp) {
+    const params = {};
+    if (!isCreeper && bot.health < T.apLowHp) {
+      const isRanged = F.RANGED.has(nearest.name);
+      const hasBlocks = bot.inventory.items().filter(i => ['dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'stone', 'diorite', 'andesite', 'granite', 'tuff', 'coarse_dirt', 'deepslate', 'calcite', 'sandstone', 'blackstone'].includes(i.name)).reduce((a, i) => a + i.count, 0) >= 3;
+      const hasWeapon = armed;
+      if (isRanged) {
+        params.style = dist <= 5 && hasBlocks && !hasWeapon ? 'wall_escape' : 'cover_escape';
+      } else {
+        params.style = dist <= 6 && hasBlocks && !hasWeapon ? 'wall_escape' : (dist <= 8 ? 'zigzag' : 'sprint_away');
+      }
+    }
+    return { skill: 'escape', params, why: `моб ${nearest.name} ${d} м — уклонение от ${isCreeper ? 'взрыва' : 'урона'}` };
+  }
   if (canFight) return { skill: 'fight', params: { targetId: nearest.id, radius: T.fightRadius }, why: `моб ${nearest.name} ${d} м — бой` };
   if (!armed) {
     // вплотную копка-укрытие не успевает — отход; иначе укрытие
     const close = dist < T.hitNoShelterDist || bannedActions(ctx).shelter || (ctx.shelterFailT && Date.now() - ctx.shelterFailT < T.shelterFailMs);
-    return close ? { skill: 'escape', params: {}, why: `моб ${nearest.name} ${d} м — нет оружия, отхожу` }
+    const params = {};
+    if (close && bot.health < T.apLowHp) {
+      const hasBlocks = bot.inventory.items().filter(i => ['dirt', 'cobblestone', 'cobbled_deepslate', 'netherrack', 'stone', 'diorite', 'andesite', 'granite', 'tuff', 'coarse_dirt', 'deepslate', 'calcite', 'sandstone', 'blackstone'].includes(i.name)).reduce((a, i) => a + i.count, 0) >= 3;
+      params.style = dist <= 6 && hasBlocks ? 'wall_escape' : 'zigzag';
+    }
+    return close ? { skill: 'escape', params, why: `моб ${nearest.name} ${d} м — нет оружия, отхожу` }
       : { skill: 'shelter', params: {}, why: `моб ${nearest.name} ${d} м — нет оружия, укрываюсь` };
   }
   return { skill: 'shelter', params: {}, why: `моб ${nearest.name} ${d} м — укрытие` };
@@ -255,6 +286,23 @@ function rangedLowHpPlan(ctx, hostiles) {
 const FOOD_BLACKLIST = new Set(['poisonous_potato', 'pufferfish', 'spider_eye', 'chicken', 'suspicious_stew', 'chorus_fruit',
   'enchanted_golden_apple', 'golden_apple', 'rotten_flesh']);
 
+// v0.3: цена шага pathfinder (exclusionAreasStep — его зовут для клеток ног и головы): сталагмит в клетке или под ней,
+// сталактит над ней (до 2 блоков) — дорого, но не 100 (100 = «нельзя»): обход есть — обходит, нет — идёт (урон 4→2, смерть от сталактита)
+const DRIP = 'pointed_dripstone';
+function dripstoneCost(block, isDripAt) {
+  if (!block || !block.position) return 0;
+  if (block.name === DRIP) return T.dripstoneCost;
+  const p = block.position;
+  for (const dy of [-1, 1, 2]) { try { if (isDripAt(p.offset(0, dy, 0))) return T.dripstoneCost; } catch (e) {} }
+  return 0;
+}
+
+// когда есть: голодна (≤ eatFood), ранена (HP ≤ eatHurtHp), или HP не полный, а сытость ниже порога регенерации —
+// v0.3 еда: доедаем до eatRegenFood (18), иначе HP 2 при сытости 16 стоит часами (регенерация в Java только с 18)
+function needsEat(food, hp) {
+  return food <= T.eatFood || (food < 20 && hp <= T.eatHurtHp) || (food < T.eatRegenFood && hp < T.apFullHp);
+}
+
 function pickFood(bot, { desperate = false } = {}) {
   const foods = bot.registry.foodsByName;
   const cands = bot.inventory.items().filter(i => {
@@ -265,6 +313,77 @@ function pickFood(bot, { desperate = false } = {}) {
   });
   cands.sort((a, b) => (foods[b.name].effectiveQuality || 0) - (foods[a.name].effectiveQuality || 0));
   return cands[0] || null;
+}
+
+// ---- Утопление: чистые решения (без бота — проверяются в behavior/test.js) ----
+const WET_NAMES = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass']);
+const isWetB = b => !!b && WET_NAMES.has(b.name);
+const isAirB = b => !!b && (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air');
+const isSolidB = b => !!b && b.boundingBox === 'block';
+const PILLAR_BLOCKS = ['dirt', 'cobblestone', 'cobbled_deepslate', 'stone', 'netherrack', 'coarse_dirt', 'deepslate', 'andesite', 'diorite', 'granite', 'tuff'];
+
+// Тону ли: голова под водой дольше drownUnderMs и за последние drownStillMs высота не выросла на drownRiseMin.
+// hist — [{t, y}] по возрастанию времени (высота ног). Отсчёта старше окна нет — оценки нет (false): ждём, пока наберётся история.
+function isDrowning(underMs, hist, now) {
+  if (!(underMs >= T.drownUnderMs) || !hist || !hist.length) return false;
+  const yNow = hist[hist.length - 1].y;
+  let y0 = null;
+  for (const h of hist) { if (h.t <= now - T.drownStillMs) y0 = h.y; else break; } // последний отсчёт не новее окна
+  return y0 !== null && yNow - y0 < T.drownRiseMin;
+}
+
+// Что над головой: первый не-водный блок в трёх клетках над глазами. kind: 'air' (воздух сверху — всплыть можно),
+// 'solid' (лёд/камень/что угодно твёрдое — ломать), 'other' (лава и пр. — не трогаем), 'water' (до верха вода или не загружено).
+function blockOverhead(getBlock, pos, n = 3) {
+  const ex = Math.floor(pos.x), ez = Math.floor(pos.z), ey = Math.floor(pos.y + 1.5);
+  for (let k = 1; k <= n; k++) {
+    const b = getBlock(ex, ey + k, ez);
+    if (!b || isWetB(b)) continue;
+    if (isAirB(b)) return { kind: 'air', x: ex, y: ey + k, z: ez, name: b.name };
+    if (isSolidB(b)) return { kind: 'solid', x: ex, y: ey + k, z: ez, name: b.name };
+    return { kind: 'other', x: ex, y: ey + k, z: ez, name: b.name };
+  }
+  return { kind: 'water' };
+}
+
+// Ближайшая клетка с воздухом: радиус drownSurfaceR по горизонтали, ±drownSurfaceDy по высоте от глаз; воздух в клетке и над ней
+// (голове есть где дышать), под ней вода или твёрдое, а по прямой от головы до неё нет твёрдых блоков (не за стеной и не за льдом).
+function findAirCell(getBlock, pos, R = T.drownSurfaceR, dy = T.drownSurfaceDy) {
+  const bx = Math.floor(pos.x), bz = Math.floor(pos.z), ey = Math.floor(pos.y + 1.5);
+  const eyeY = pos.y + 1.5;
+  let best = null;
+  for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) {
+    if (Math.hypot(dx, dz) > R) continue;
+    for (let ddy = -dy; ddy <= dy; ddy++) {
+      const x = bx + dx, y = ey + ddy, z = bz + dz;
+      if (!isAirB(getBlock(x, y, z)) || !isAirB(getBlock(x, y + 1, z))) continue;
+      const below = getBlock(x, y - 1, z);
+      if (!isWetB(below) && !isSolidB(below)) continue;
+      const d = Math.hypot(x + 0.5 - pos.x, y + 0.5 - eyeY, z + 0.5 - pos.z);
+      if (best && d >= best.d) continue;
+      let clear = true;
+      const steps = Math.max(1, Math.ceil(d / 0.4));
+      for (let i = 1; i < steps && clear; i++) {
+        const f = i / steps;
+        if (isSolidB(getBlock(Math.floor(pos.x + (x + 0.5 - pos.x) * f), Math.floor(eyeY + (y + 0.5 - eyeY) * f), Math.floor(pos.z + (z + 0.5 - pos.z) * f)))) clear = false;
+      }
+      if (clear) best = { x, y, z, d };
+    }
+  }
+  return best;
+}
+
+// Что делать сейчас. st: { skipSwim — к воздуху сбоку пробовали, не вышло; stuck — и вверх не выходит; canPlace — есть чем подставить;
+// noDig — ломать не выходит (бедрок, блок не поддался) }.
+// swim — плыть к воздуху сбоку; up — просто вверх; dig — сломать твёрдое над головой; place — блок под ноги.
+function rescuePlan(getBlock, pos, st = {}) {
+  const over = blockOverhead(getBlock, pos);
+  const surf = st.skipSwim ? null : findAirCell(getBlock, pos);
+  if (over.kind === 'air') return st.stuck && st.canPlace ? { action: 'place', why: 'вверх не поднимаюсь — ставлю блок под ноги' } : { action: 'up', why: 'всплываю вверх (над головой воздух)' };
+  if (surf) return { action: 'swim', target: surf, why: `плыву к воздуху (${surf.x} ${surf.z})` };
+  if (over.kind === 'solid' && !st.noDig) return { action: 'dig', target: over, why: `ломаю ${over.name} над головой (${over.x} ${over.y} ${over.z})` };
+  if (st.stuck && st.canPlace) return { action: 'place', why: 'ничего не помогло — ставлю блок под ноги' };
+  return { action: 'up', why: 'воздуха рядом не видно — пробую вверх' };
 }
 
 // api — от ядра (lib/behavior_host.js): ctx, bot, every, after, on, handle
@@ -291,12 +410,107 @@ function attach(api) {
     else if (!want && swimJump) { bot.setControlState('jump', false); swimJump = false; }
   }, 'плавание');
 
+  // ---- Утопление: голова под водой давно, а вверх не выходит (лёд, потолок, край) — бросить задачу и выбираться ----
+  // Плавание выше держит «прыжок», но не знает, что над головой твёрдое; задача goto при этом стоит и ждёт (смерть 20261031-063950).
+  let rescuing = false, detached = false, drownRetryAt = 0;
+  const drownHist = [];
+  const getB = (x, y, z) => bot.blockAt(new Vec3(x, y, z));
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const r1 = v => Math.round(v * 10) / 10;
+  const headWetNow = () => { const b = bot.blockAt(bot.entity.position.offset(0, 1.5, 0)); return !!b && b.name === 'water'; };
+  const pillarItem = () => bot.inventory.items().find(i => PILLAR_BLOCKS.includes(i.name)) || null;
+
+  async function rescueDrowning(underMs) {
+    rescuing = true;
+    const t0 = Date.now(), tm = ctx.tasks;
+    const cur = tm && tm.current;
+    const taskName = cur ? cur.name + (cur.params && cur.params.label ? ` «${cur.params.label}»` : '')
+      : (tm && tm.legacyBusy ? (tm.legacy && tm.legacy.name) || 'простая команда' : 'нет');
+    const st = { skipSwim: false, stuck: false, noDig: false, canPlace: !!pillarItem() };
+    let plan = rescuePlan(getB, bot.entity.position, st);
+    ctx.events.push('info', { msg: `тону: под водой ${Math.round(underMs / 1000)} с, не всплываю (y ${r1(bot.entity.position.y)}) — бросаю задачу ${taskName}, ${plan.why}`, reflex: true, drown: true, action: plan.action, task: taskName });
+    let paused = '';
+    try {
+      // задача и путь: стоп; автопилот то же дело (например «к животным» через эту воду) минуты не берёт
+      const ap = ctx.autopilot;
+      if (ap && ap.running && ap.until) { ap.until[ap.running.key] = Math.max(ap.until[ap.running.key] || 0, Date.now() + T.drownPauseMs); paused = `${ap.running.key} ${Math.round(T.drownPauseMs / 1000)} с`; }
+      try { if (tm && typeof tm.stop === 'function') await tm.stop('тону — рефлекс прерывает'); } catch (e) {}
+      try { if (bot.pathfinder) { bot.pathfinder.setGoal(null); if (typeof bot.pathfinder.stop === 'function') bot.pathfinder.stop(); } } catch (e) {}
+      ctx.manualControl = true; // «плавание» не мешает: прыжок и ход держим здесь
+      let bestY = bot.entity.position.y, bestT = Date.now(), done = false, dug = 0, digFails = 0;
+      while (!detached && bot.health > 0 && Date.now() - t0 < T.drownRescueMs) {
+        const p = bot.entity.position;
+        if (!headWetNow()) { done = true; break; }
+        if (p.y > bestY + 0.3) { bestY = p.y; bestT = Date.now(); }
+        else if (Date.now() - bestT > T.drownStuckMs) { // выше не поднимаюсь: к воздуху сбоку не вышло — ломать/вверх; и вверх не вышло — блок под ноги
+          if (plan.action === 'swim') st.skipSwim = true; else if (plan.action !== 'dig') st.stuck = true;
+          st.canPlace = !!pillarItem(); bestT = Date.now();
+        }
+        const next = rescuePlan(getB, p, st);
+        if (next.action !== plan.action) ctx.events.push('info', { msg: `тону: ${next.why}`, reflex: true, drown: true, action: next.action });
+        plan = next;
+        if (plan.action === 'swim') {
+          const tg = new Vec3(plan.target.x + 0.5, plan.target.y + 0.5, plan.target.z + 0.5);
+          await bot.lookAt(tg, true).catch(() => {});
+          bot.setControlState('forward', Math.hypot(tg.x - p.x, tg.z - p.z) > 0.4);
+          bot.setControlState('jump', true);
+          await sleep(150);
+        } else if (plan.action === 'dig') {
+          const b = bot.blockAt(new Vec3(plan.target.x, plan.target.y, plan.target.z));
+          bot.setControlState('forward', false); bot.setControlState('jump', true);
+          if (b && isSolidB(b) && b.diggable !== false) {
+            try { await equipToolFor(bot, b); } catch (e) {}
+            await Promise.race([bot.dig(b, true).catch(() => {}), sleep(T.drownDigMaxMs)]);
+            try { bot.stopDigging(); } catch (e) {}
+            const after = bot.blockAt(new Vec3(plan.target.x, plan.target.y, plan.target.z));
+            if (after && isSolidB(after)) { if (++digFails >= 2) st.noDig = true; } else { dug++; digFails = 0; }
+            bestT = Date.now(); // сломали или попытка кончилась — отсчёт «не поднимаюсь» заново
+          } else { st.noDig = true; await sleep(150); } // не ломается (бедрок и т.п.) — остаётся блок под ноги
+        } else if (plan.action === 'place') {
+          bot.setControlState('forward', false); bot.setControlState('jump', true);
+          const it = pillarItem();
+          if (it && bot.entity.onGround) {
+            try {
+              await bot.equip(it, 'hand');
+              const ref = bot.blockAt(p.offset(0, -1, 0).floored());
+              if (ref && isSolidB(ref)) await bot.placeBlock(ref, new Vec3(0, 1, 0));
+            } catch (e) {}
+          }
+          await sleep(250);
+        } else { // up
+          bot.setControlState('forward', false); bot.setControlState('jump', true);
+          await bot.look(bot.entity.yaw, -Math.PI / 2, true).catch(() => {});
+          await sleep(150);
+        }
+      }
+      const sec = Math.round((Date.now() - t0) / 1000), y = r1(bot.entity.position.y);
+      if (done) ctx.events.push('info', { msg: `тону: вынырнула за ${sec} с (y ${y}), воздух есть${dug ? `, сломала блоков: ${dug}` : ''}; задачу ${taskName} бросила${paused ? `, автопилот не берёт ${paused}` : ''}`, reflex: true, drown: true, ok: true });
+      else { drownRetryAt = Date.now() + T.drownRetryMs; ctx.events.push('danger', { kind: 'drown', msg: `тону: за ${sec} с не вынырнула (y ${y}, HP ${Math.round(bot.health)}, последнее: ${plan.why})`, reflex: true, drown: true, ok: false }); }
+    } catch (e) {
+      drownRetryAt = Date.now() + T.drownRetryMs;
+      console.log('[reflex] drown rescue fail', e && e.message);
+    } finally {
+      try { bot.clearControlStates(); } catch (e) {}
+      ctx.manualControl = false; underSince = 0; drownHist.length = 0; rescuing = false;
+    }
+  }
+  every(500, () => {
+    if (rescuing || detached || ctx.manualControl || !bot.entity || bot.health <= 0) return;
+    const now = Date.now();
+    if (!headWetNow()) { drownHist.length = 0; return; }
+    drownHist.push({ t: now, y: bot.entity.position.y });
+    while (drownHist.length > 1 && drownHist[1].t <= now - T.drownStillMs - 3000) drownHist.shift(); // окно + запас
+    if (now < drownRetryAt) return;
+    const underMs = underSince ? now - underSince : 0;
+    if (isDrowning(underMs, drownHist, now)) rescueDrowning(underMs).catch(() => {});
+  }, 'утопление');
+
   // ---- Автоеда ----
   let eating = false;
   let hungerWarned = false;
   every(2000, async () => {
     if (eating || bot.currentWindow) return;
-    const needs = bot.food <= T.eatFood || (bot.food < 20 && bot.health <= T.eatHurtHp);
+    const needs = needsEat(bot.food, bot.health);
     if (!needs) { if (bot.food > T.hungerWarnResetFood) hungerWarned = false; return; }
     if (Date.now() < ctx.combatUntil) return; // не есть в бою
     if (bot.targetDigBlock || (bot.pathfinder.isMining && bot.pathfinder.isMining())) return; // не есть во время копания
@@ -324,6 +538,22 @@ function attach(api) {
       eating = false;
     }
   }, 'автоеда');
+
+  // ---- v0.3: сталагмиты/сталактиты — pathfinder их обходит (ядро Movements создаёт заново при входе — ставим раз в 5 с,
+  // без повторов; функция прежней версии поведения помечена flybotDrip и снимается) ----
+  const dripB = bot.registry && bot.registry.blocksByName && bot.registry.blocksByName[DRIP];
+  const dripStep = dripB ? block => dripstoneCost(block, v => {
+    const id = bot.world.getBlockStateId(v);
+    return id != null && id >= dripB.minStateId && id <= dripB.maxStateId;
+  }) : null;
+  if (dripStep) dripStep.flybotDrip = true;
+  const movesAll = () => [ctx.movements, ctx.sprintMovements, bot.pathfinder && bot.pathfinder.movements].filter(m => m && Array.isArray(m.exclusionAreasStep));
+  const dripOff = () => { for (const m of movesAll()) m.exclusionAreasStep = m.exclusionAreasStep.filter(f => !f.flybotDrip); };
+  if (dripStep) {
+    const dripOn = () => { for (const m of movesAll()) if (!m.exclusionAreasStep.includes(dripStep)) { m.exclusionAreasStep = m.exclusionAreasStep.filter(f => !f.flybotDrip); m.exclusionAreasStep.push(dripStep); } };
+    try { dripOn(); } catch (e) {}
+    api.every(5000, () => { try { dripOn(); } catch (e) {} }, 'сталагмиты: обход');
+  }
 
   // ---- Автоброня ----
   every(4000, async () => {
@@ -471,8 +701,12 @@ function attach(api) {
   });
 
   // при выгрузке версии — отпустить «прыжок», если держали его сами
-  return { detach() { if (swimJump) { try { bot.setControlState('jump', false); } catch (e) {} swimJump = false; } } };
+  return { detach() {
+    detached = true;
+    if (swimJump) { try { bot.setControlState('jump', false); } catch (e) {} swimJump = false; }
+    try { dripOff(); } catch (e) {} // новая версия поведения поставит свою
+  } };
 }
 
-module.exports = { attach, mobHurtPlan, mobNearPlan, rangedLowHpPlan, defensePrior, pickFood, FOOD_BLACKLIST, hasWeapon, hostilesNear,
-  busyInfo, failState, bannedActions, noteRefusal, clearRefusal, startDefense, inShelter, attackerDist, shelterTooSlow, outlookOf };
+module.exports = { attach, mobHurtPlan, mobNearPlan, rangedLowHpPlan, defensePrior, pickFood, needsEat, dripstoneCost, FOOD_BLACKLIST, hasWeapon, hostilesNear,
+  isDrowning, blockOverhead, findAirCell, rescuePlan, busyInfo, failState, bannedActions, noteRefusal, clearRefusal, startDefense, inShelter, attackerDist, shelterTooSlow, outlookOf };

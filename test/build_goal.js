@@ -102,6 +102,35 @@ module.exports = async () => {
   assert.strictEqual(decide({ ...base, ...buildState(ap, now), goal }).key, 'goal', 'постройка готова — дальше прежний выбор');
   console.log('итог постройки: OK');
 
+  // ---- v0.3 стройка шагами: материал кончился по ходу — что есть, ставлю (build_partial), добор шагом ----
+  const S = T.buildStepItems;
+  ap.buildSt = newBuildSt('S');
+  // не хватает только подпорок/части — в сумке есть 30 булыжника: build_partial, а не добор всего списка
+  r = buildAfter(ap, { key: 'build', sig: 'S' }, 'провал', 'не хватает: cobblestone ×50', { missing: { cobblestone: 50 }, have: { cobblestone: 30 } }, now, false);
+  assert.deepStrictEqual(ap.buildSt.need, { cobblestone: 30 + S }, 'шаг: есть + buildStepItems, не 80: ' + r.note);
+  a = decide({ ...base, ...buildState(ap, now), buildDist: 3 });
+  assert(a.key === 'build_partial' && a.name === 'build_partial_v1' && a.params.blueprint === 'hut_west', 'есть материал — ставлю частью: ' + JSON.stringify(a));
+  // поставил часть, осталось 20 — сумка пуста, добор шагом (с нуля)
+  r = buildAfter(ap, { key: 'build_partial', sig: 'S' }, 'ok', null, { ok: true, partial: true, placed: 30, missing: { cobblestone: 20 } }, now, true);
+  assert(/поставил 30/.test(r.note), r.note);
+  assert.deepStrictEqual(ap.buildSt.need, { cobblestone: Math.min(20, S) });
+  a = decide({ ...base, ...buildState(ap, now), buildDist: 3 });
+  assert(a.key === 'build_gather' && a.params.items === 'cobblestone:' + Math.min(20, S), 'сумка пуста — добор шага: ' + JSON.stringify(a));
+  // добор принёс — строю снова; build_partial довёл до конца — готово
+  r = buildAfter(ap, { key: 'build_gather', sig: 'S' }, 'ok', null, { ok: true, collected: { cobblestone: 20 }, have: { cobblestone: 20 } }, now, true);
+  assert(/строю снова/.test(r.note), r.note);
+  r = buildAfter(ap, { key: 'build_partial', sig: 'S' }, 'ok', null, { ok: true, placed: 20, complete: true }, now, true);
+  assert(r.done && buildStatus(ap, now).status === 'готово');
+  // build_partial ничего не поставил — не повторяет пустую стройку: stuck, добор шага; buildGatherMax раз — пауза
+  ap.buildSt = newBuildSt('S');
+  buildAfter(ap, { key: 'build', sig: 'S' }, 'провал', 'не хватает: glass ×4', { missing: { glass: 4 }, have: { glass: 1 } }, now, false);
+  r = buildAfter(ap, { key: 'build_partial', sig: 'S' }, 'провал', 'нечего ставить: нет glass', { missing: { glass: 3 } }, now, false);
+  assert(/нечего ставить/.test(r.note) && buildState(ap, now).build.partialStuck && buildState(ap, now).build.have === null, r.note);
+  assert.strictEqual(decide({ ...base, ...buildState(ap, now), buildDist: 3 }).key, 'build_gather', 'после пустой частичной — добор');
+  for (let i = 1; i < T.buildGatherMax; i++) r = buildAfter(ap, { key: 'build_partial', sig: 'S' }, 'провал', 'нечего ставить', { missing: { glass: 3 } }, now, false);
+  assert(/подряд/.test(r.note) && buildState(ap, now + 1).build === null, 'пустая частичная подряд — пауза: ' + r.note);
+  console.log('стройка шагами: OK');
+
   // ---- живой цикл (start -> finish): нехватка -> добор, готово -> build_done в ленте один раз ----
   const events = [];
   const ctx = { events: { push: (type, data) => events.push({ type, ...data }) }, tasks: { current: null, history: [], queue: [] }, lastProgressAt: 0 };

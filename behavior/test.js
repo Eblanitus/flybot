@@ -36,8 +36,10 @@ module.exports = async function selfTest() {
   assert.strictEqual(a.key, 'lowhp_move'); assert.strictEqual(a.name, 'explore'); // без оружия — побега нет, отходим
   a = decide({ ...base, ...mob9, hasWeapon: false, hp: 5, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt (добыто 0/10)', count: 2 } } });
   assert.strictEqual(a.key, 'lowhp_move', 'земля не идёт — меняем тактику');
-  // еле жива и есть нечего — наружу не ходим: ждём (укрыться нечем)
-  assert.strictEqual(decide({ ...base, hp: 2, food: 0, hasFood: false, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt', count: 2 } } }), null);
+  // v0.3 еда: еле жива, есть нечего, регенерации нет — днём без угрозы ждать бесполезно: за едой (раньше — null, «жду» часами)
+  assert.strictEqual(decide({ ...base, hp: 2, food: 0, hasFood: false, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt', count: 2 } } }).key, 'food_explore');
+  // ...ночью без ближней еды — по-прежнему ждём (укрыться нечем), в поле ночью не идём
+  assert.strictEqual(decide({ ...base, isNight: true, phase: 'ночь', nightIn: 0, hp: 2, food: 0, hasFood: false, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt', count: 2 } } }), null);
   // пауза после провала уважается: заблокированный ключ не берём
   assert.notStrictEqual((decide({ ...base, ...mob9, hp: 5, blocks: 0, blocked: { lowhp_dirt: true } }) || {}).key, 'lowhp_dirt'); // на паузе — другое (побег), не то же самое
   // побег при низком HP (L014): сначала укрытие; из укрытия, ночью, без оружия и на «еле жива» — не бежим
@@ -170,10 +172,10 @@ module.exports = async function selfTest() {
   const planLow = R.mobHurtPlan(fakeCtx(lowBot), zClose);
   assert.ok(!planLow.options.includes('shelter'), 'в плане защиты копки нет');
   assert.ok(/не успевает/.test(planLow.why), 'в журнале — почему копки нет: ' + planLow.why);
-  // оружие есть — бой вместо копки
+  // оружие есть, но при низком HP — приоритетный побег, а не бой
   const armed = fakeBot({ health: 5, entities: { 3: zClose }, inventory: { items: () => [{ name: 'stone_sword' }], slots: [] } });
   const optsArmed = R.defensePrior(fakeCtx(armed), zClose);
-  assert.ok(optsArmed.includes('fight') && !optsArmed.includes('shelter'), 'оружие есть — бой вместо копки');
+  assert.ok(optsArmed.includes('escape') && !optsArmed.includes('fight') && !optsArmed.includes('shelter'), 'оружие есть, но при низком HP — побег вместо боя');
   // враг далеко — укрытие в вариантах остаётся
   const farBot = fakeBot({ health: 5, entities: { 3: zFar } });
   assert.ok(R.defensePrior(fakeCtx(farBot), zFar).includes('shelter'), 'далеко — укрытие в вариантах остаётся');
@@ -381,19 +383,21 @@ module.exports = async function selfTest() {
   GA(apg, { sig: 's60', name: 'collect' }, 'ok', null, t0 + 5 * T.goalRetryMs, false);
   assert.strictEqual(GS(apg, t0 + 50 * T.goalRetryMs).goalDone, true, 'успех без нового блока — до новой строки не повторяем');
   assert.strictEqual(GS({ goal: { ...g60, sig: 'new' }, goalDone: 's60', goalEmpty: 's60' }, t0).goalDone, false, 'новая строка — снова');
-  // ---- behavior_autopilot_build_gather: цель добора — ИТОГ (need), не дельта (missing) ----
+  // ---- v0.3 стройка шагами: цель добора — что есть + шаг (buildStepItems), не «итог 101» ----
   const { lackOf: LO, buildState: BS, buildAfter: BA, newBuildSt: NBS } = require('./autopilot');
   const now2 = 1e9;
-  // build_blueprint вернул missing=37, have=64, need=101 → цель добора 101
+  // build_blueprint вернул missing=37, have=64 → ставлю 64 частью, добор до 64+20
   const bpResult = { missing: { cobblestone: 37 }, have: { cobblestone: 64 }, need: { cobblestone: 101 } };
   const apBuild = { build: { name: 'hut_west', x: 0, y: 64, z: 0, rot: 0, sig: 'S' }, buildSt: NBS('S') };
   let r2 = BA(apBuild, { key: 'build', sig: 'S' }, 'провал', 'не хватает: cobblestone ×37', bpResult, now2, false);
-  assert.ok(r2 && /добираю до/.test(r2.note) && /cobblestone ×101/.test(r2.note), 'цель добора — итог 101: ' + r2.note);
-  assert.deepStrictEqual(apBuild.buildSt.need, { cobblestone: 101 }, 'st.need = итог (need), не дельта');
+  const stepTo = 64 + Math.min(37, T.buildStepItems);
+  assert.ok(r2 && /ставлю частью/.test(r2.note) && r2.note.includes('cobblestone ×' + stepTo), 'добор шагом: ' + r2.note);
+  assert.deepStrictEqual(apBuild.buildSt.need, { cobblestone: stepTo }, 'st.need = есть + шаг');
+  assert.deepStrictEqual(BS(apBuild, now2).build.have, { cobblestone: 64 }, 'сумка запомнена для decide');
   // пустой добор (ok, но collected/crafted пусты) → пауза с причиной, need не сбрасывается
   r2 = BA(apBuild, { key: 'build_gather', sig: 'S' }, 'ok', null, { ok: true, collected: {}, crafted: {}, have: { cobblestone: 64 } }, now2, false);
   assert.ok(/добор ничего не дал/.test(r2.note), 'пустой добор → пауза с причиной: ' + r2.note);
-  assert.deepStrictEqual(apBuild.buildSt.need, { cobblestone: 101 }, 'need не сброшен после пустого dobroра');
+  assert.deepStrictEqual(apBuild.buildSt.need, { cobblestone: stepTo }, 'need не сброшен после пустого добора');
   // добор с реальной прибавкой → need сбрасывается, строим снова (используем время после паузы)
   const afterPause = now2 + T.buildRetryMs + 1;
   r2 = BA(apBuild, { key: 'build_gather', sig: 'S' }, 'ok', null, { ok: true, collected: { cobblestone: 37 }, crafted: {}, have: { cobblestone: 101 } }, afterPause, false);
@@ -431,9 +435,10 @@ module.exports = async function selfTest() {
   assert.ok(emergencyAct !== null, 'zero HP without food after > 2 min: does not hang, triggers emergency action');
   // fullhp_wait (2): HP 10 ниже порога? нет — HP 9, еда 4, еды нет: до потолка ждём, после — выживание (охота/база/поиск еды)
   const hungry = { ...base, hp: 9, food: 4, hasFood: false, sheltered: true };
-  assert.strictEqual(D({ ...hungry, waitSec: 30 }), null, 'голодна, HP 9 — сначала ждём (меньше потолка)');
+  // v0.3 еда: регенерации нет (сытость < 18) — ждать нечего, сразу за едой (днём — в поле), не «жду 120 с»
+  assert.strictEqual((D({ ...hungry, waitSec: 30 }) || {}).key, 'food_explore', 'голодна, HP 9, еды нет — сразу за едой, не ждём');
   nd = D({ ...hungry, waitSec: T.apWaitMaxSec + 1 });
-  assert.ok(nd && /^(hunt|go_base|lowhp_emergency_explore)$/.test(nd.key), 'после потолка — выживание: ' + JSON.stringify(nd));
+  assert.ok(nd && /^(hunt|go_base|lowhp_emergency_explore|food_explore)$/.test(nd.key), 'после потолка — выживание: ' + JSON.stringify(nd));
   assert.strictEqual(D({ ...hungry, animals: 2, waitSec: 0 }).key, 'hunt', 'есть животные — охочусь сразу, не жду');
   // eat_desperate_hp: мало HP, нет регена, съедобное есть — рефлексу даём apEatWaitSec, потом едим сами
   assert.strictEqual(D({ ...base, hp: 3, food: 10, hasFood: true, sheltered: true, waitSec: T.apEatWaitSec + 1 }).key, 'lowhp_eat', 'HP 3, еда есть — ем сам');
@@ -448,10 +453,11 @@ module.exports = async function selfTest() {
   assert.ok(!nd || !/^build/.test(nd.key), 'постройка от мозга при низком HP без еды — не брать: ' + JSON.stringify(nd));
   assert.strictEqual(decide({ ...base, ...mob9, hp: 8, food: 10, hasFood: false, blocks: T.apLowHpBlocks, build: buildPad, buildDist: 3 }).key, 'lowhp_shelter', 'и моб рядом — укрытие');
   // в закрытом укрытии при низком HP без еды — ждём, не выходим на постройку к месту в поле
-  assert.strictEqual(decide({ ...base, hp: 8, food: 10, hasFood: false, sheltered: true, build: buildPad, buildDist: 3 }), null, 'в укрытии при низком HP без еды — ждём, не выходим на постройку');
+  // v0.3 еда: и не ждём (регенерации нет) — выходим за едой, но не на постройку
+  assert.strictEqual((decide({ ...base, hp: 8, food: 10, hasFood: false, sheltered: true, build: buildPad, buildDist: 3 }) || {}).key, 'food_explore', 'в укрытии при низком HP без еды — за едой, не на постройку');
   // сбор (цель мозга) при низком HP без еды — запрет; давление простоя не отменяет запрет
-  assert.strictEqual(decide({ ...base, hp: 9, food: 17, hasFood: false, sheltered: true, goal: goalStone }), null, 'сбор при низком HP без еды — запрет');
-  assert.strictEqual(decide({ ...base, hp: 9, food: 17, hasFood: false, sheltered: true, goal: goalStone, idleBuildMin: 40 }), null, 'давление простоя не перебивает запрет работы при низком HP без еды');
+  assert.strictEqual((decide({ ...base, hp: 9, food: 17, hasFood: false, sheltered: true, goal: goalStone }) || {}).key, 'food_explore', 'сбор при низком HP без еды — запрет (за едой)');
+  assert.strictEqual((decide({ ...base, hp: 9, food: 17, hasFood: false, sheltered: true, goal: goalStone, idleBuildMin: 40 }) || {}).key, 'food_explore', 'давление простоя не перебивает запрет работы при низком HP без еды');
   // ---- враг-игрок nearby / неудачный побег от игрока — работа запрещена ----
   const enemy = { name: 'Eblanitus228', d: 11, why: 'убивал меня 4 р.', aggressor: true };
   // игрок рядом без оружия — бегство, а не работа
@@ -517,6 +523,546 @@ module.exports = async function selfTest() {
   assert.strictEqual(decide({ ...nothing, waitSec: T.apWaitMaxSec + 1 }).key, 'idle_move', 'дольше потолка — меняю место');
   // eat_desperate_hp: ранена — гнилое мясо в ход (рефлекс), автопилот видит его как еду
   assert.strictEqual(R.pickFood({ ...bot2, health: 8 }, { desperate: true }).name, 'rotten_flesh');
+  await foodStage1();
+  await toolStage2();
+  await foodStage2();
+  await nightStage6();
 
   return { ok: true };
 };
+
+// ---- v0.3 ночь у базы (шаг 6): кровать, точка возрождения, факелы на закате ----
+async function nightStage6() {
+  const AP = require('./autopilot');
+  const day = { on: true, idle: true, task: null, running: null, runnerOther: false, hp: 20, food: 20, hasFood: true, hasWeapon: true, hasPickaxe: true,
+    blocks: 20, logs: 8, cobble: 30, phase: 'день', isNight: false, nightIn: 500, sheltered: false, hostilesNear: 0, enemies: [], alone: true,
+    freeBed: false, animals: 0, recoverable: false, blocked: {}, goal: null, goalDone: false, foodUnits: 8 };
+  const base = { x: 0, y: 64, z: 0, r: 16 };
+  const home = { base, baseDist: 5 };
+  const full = { pickaxe: 3, sword: 3, shovel: 3, axe: 3 };                   // инструменты не мешают
+  const wood = { ...full, planks: 8, sticks: 0, logs: 0, cobble: 30, table: true };
+  const night = { isNight: true, phase: 'ночь', nightIn: 0 };
+  const dusk = { phase: 'закат', nightIn: 100 };
+  let a;
+  // ---- крафт кровати ----
+  a = decide({ ...day, tools: wood, wool: 3, woolColor: 'white' });
+  assert.ok(a && a.key === 'bed_craft' && a.name === 'craft' && a.params.item === 'white_bed', 'шерсть 3 + доски — крафт кровати: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...day, tools: wood, wool: 5, woolColor: 'red' }).params.item, 'red_bed', 'цвет кровати — цвет шерсти');
+  assert.strictEqual(decide({ ...day, tools: { ...wood, planks: 0, logs: 1 }, wool: 3, woolColor: 'white' }).key, 'bed_craft', 'брёвна -> доски');
+  assert.notStrictEqual((decide({ ...day, tools: wood, wool: 2, woolColor: 'white' }) || {}).key, 'bed_craft', 'шерсти мало');
+  assert.notStrictEqual((decide({ ...day, tools: wood }) || {}).key, 'bed_craft', 'без шерсти — не крафтим');
+  assert.notStrictEqual((decide({ ...day, tools: { ...wood, planks: 2 }, wool: 3, woolColor: 'white' }) || {}).key, 'bed_craft', 'досок мало (3)');
+  assert.notStrictEqual((decide({ ...day, tools: { ...wood, planks: 5, table: false }, wool: 3, woolColor: 'white' }) || {}).key, 'bed_craft', 'верстака нет: 3 + 4 доски');
+  assert.strictEqual(decide({ ...day, tools: { ...wood, planks: 7, table: false }, wool: 3, woolColor: 'white' }).key, 'bed_craft', 'доски на верстак и кровать');
+  assert.notStrictEqual((decide({ ...day, tools: wood, wool: 3, woolColor: 'white', bedItem: 1 }) || {}).key, 'bed_craft', 'кровать в сумке уже есть');
+  assert.notStrictEqual((decide({ ...day, ...home, tools: wood, wool: 3, woolColor: 'white', bedHome: { x: 3, y: 64, z: 3 } }) || {}).key, 'bed_craft', 'кровать у базы уже стоит (память)');
+  assert.notStrictEqual((decide({ ...day, ...home, tools: wood, wool: 3, woolColor: 'white', freeBed: true }) || {}).key, 'bed_craft', 'кровать у базы уже видна');
+  assert.notStrictEqual((decide({ ...day, tools: wood, wool: 3, woolColor: 'white', blocked: { bed_craft: true } }) || {}).key, 'bed_craft', 'пауза после провала');
+  assert.notStrictEqual((decide({ ...day, tools: wood, wool: 3, woolColor: 'white', enemies: [{ name: 'Bob', d: 12, why: 'x', aggressor: false }] }) || {}).key, 'bed_craft', 'враг-игрок рядом — не до кровати');
+  // шерсти нет, овцы рядом, день — make_bed (сам стрижёт или бьёт овец); овец нет / закат / навык выключен — нет
+  a = decide({ ...day, tools: wood, sheep: 2 });
+  assert.ok(a && a.key === 'bed_wool' && a.kind === 'learned' && a.name === 'make_bed' && a.params.max_sec === T.bedWoolSec, 'овцы рядом, шерсти нет — make_bed: ' + JSON.stringify(a));
+  assert.notStrictEqual((decide({ ...day, tools: wood, sheep: 0 }) || {}).key, 'bed_wool', 'овец рядом нет');
+  assert.notStrictEqual((decide({ ...day, tools: wood, sheep: 2, nightIn: 100 }) || {}).key, 'bed_wool', 'к закату за шерстью не ходим');
+  assert.notStrictEqual((decide({ ...day, tools: { ...wood, planks: 1 }, sheep: 2 }) || {}).key, 'bed_wool', 'досок на кровать нет — овец не бьём');
+  assert.notStrictEqual((decide({ ...day, tools: wood, sheep: 2, skillOff: { make_bed: 'вручную' } }) || {}).key, 'bed_wool', 'навык выключен — не предлагаем');
+  assert.notStrictEqual((decide({ ...day, tools: wood, sheep: 2, bedItem: 1 }) || {}).key, 'bed_wool', 'кровать уже есть');
+
+  // ---- поставить кровать у базы днём ----
+  a = decide({ ...day, ...home, tools: wood, bedItem: 1 });
+  assert.ok(a && a.key === 'bed_home' && a.kind === 'learned' && a.name === 'bring_bed_home' && a.params.x === 0 && a.params.y === 64 && a.params.z === 0 && a.params.place === 1 && a.params.max_sec === T.bedHomeSec,
+    'кровать в сумке, я у базы — ставлю у базы: ' + JSON.stringify(a));
+  assert.notStrictEqual((decide({ ...day, base, baseDist: 60, tools: wood, bedItem: 1 }) || {}).key, 'bed_home', 'далеко от базы — сначала на базу');
+  assert.notStrictEqual((decide({ ...day, tools: wood, bedItem: 1 }) || {}).key, 'bed_home', 'базы нет — не ставим');
+  assert.notStrictEqual((decide({ ...day, ...home, tools: wood }) || {}).key, 'bed_home', 'кровати в сумке нет');
+  assert.notStrictEqual((decide({ ...day, ...home, tools: wood, bedItem: 1, bedHome: { x: 3, y: 64, z: 3 } }) || {}).key, 'bed_home', 'у базы уже стоит своя кровать');
+  assert.notStrictEqual((decide({ ...day, ...home, tools: wood, bedItem: 1, skillOff: { bring_bed_home: 'вручную' } }) || {}).key, 'bed_home', 'навык выключен — не предлагаем (ночью sleep поставит сам)');
+  assert.notStrictEqual((decide({ ...day, ...home, tools: wood, bedItem: 1, blocked: { bed_home: true } }) || {}).key, 'bed_home', 'пауза после провала');
+  assert.notStrictEqual((decide({ ...day, ...home, tools: wood, bedItem: 1, hostilesNear: 1, hostile: { name: 'zombie', d: 9 } }) || {}).key, 'bed_home', 'моб рядом — не ставлю');
+  assert.ok(T.apBedPlace > 50 && T.apBedPlace < 100, 'постановка кровати: выше цели мозга (50), но не выше срочного');
+
+  // ---- ночью у базы: сон раньше ожидания и укрытия ----
+  const nhome = { ...day, ...home, ...night, tools: wood };
+  a = decide({ ...nhome, bedItem: 1 });
+  assert.ok(a && a.key === 'sleep' && a.name === 'sleep' && /сумки/.test(a.why), 'ночью у базы кровать в сумке — сплю (ставит сама): ' + JSON.stringify(a));
+  assert.ok(a.others.every(o => !/^wait_night /.test(o) || +o.split(' ')[1] < a.score), 'сон выше ожидания ночи: ' + JSON.stringify(a));
+  a = decide({ ...nhome, freeBed: true });
+  assert.strictEqual(a.key, 'sleep', 'кровать у базы стоит — сплю');
+  assert.strictEqual(a.why, 'сплю в кровати');
+  a = decide({ ...nhome, freeBed: true, sheltered: false, hasPickaxe: true });
+  assert.ok(a.key === 'sleep' && a.score > 25, 'сон выше укрытия (25)');
+  assert.notStrictEqual((decide({ ...nhome }) || {}).key, 'sleep', 'кровати нет — не сплю');
+  assert.notStrictEqual((decide({ ...nhome, base, baseDist: 80, bedItem: 1 }) || {}).key, 'sleep', 'кровать в сумке, но я далеко от базы — не ставлю её в поле');
+  // угроза рядом — ночная защита, а не сон
+  const mob = { hostilesNear: 1, hostile: { name: 'zombie', d: 5 } };
+  a = decide({ ...nhome, bedItem: 1, ...mob });
+  assert.strictEqual(a.key, 'night_fight', 'зомби рядом — бой, не сон: ' + JSON.stringify(a));
+  a = decide({ ...nhome, bedItem: 1, ...mob, hasWeapon: false });
+  assert.ok(a.key === 'night_shelter' || a.key === 'night_escape', 'без оружия — стены/отход, не сон: ' + JSON.stringify(a));
+  assert.notStrictEqual(decide({ ...nhome, freeBed: true, hitRecent: true, hostile: { name: 'zombie', d: 3 }, hostilesNear: 1 }).key, 'sleep', 'били — не сплю');
+  // моб подошёл, пока она спит (sleep идёт) — прерываем сон, защита (как wait_night)
+  a = decide({ ...nhome, freeBed: true, running: { key: 'sleep', name: 'sleep', kind: 'body' }, task: { name: 'sleep', source: 'autopilot' }, ...mob });
+  assert.ok(a && a.preempt && a.key === 'night_fight', 'моб рядом во сне — просыпаюсь и защищаюсь: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...nhome, freeBed: true, running: { key: 'sleep', name: 'sleep', kind: 'body' }, task: { name: 'sleep', source: 'autopilot' } }), null, 'спит без угрозы — не трогаем');
+
+  // ---- факелы на закате ----
+  const lamp = { ...day, ...home, ...dusk, tools: wood };
+  a = decide({ ...lamp, torches: 6 });
+  assert.ok(a && a.key === 'light_base' && a.kind === 'learned' && a.name === 'light_base' && a.params.x === 0 && a.params.y === 64 && a.params.z === 0
+    && a.params.r === 16 && a.params.step === T.lightStep && a.params.max === 6 && a.params.max_sec === T.lightMaxSec, 'закат у базы, факелы есть — расставляю: ' + JSON.stringify(a));
+  a = decide({ ...lamp, coal: 3, tools: { ...wood, sticks: 4 } });
+  assert.ok(a && a.key === 'light_base' && a.params.max === 4, 'уголь сверх запаса (3-2=1 → 4 факела) — свет из угля: ' + JSON.stringify(a));
+  a = decide({ ...lamp, coal: 20, tools: { ...wood, sticks: 40 } });
+  assert.ok(a && a.key === 'light_base' && a.params.max === T.lightMax, 'много угля — не больше lightMax: ' + JSON.stringify(a));
+  assert.notStrictEqual((decide({ ...lamp, torches: 3, coal: 0 }) || {}).key, 'light_base', 'факелов мало (<4) и угля нет — не зовём');
+  assert.notStrictEqual((decide({ ...lamp }) || {}).key, 'light_base', 'без факелов и угля — не зовём');
+  assert.notStrictEqual((decide({ ...lamp, coal: 2, tools: { ...wood, sticks: 4 } }) || {}).key, 'light_base', 'последний уголь (запас lightCoalKeep) печи — факелы не делаем');
+  assert.notStrictEqual((decide({ ...lamp, coal: 5, tools: { ...wood, planks: 0, sticks: 0 } }) || {}).key, 'light_base', 'уголь есть, а палок/досок нет');
+  assert.strictEqual(decide({ ...lamp, coal: 5, tools: { ...wood, planks: 2, sticks: 0 } }).key, 'light_base', 'палки из досок (2 доски → 4 палки)');
+  assert.notStrictEqual((decide({ ...day, ...home, nightIn: 400, torches: 6, tools: wood }) || {}).key, 'light_base', 'до ночи далеко — рано');
+  assert.notStrictEqual((decide({ ...lamp, base, baseDist: 60, torches: 6 }) || {}).key, 'light_base', 'не у базы — свет не ставим');
+  assert.notStrictEqual((decide({ ...lamp, torches: 6, skillOff: { light_base: 'вручную' } }) || {}).key, 'light_base', 'навык выключен');
+  assert.notStrictEqual((decide({ ...lamp, torches: 6, blocked: { light_base: true } }) || {}).key, 'light_base', 'пауза после провала');
+  assert.notStrictEqual((decide({ ...lamp, torches: 6, ...mob }) || {}).key, 'light_base', 'моб рядом — не до света');
+  // повтор не чаще lightRepeatMin: недавно расставляла — нет; прошло — снова
+  assert.notStrictEqual((decide({ ...lamp, torches: 6, lightSinceMin: T.lightRepeatMin - 1 }) || {}).key, 'light_base', 'недавно расставляла — не повторяю');
+  assert.strictEqual(decide({ ...lamp, torches: 6, lightSinceMin: T.lightRepeatMin + 1 }).key, 'light_base', 'прошло достаточно — снова');
+  // совсем закат (nightIn < nightSoonSec, ещё не ночь): свет ещё можно, пока мобов нет
+  assert.strictEqual(decide({ ...lamp, nightIn: T.nightSoonSec - 10, torches: 6 }).key, 'light_base', 'последние секунды заката — ставлю');
+  // ночью (темно) — не ходим по базе с факелами
+  assert.notStrictEqual((decide({ ...lamp, ...night, torches: 6 }) || {}).key, 'light_base', 'ночью факелы не расставляем');
+  assert.ok(T.apLight > 50 && T.apLight < 100, 'свет: выше цели мозга (50)');
+
+  // ---- живой цикл (start -> finish): память кровати и пауза факелов ----
+  const ctx = { events: { push() {} }, tasks: { current: null, history: [], queue: [] }, lastProgressAt: 0 };
+  const ap = AP.create(ctx);
+  let res = { ok: true };
+  ctx.runSkill = async () => res;
+  const go = async (key, params, r) => { res = r; ap._start({ key, kind: 'body', name: 'x', params, why: 't' }); await ap.running.promise; };
+  await go('bed_home', {}, { ok: true, result: { ok: true, bed: true, placed: true, at: [3, 64, -2] } });
+  assert.deepStrictEqual({ x: ap.bed.x, y: ap.bed.y, z: ap.bed.z }, { x: 3, y: 64, z: -2 }, 'кровать у базы запомнена');
+  ap.bed = null; await go('bed_home', {}, { ok: false, error: 'нет ровного места под кровать у базы' });
+  assert.strictEqual(ap.bed, null, 'провал постановки не запоминаем');
+  await go('light_base', {}, { ok: true, result: { ok: true, placed: 4 } });
+  assert.ok(ap.light && ap.light.t > 0, 'факелы расставляла — запомнила');
+  ap.light = null; await go('light_base', {}, { ok: false, error: 'некуда ставить факелы' });
+  assert.ok(ap.light && ap.light.t > 0, 'провал тоже в счёт — по кругу не зовём');
+}
+
+// ---- v0.3 инструменты (шаг 2): кирка/меч/лопата/топор по материалам, крафт перед делом, выключенные навыки не выбираются ----
+async function toolStage2() {
+  const AP = require('./autopilot');
+  // сумка -> ранги: лучший каждого вида
+  assert.deepStrictEqual(AP.toolTiers([{ name: 'wooden_pickaxe' }, { name: 'stone_pickaxe' }, { name: 'iron_sword' }, { name: 'stick' }]), { pickaxe: 2, sword: 3, shovel: 0, axe: 0 });
+  // какой инструмент нужен блоку / делу
+  assert.strictEqual(AP.toolFor('stone'), 'pickaxe'); assert.strictEqual(AP.toolFor('cobblestone'), 'pickaxe'); assert.strictEqual(AP.toolFor('deepslate_iron_ore'), 'pickaxe');
+  assert.strictEqual(AP.toolFor('dirt'), 'shovel'); assert.strictEqual(AP.toolFor('gravel'), 'shovel'); assert.strictEqual(AP.toolFor('oak_log'), 'axe'); assert.strictEqual(AP.toolFor('log'), 'axe');
+  assert.strictEqual(AP.toolFor('stone_pickaxe'), null, 'сам инструмент — не блок'); assert.strictEqual(AP.toolFor('wheat'), null);
+  assert.deepStrictEqual(AP.toolsForAct({ name: 'collect', params: { block: 'stone' } }), ['pickaxe']);
+  assert.deepStrictEqual(AP.toolsForAct({ name: 'gather_list', params: { items: 'cobblestone:20,dirt:5,oak_log:3' } }), ['pickaxe', 'shovel', 'axe']);
+  assert.deepStrictEqual(AP.toolsForAct({ name: 'gather_list', params: { items: { dirt: 4 } } }), ['shovel']);
+  assert.deepStrictEqual(AP.toolsForAct({ name: 'explore', params: {} }), []);
+  // материал: деревянная кирка = 3 доски + 2 палки (палки из досок) + верстак 4 доски; каменная — 3 булыжника + палки
+  const none = { pickaxe: 0, sword: 0, shovel: 0, axe: 0, planks: 0, sticks: 0, logs: 0, cobble: 0, table: false };
+  assert.strictEqual(AP.toolFeasible({ ...none, logs: 2 }, 'pickaxe', 'wooden'), false, '8 досок < 3+2(палки)+4(верстак) = 9');
+  assert.strictEqual(AP.toolFeasible({ ...none, logs: 3 }, 'pickaxe', 'wooden'), true);
+  assert.strictEqual(AP.toolFeasible({ ...none, logs: 2, table: true }, 'pickaxe', 'wooden'), true, 'верстак рядом — 4 доски не нужны');
+  assert.strictEqual(AP.toolFeasible({ ...none, logs: 2, cobble: 3 }, 'pickaxe', 'stone'), true, 'камень: палки (2 доски) + верстак (4) = 6 <= 8 досок');
+  assert.strictEqual(AP.toolFeasible({ ...none, logs: 1, cobble: 3 }, 'pickaxe', 'stone'), false, '4 доски < 6');
+  assert.deepStrictEqual(AP.toolNext(none), [], 'ничего нет — делать нечего');
+  assert.strictEqual(AP.toolNext({ ...none, logs: 3 })[0].item, 'wooden_pickaxe', 'кирка — первая (каждый инструмент считается отдельно, после крафта счёт заново)');
+  assert.deepStrictEqual(AP.toolNext({ ...none, logs: 1 }), [], '4 доски: на верстак хватит, на инструмент нет');
+  assert.deepStrictEqual(AP.toolNext({ ...none, logs: 6, cobble: 9 }).map(c => c.item), ['stone_pickaxe', 'stone_sword', 'stone_shovel', 'stone_axe'], 'камень есть — каменные');
+  assert.deepStrictEqual(AP.toolNext({ ...none, pickaxe: 1, sword: 1, shovel: 1, axe: 1, logs: 6, cobble: 9 }).map(c => c.item), ['stone_pickaxe', 'stone_sword'], 'деревянные кирку и меч улучшаем, лопату и топор — нет');
+  assert.deepStrictEqual(AP.toolNext({ ...none, pickaxe: 2, sword: 3, shovel: 2, axe: 2, logs: 9, cobble: 9 }), [], 'всё есть');
+  // выключенные навыки у исполнителя
+  const gate = AP.skillGate([{ name: 'night_mine', enabled: false, disabledReason: 'авто: 3 провала подряд' }, { name: 'day_routine', enabled: false, disabledReason: 'вручную' },
+    { name: 'build_hut', enabled: false, disabledReason: 'авто: POST /abort' }, { name: 'go_safe', enabled: true }]);
+  assert.deepStrictEqual(Object.keys(gate.off).sort(), ['day_routine', 'night_mine'], 'выключенный из-за прерываний не в счёт — его вернёт finish()');
+  assert.deepStrictEqual(gate.known, ['night_mine', 'day_routine', 'build_hut', 'go_safe']);
+  assert.strictEqual(AP.skillGate(undefined), null, 'список не пришёл — прежний набор'); assert.strictEqual(AP.skillGate([]).known, null);
+
+  const day = { on: true, idle: true, task: null, running: null, runnerOther: false, hp: 20, food: 20, hasFood: true, hasWeapon: true, hasPickaxe: true,
+    blocks: 20, logs: 8, cobble: 30, phase: 'день', isNight: false, nightIn: 500, sheltered: false, hostilesNear: 0, enemies: [], alone: true,
+    freeBed: false, animals: 0, recoverable: false, blocked: {}, goal: null, goalDone: false, foodUnits: 8 };
+  const full = { pickaxe: 2, sword: 2, shovel: 2, axe: 2, planks: 0, sticks: 0, logs: 0, cobble: 30, table: false };
+  assert.strictEqual(decide({ ...day, tools: full }).key, 'day_routine', 'инструменты все — обычная работа');
+  // нет кирки, дерево есть — крафтим деревянную раньше рутины и сбора дерева
+  let a = decide({ ...day, hasPickaxe: false, hasWeapon: false, cobble: 0, logs: 3, tools: { ...none, logs: 3 } });
+  assert.ok(a.key === 'craft_pick' && a.name === 'craft' && a.params.item === 'wooden_pickaxe', 'нет кирки, дерево есть — крафт: ' + JSON.stringify(a));
+  // нет кирки и дерева нет — крафта нет: рублю дерево (не долблю камень рукой)
+  a = decide({ ...day, hasPickaxe: false, cobble: 0, logs: 0, tools: none });
+  assert.ok(a.key === 'collect_log', 'нет ни кирки, ни дерева — за деревом: ' + JSON.stringify(a));
+  // камень есть + палки: каменная кирка вместо деревянной
+  a = decide({ ...day, hasPickaxe: false, cobble: 5, logs: 2, tools: { ...none, logs: 2, cobble: 5 } });
+  assert.ok(a.key === 'craft_pick' && a.params.item === 'stone_pickaxe', 'булыжник есть — каменная: ' + JSON.stringify(a));
+  // деревянная кирка -> каменная, когда набрался камень (улучшение выше рутины, но ниже меча)
+  a = decide({ ...day, tools: { ...full, pickaxe: 1, sword: 2, shovel: 2, axe: 2, logs: 2 } });
+  assert.ok(a.key === 'craft_pick' && a.params.item === 'stone_pickaxe', 'улучшаю деревянную: ' + JSON.stringify(a));
+  a = decide({ ...day, tools: { ...full, pickaxe: 1, sword: 0, logs: 2 } });
+  assert.ok(a.key === 'craft_sword' && a.params.item === 'stone_sword', 'меча нет — раньше улучшения кирки: ' + JSON.stringify(a));
+  // лопата и топор: только если их нет; материала нет — работа как обычно
+  a = decide({ ...day, tools: { ...full, shovel: 0, planks: 8 } });
+  assert.ok(a.key === 'craft_shovel', 'лопаты нет — делаю: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...day, tools: { ...full, shovel: 0, axe: 0 } }).key, 'day_routine', 'на лопату и топор материала нет — не жду, работаю');
+  // провалившийся крафт на паузе: не зовём снова
+  assert.notStrictEqual(decide({ ...day, tools: { ...full, shovel: 0, planks: 8 }, blocked: { craft_shovel: true } }).key, 'craft_shovel');
+  // еда при низком HP важнее крафта; угроза — тем более
+  a = decide({ ...day, hp: 12, food: 16, hasFood: false, foodUnits: 0, animals: 2, tools: { ...full, sword: 0, planks: 8 } });
+  assert.strictEqual(a.key, 'hunt', 'HP 12 без регенерации — охота раньше крафта: ' + JSON.stringify(a));
+  a = decide({ ...day, hp: 5, hostilesNear: 1, hostile: { name: 'zombie', d: 9 }, tools: { ...full, sword: 0, planks: 8 } });
+  assert.strictEqual(a.key, 'lowhp_shelter', 'мало HP и моб — укрытие, не крафт');
+  assert.ok(!/^craft_/.test((decide({ ...day, enemies: [{ name: 'Bob', d: 5, why: 'бил', aggressor: false }], tools: { ...full, sword: 0, planks: 8 } }) || {}).key), 'враг-игрок рядом — не крафтим');
+
+  // цель мозга: collect камня — без кирки сначала крафт (если материал есть); нет материала — цель не берём, идём за деревом
+  const goalStone = { name: 'collect', kind: 'body', params: { block: 'stone', count: 10 }, sig: 'collect {"block":"stone"}' };
+  const noPick = { ...day, hasPickaxe: false, cobble: 0, logs: 3, goal: goalStone };
+  a = decide({ ...noPick, tools: { ...none, logs: 3 } });
+  assert.ok(a.key === 'craft_pick' && a.params.item === 'wooden_pickaxe', 'цель «камень», кирки нет, дерево есть — сначала кирка: ' + JSON.stringify(a));
+  a = decide({ ...noPick, logs: 0, tools: none });
+  assert.notStrictEqual(a.key, 'goal', 'кирки и дерева нет — камень рукой не долбим: ' + JSON.stringify(a));
+  assert.strictEqual(a.key, 'collect_log');
+  a = decide({ ...noPick, tools: { ...none, logs: 3 }, blocked: { craft_pick: true } });
+  assert.notStrictEqual(a.key, 'goal', 'крафт кирки на паузе — камень рукой не долбим');
+  // цель: земля — лопата; не сделать лопату — цель идёт как была
+  const goalDirt = { name: 'collect', kind: 'body', params: { block: 'dirt', count: 10 }, sig: 'collect {"block":"dirt"}' };
+  a = decide({ ...day, goal: goalDirt, tools: { ...full, shovel: 0, planks: 8 } });
+  assert.ok(a.key === 'craft_shovel' || /перед «goal»/.test(a.why), 'цель «земля» — сначала лопата: ' + JSON.stringify(a));
+  a = decide({ ...day, goal: goalDirt, tools: { ...full, shovel: 0 } });
+  assert.strictEqual(a.key, 'goal', 'лопату не из чего — копаю рукой как раньше');
+  // добор постройки (gather_list) с камнем и землёй: кирка/лопата перед ним
+  const bd = { name: 'hut', x: 0, y: 64, z: 0, rot: 0, sig: 'b', need: { cobblestone: 20, dirt: 6 }, have: null };
+  a = decide({ ...day, hasPickaxe: false, logs: 3, cobble: 0, build: bd, buildDist: 5, tools: { ...none, logs: 3 } });
+  assert.strictEqual(a.key, 'craft_pick', 'добор камня без кирки: сначала кирка');
+  a = decide({ ...day, build: bd, buildDist: 5, tools: { ...full, shovel: 0, planks: 8 } });
+  assert.strictEqual(a.key, 'craft_shovel', 'добор земли без лопаты: сначала лопата (материал есть)');
+  a = decide({ ...day, build: bd, buildDist: 5, tools: full });
+  assert.strictEqual(a.key, 'build_gather', 'инструменты есть — добор как раньше');
+
+  // ночь без угроз: нечего делать — крафт вместо ожидания/укрытия
+  const night = { ...day, isNight: true, phase: 'ночь', nightIn: 0 };
+  assert.strictEqual(decide({ ...night, tools: { ...full, sword: 0, logs: 2 } }).key, 'night_mine', 'ночью туннель (50) важнее');
+  a = decide({ ...night, skillOff: { night_mine: 'авто: 3 провала подряд' }, tools: { ...full, sword: 0, logs: 2 } });
+  assert.ok(a.key === 'craft_sword' && a.params.item === 'stone_sword', 'туннель выключен — ночью делаю меч: ' + JSON.stringify(a));
+  a = decide({ ...night, skillOff: { night_mine: 'авто: 3 провала подряд' }, tools: full });
+  assert.ok(a && a.key && a.key !== 'night_mine', 'ночью что-то делаем (не «навык выключен»): ' + JSON.stringify(a));
+
+  // выключенный learned-навык не выбирается: ни дело дня, ни цель
+  a = decide({ ...day, skillOff: { day_routine: 'авто: 3 провала подряд' } });
+  assert.ok(a.key !== 'day_routine' && a.name !== 'day_routine', 'day_routine выключен — другое дело: ' + JSON.stringify(a));
+  assert.strictEqual(a.key, 'explore');
+  assert.strictEqual(decide({ ...day, skillKnown: ['go_safe', 'climb_up'] }).key, 'explore', 'навыка нет в списке исполнителя («не найден») — не берём');
+  assert.strictEqual(decide({ ...day, skillKnown: ['day_routine', 'go_safe'], skillOff: {} }).key, 'day_routine', 'навык есть и включён — берём');
+  const lg = { name: 'my_skill', kind: 'learned', params: { n: 3 }, sig: 'my_skill {"n":3}' };
+  assert.strictEqual(decide({ ...day, goal: lg }).key, 'goal', 'цель-навык включён — берём');
+  a = decide({ ...day, goal: lg, skillOff: { my_skill: 'вручную' } });
+  assert.ok(a.key !== 'goal', 'цель-навык выключен — не берём: ' + JSON.stringify(a));
+  // выключен go_safe — к базе идём своими ногами (goto), не пытаемся звать выключенный
+  a = decide({ ...day, goSafe: true, skillOff: { go_safe: 'вручную' }, base: { x: 0, y: 64, z: 0, r: 16 }, baseDist: 80, tools: full });
+  assert.ok(!(a && a.kind === 'learned' && a.name === 'go_safe'), 'go_safe выключен — не предлагаем: ' + JSON.stringify(a));
+}
+
+// ---- v0.3 еда, этап 1: доедать до регенерации, низкий HP без еды — сразу за едой, запас, жарка, наверх из пещеры, сталагмиты ----
+async function foodStage1() {
+  const AP = require('./autopilot');
+  // рефлекс еды: HP не полный и сытость < 18 — ест (HP 2 / сытость 16 сидела часами); сытая/здоровая — нет
+  assert.strictEqual(R.needsEat(16, 2), true, 'HP 2, сытость 16 — есть до регенерации');
+  assert.strictEqual(R.needsEat(17, 19), true, 'HP 19, сытость 17 — регенерации нет, есть');
+  assert.strictEqual(R.needsEat(18, 15), false, 'сытость 18, HP 15 — регенерация идёт, рефлекс не ест');
+  assert.strictEqual(R.needsEat(16, 20), false, 'HP полный — регенерация не нужна');
+  assert.strictEqual(R.needsEat(T.eatFood, 20), true, 'голодна — ест');
+  const day = { on: true, idle: true, task: null, running: null, runnerOther: false, hp: 20, food: 20, hasFood: true, hasWeapon: true, hasPickaxe: true,
+    blocks: 20, logs: 8, cobble: 30, phase: 'день', isNight: false, nightIn: 500, sheltered: false, hostilesNear: 0, enemies: [], alone: true,
+    freeBed: false, animals: 0, recoverable: false, blocked: {}, goal: null, goalDone: false, foodUnits: 8 };
+  const night = { isNight: true, phase: 'ночь', nightIn: 0 };
+  // живой случай 30–31.10: HP 2, сытость 16, еды нет, мобов нет — не «жду 120 с», а сразу за едой
+  const starve = { ...day, hp: 2, food: 16, hasFood: false, foodUnits: 0 };
+  let a = decide(starve);
+  assert.ok(a && a.key === 'food_explore' && /ищу животных/.test(a.why), 'нет животных и мест — ищу в поле: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...starve, animals: 2 }).key, 'hunt', 'животные рядом — охота');
+  assert.strictEqual(decide({ ...starve, underground: true, surfaceY: 67 }).name, 'climb_up', 'под землёй — сначала наверх, не в пещеру глубже');
+  assert.strictEqual(decide({ ...starve, underground: true, surfaceY: 67 }).params.y, 67);
+  assert.strictEqual(decide({ ...starve, underground: true, crashed: { climb_up: {} } }).name, 'climb_stairs', 'climb_up упал — climb_stairs');
+  assert.strictEqual(decide({ ...starve, underground: true, failInfo: { surface: { reason: 'нет блоков', count: 2 } } }).key, 'surface_stairs', 'climb_up не вышел дважды — другой способ');
+  const spot = { x: 40, y: 70, z: 0, d: 40, ago: 3, n: 2 };
+  a = decide({ ...starve, animalSpot: spot });
+  assert.ok(a.key === 'food_spot' && a.name === 'goto' && a.params.x === 40, 'животных нет — иду туда, где видела: ' + JSON.stringify(a));
+  // база далеко — на базу раньше разведки
+  assert.strictEqual(decide({ ...starve, base: { x: 0, y: 64, z: 0, r: 16 }, baseDist: 60 }).key, 'go_base');
+  // ночь, мобов нет: только ближнее — охота рядом, подъём, место с животными в foodSpotNightDist; иначе ждём (в поле ночью не идём)
+  assert.strictEqual(decide({ ...starve, ...night, animals: 1 }).key, 'hunt', 'ночью животные рядом — охота');
+  assert.strictEqual(decide({ ...starve, ...night, underground: true }).name, 'climb_up', 'ночью из пещеры наверх');
+  assert.strictEqual(decide({ ...starve, ...night, animalSpot: { ...spot, d: 20 } }).key, 'food_spot', 'ночью к месту с животными рядом');
+  assert.notStrictEqual((decide({ ...starve, ...night, animalSpot: spot }) || {}).key, 'food_spot', 'ночью далеко за едой не иду');
+  // ночь и моб рядом — сначала безопасность (как раньше), не поход за едой
+  a = decide({ ...starve, ...night, hostilesNear: 1, hostile: { name: 'skeleton', d: 8 } });
+  assert.ok(!a || !/^(food_|hunt)/.test(a.key), 'ночью с мобом — безопасность: ' + JSON.stringify(a));
+  // зомби рядом, оружие есть, бой по оценке выигран — гнилая плоть тоже еда; бой проигран — не лезем
+  const zomb = { ...starve, hp: 6, hostilesNear: 1, hostile: { name: 'zombie', d: 5 } };
+  a = decide({ ...zomb, outlook: { win: true, passiveTtdSec: 3, hitsToDie: 2 } });
+  assert.ok(a.key === 'food_zombie' && a.name === 'fight' && a.params.flee_hp < 6, 'зомби по силам — бью ради плоти: ' + JSON.stringify(a));
+  assert.notStrictEqual((decide({ ...zomb, outlook: { win: false, passiveTtdSec: 3, hitsToDie: 2 } }) || {}).key, 'food_zombie', 'бой проигран — не за плотью');
+  assert.notStrictEqual((decide({ ...zomb, hasWeapon: false, outlook: { win: true, passiveTtdSec: 3, hitsToDie: 2 } }) || {}).key, 'food_zombie', 'без оружия — нет');
+  // ловушка «HP 10 — здорова»: сытость < 18, еды нет — за едой раньше дневной работы
+  assert.strictEqual(decide({ ...day, hp: 12, food: 16, hasFood: false, foodUnits: 0, animals: 2 }).key, 'hunt', 'HP 12 без регенерации — охота раньше работы');
+  assert.strictEqual(decide({ ...day, hp: 12, food: 18, hasFood: false, foodUnits: 0, animals: 2 }).key, 'hunt_stock', 'регенерация идёт — охота впрок');
+  // запас: сытая, еды мало — охота впрок; еды хватает — обычная работа; к закату запас важнее
+  assert.strictEqual(decide({ ...day, foodUnits: 1, animals: 1 }).key, 'hunt_stock', 'еды мало — охочусь впрок');
+  assert.strictEqual(decide({ ...day, foodUnits: 8, animals: 1 }).key, 'day_routine', 'еды хватает — работа');
+  a = decide({ ...day, foodUnits: 4, animals: 1, nightIn: 200 });
+  assert.ok(a.key === 'hunt_stock' && /до ночи/.test(a.why), 'к закату запас важнее: ' + JSON.stringify(a));
+  // жарка: сырое + топливо + печь рядом или булыжник на неё — smelt тела (не cook_food); нет топлива — не жарим
+  a = decide({ ...day, foodUnits: 3, rawFood: { name: 'beef', count: 3 }, fuel: true });
+  assert.ok(a.key === 'cook' && a.name === 'smelt' && a.params.item === 'beef', 'жарю сырое: ' + JSON.stringify(a));
+  assert.notStrictEqual(decide({ ...day, foodUnits: 3, rawFood: { name: 'beef', count: 3 }, fuel: false }).key, 'cook', 'без топлива не жарю');
+  assert.notStrictEqual(decide({ ...day, cobble: 2, foodUnits: 3, rawFood: { name: 'beef', count: 3 }, fuel: true }).key, 'cook', 'ни печи, ни булыжника — не жарю');
+  assert.strictEqual(decide({ ...day, crashed: { day_routine: {} }, wheat: 6 }).key, 'bread', 'пшеница есть — хлеб');
+  // нужно дерево, а муха под землёй — сначала наверх, а не collect log в пещере
+  a = decide({ ...day, hasPickaxe: false, logs: 0, underground: true, surfaceY: 67, crashed: { day_routine: {} } });
+  assert.ok(a.key === 'surface' && /дерево/.test(a.why), 'под землёй за деревом — наверх: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...day, hasPickaxe: false, logs: 0, crashed: { day_routine: {} } }).key, 'collect_log', 'на поверхности — рублю');
+  // своё дело еды прерывает моб рядом (как сбор)
+  a = decide({ ...day, running: { key: 'food_explore', name: 'explore', kind: 'body' }, task: { name: 'explore', source: 'autopilot' }, hostilesNear: 1, hostile: { name: 'zombie', d: 4 } });
+  assert.ok(a && /^safety_/.test(a.key) && a.preempt, 'моб у поиска еды — бросаю: ' + JSON.stringify(a));
+  // память мест с животными: свежее ближнее место; «тут» и протухшее — нет; дошла — забыла
+  const ap = {}; const t0 = 1e12;
+  AP.noteAnimalSpot(ap, { x: 50, y: 70, z: 0, n: 2 }, t0);
+  AP.noteAnimalSpot(ap, { x: 55, y: 70, z: 3, n: 3 }, t0 + 1000); // в 16 м от прежнего — одно место
+  assert.strictEqual(ap.animalSpots.length, 1);
+  assert.strictEqual(AP.animalSpotOf(ap, { x: 0, z: 0 }, t0 + 2000).x, 55);
+  assert.strictEqual(AP.animalSpotOf(ap, { x: 50, z: 0 }, t0 + 2000), null, 'стою у места — это «тут»');
+  assert.strictEqual(AP.animalSpotOf(ap, { x: 0, z: 0 }, t0 + (T.foodSpotTtlMin + 1) * 60000), null, 'старое место забыто');
+  AP.forgetAnimalSpot(ap, 54, 2); assert.strictEqual(ap.animalSpots.length, 0, 'дошла — забыла');
+  // сумка: запас (без гнилого), сырое на жарку, топливо, пшеница
+  const fi = AP.foodInv({ cooked_beef: 2, rotten_flesh: 3, beef: 4, coal: 1, wheat: 3 }, { cooked_beef: {}, rotten_flesh: {}, beef: {}, wheat: {} }, R.FOOD_BLACKLIST);
+  assert.deepStrictEqual(fi, { foodUnits: 9, rawFood: { name: 'beef', count: 4 }, fuel: true, wheat: 3 });
+  assert.strictEqual(AP.foodInv({ oak_log: 2 }, {}, R.FOOD_BLACKLIST).fuel, false, '2 бревна — на кирку, не в печь');
+  // под землёй: ниже поверхности, свод, неба не видно
+  const vp = (x, y, z) => ({ x, y, z, offset(dx, dy, dz) { return vp(x + dx, y + dy, z + dz); } });
+  const ugBot = sky => ({ blockAt: q => (q.y >= 52 ? { name: 'stone', boundingBox: 'block', skyLight: sky } : { name: 'air', boundingBox: 'empty', skyLight: sky }) });
+  assert.strictEqual(AP.undergroundOf(ugBot(0), vp(0, 40, 0), 67), true, 'y 40, свод, темно — под землёй');
+  assert.strictEqual(AP.undergroundOf(ugBot(15), vp(0, 40, 0), 67), false, 'небо видно — каньон, не под землёй');
+  assert.strictEqual(AP.undergroundOf(ugBot(0), vp(0, 65, 0), 67), false, 'у поверхности — не под землёй');
+  // сталагмиты: pathfinder платит за клетку со сталагмитом/под сталактитом (обходит), прочие — без цены
+  const cell = (name, y) => ({ name, position: vp(0, y, 0) });
+  assert.strictEqual(R.dripstoneCost(cell('pointed_dripstone', 60), () => false), T.dripstoneCost);
+  assert.strictEqual(R.dripstoneCost(cell('air', 60), v => v.y === 62), T.dripstoneCost, 'сталактит над головой — дорого');
+  assert.strictEqual(R.dripstoneCost(cell('air', 60), v => v.y === 59), T.dripstoneCost, 'сталагмит под ногами — дорого');
+  assert.strictEqual(R.dripstoneCost(cell('air', 60), () => false), 0);
+  assert.ok(T.dripstoneCost < 100, 'не запрет: нет обхода — идёт');
+  // ---- v0.3 очередь «## План» (шаг 3, behavior/plan.js): разбор и порядок выбора (чистые функции; полная проверка — test/plan.js) ----
+  const PLN = require('./plan');
+  const pp = PLN.parsePlan('## Текущая цель\n## План\n- [ ] hut_west 1 2 3 rot=90 | комментарий\n- [ ] Автопилот: collect block=stone count=8\n- [x] base_pad 0 0 0\n- [ ] hut_west 1 2\n## Проект\n');
+  assert.ok(pp.found && pp.items.length === 4 && pp.items[0].kind === 'build' && pp.items[0].comment === 'комментарий' && pp.items[1].kind === 'goal' && pp.items[2].mark === 'x' && pp.items[3].bad, 'parsePlan');
+  const pst = PLN.emptyPlan();
+  assert.strictEqual(PLN.planPick({ own: null, goal: null, items: pp.items, state: pst, now: 1e12, brainOn: false }).item, pp.items[0], 'первый открытый пункт');
+  PLN.mark(pst, pp.items[0].sig, 'done', '', 1e12, 0); pst.doneAt = 1e12;
+  assert.strictEqual(PLN.planPick({ own: null, goal: null, items: pp.items, state: pst, now: 1e12 + 1000, brainOn: false }).item, pp.items[1], 'готовый по памяти пропущен');
+  assert.strictEqual(PLN.planPick({ own: null, goal: null, items: pp.items, state: pst, now: 1e12 + 1000, brainOn: true }).via, null, 'мозг включён — после build_done ждём его');
+  assert.ok(T.planFailPauses >= 1 && T.planRetryMs > T.planRetryIdleMs && T.planBrainWaitMs > 0, 'пороги очереди');
+}
+
+// ---- v0.3 еда, этап 2: рыбалка (удочка, прорубь), деревня из памяти, ферма у базы ----
+async function foodStage2() {
+  const AP = require('./autopilot');
+  const day = { on: true, idle: true, task: null, running: null, runnerOther: false, hp: 20, food: 20, hasFood: true, hasWeapon: true, hasPickaxe: true,
+    blocks: 20, logs: 8, cobble: 30, phase: 'день', isNight: false, nightIn: 500, sheltered: false, hostilesNear: 0, enemies: [], alone: true,
+    freeBed: false, animals: 0, recoverable: false, blocked: {}, goal: null, goalDone: false, foodUnits: 8 };
+  const night = { isNight: true, phase: 'ночь', nightIn: 0 };
+  const hungry = { ...day, foodUnits: 0 };                                     // сытая, еды в сумке нет, животных нет
+  const starve = { ...day, hp: 2, food: 16, hasFood: false, foodUnits: 0 };   // регенерации нет — за едой
+  const lake = { x: 10, y: 63, z: 10, d: 10 };
+  const open = { open: true, ice: null };
+  const ice = { x: 12, y: 63, z: 11 };
+  const base = { x: 0, y: 64, z: 0, r: 16 };
+  let a;
+  // ---- материал: удочка = 3 палки + 2 нити (палки из досок, верстак 4 доски), мотыга = 2 палки + 2 доски ----
+  assert.strictEqual(AP.rodFeasible({ string: 2, sticks: 3, planks: 0, table: true }), true, 'палки и нить есть');
+  assert.strictEqual(AP.rodFeasible({ string: 2, planks: 2, table: true }), true, '2 доски -> 4 палки');
+  assert.strictEqual(AP.rodFeasible({ string: 2, planks: 5, table: false }), false, 'верстака нет: 4 + 2 доски');
+  assert.strictEqual(AP.rodFeasible({ string: 2, planks: 6, table: false }), true);
+  assert.strictEqual(AP.rodFeasible({ string: 2, logs: 2, table: false }), true, 'брёвна -> доски');
+  assert.strictEqual(AP.rodFeasible({ string: 1, sticks: 3, table: true }), false, 'нити мало (нить только с пауков)');
+  assert.strictEqual(AP.hoeFeasible({ planks: 2, sticks: 2, table: true }), true);
+  assert.strictEqual(AP.hoeFeasible({ planks: 3, table: true }), false, 'на палки не хватает');
+  assert.strictEqual(AP.hoeFeasible({ planks: 8 }), true, 'доски на верстак, палки и мотыгу');
+  // ---- рыбалка ----
+  // еды мало, животных нет, удочка и открытая вода — fish (забросов столько, сколько не хватает до запаса, не меньше 3)
+  a = decide({ ...hungry, rod: 1, water: lake, fish: open });
+  assert.ok(a && a.key === 'fish' && a.name === 'fish' && a.params.casts === T.foodStockWant + 1 && a.params.max_sec === T.fishMaxSec, 'удочка + вода — рыбачу: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...hungry, foodUnits: 5, rod: 1, water: lake, fish: open }).params.casts, 3, 'не хватает 1 — всё равно хотя бы 3 заброса');
+  assert.notStrictEqual((decide({ ...day, rod: 1, water: lake, fish: open }) || {}).key, 'fish', 'еды хватает — не рыбачу');
+  assert.notStrictEqual((decide({ ...hungry, animals: 2, rod: 1, water: lake, fish: open }) || {}).key, 'fish', 'животные рядом — охота впрок, не рыба');
+  assert.notStrictEqual((decide({ ...hungry, nightIn: 60, rod: 1, water: lake, fish: open }) || {}).key, 'fish', 'к закату на рыбу не ухожу');
+  assert.notStrictEqual((decide({ ...hungry, rod: 1, water: lake, fish: open, blocked: { fish: true } }) || {}).key, 'fish', 'пауза после захода без улова');
+  // удочки нет: нить есть и материал на палки — крафт; нити нет / воды нет / материала нет — ветку пропускаем
+  const mat = { planks: 8, sticks: 0, logs: 0, table: true };
+  a = decide({ ...starve, water: lake, string: 2, tools: mat });
+  assert.ok(a && a.key === 'craft_rod' && a.name === 'craft' && a.params.item === 'fishing_rod', 'нить есть — делаю удочку: ' + JSON.stringify(a));
+  assert.notStrictEqual((decide({ ...starve, water: lake, string: 0, tools: mat }) || {}).key, 'craft_rod', 'нити нет — ветку пропускаем');
+  assert.notStrictEqual((decide({ ...starve, string: 2, tools: mat }) || {}).key, 'craft_rod', 'воды нет — удочка ни к чему');
+  assert.notStrictEqual((decide({ ...starve, water: lake, string: 2, tools: { ...mat, planks: 0 } }) || {}).key, 'craft_rod', 'нечего на палки');
+  // вода далеко — сначала к воде; льдом закрыта — сначала лёд (прорубь), потом рыба
+  a = decide({ ...hungry, rod: 1, water: { ...lake, d: 30 }, fish: { open: false, ice: null } });
+  assert.ok(a && a.key === 'fish_go' && a.name === 'goto' && a.params.x === 10, 'вода в 30 м — иду к ней: ' + JSON.stringify(a));
+  a = decide({ ...hungry, rod: 1, water: lake, fish: { open: false, ice } });
+  assert.ok(a && a.key === 'fish_ice' && a.name === 'dig_at' && a.params.x === 12 && a.params.y === 63 && a.params.z === 11, 'вода подо льдом — ломаю лёд: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...hungry, rod: 1, water: lake, fish: { open: true, ice } }).key, 'fish', 'открытая вода есть — лёд не трогаю');
+  assert.notStrictEqual((decide({ ...hungry, rod: 1, water: { ...lake, d: 30 }, fish: { open: false, ice: null }, blocked: { fish_go: true } }) || {}).key, 'fish_go', 'пришла и ловить негде — снова не иду');
+  // низкий HP без еды: охота -> место с животными -> РЫБАЛКА -> деревня -> база -> поле
+  assert.strictEqual(decide({ ...starve, rod: 1, water: lake, fish: open }).key, 'fish', 'HP 2, еды нет, вода рядом — рыбачу вместо explore');
+  assert.strictEqual(decide({ ...starve, animals: 1, rod: 1, water: lake, fish: open }).key, 'hunt', 'животные рядом — охота раньше рыбы');
+  assert.strictEqual(decide({ ...starve, animalSpot: { x: 40, y: 70, z: 0, d: 40, ago: 3, n: 2 }, rod: 1, water: lake, fish: open }).key, 'food_spot', 'место с животными — раньше рыбы');
+  assert.strictEqual(decide({ ...starve, base, baseDist: 60, rod: 1, water: lake, fish: open }).key, 'fish', 'рыба раньше дороги на базу');
+  assert.strictEqual(decide({ ...starve, water: lake, string: 2, tools: mat }).key, 'craft_rod', 'HP 2, удочки нет, нить есть — крафт');
+  assert.notStrictEqual((decide({ ...starve, ...night, rod: 1, water: lake, fish: open }) || {}).key, 'fish', 'ночью на рыбу не идём');
+  // сырая рыба — как мясо: smelt
+  a = decide({ ...day, foodUnits: 3, rawFood: { name: 'salmon', count: 3 }, fuel: true });
+  assert.ok(a.key === 'cook' && a.name === 'smelt' && a.params.item === 'salmon', 'сырую рыбу жарю: ' + JSON.stringify(a));
+  // ---- деревня из памяти ----
+  const vil = { x: 300, y: 70, z: 0, d: 150, villagers: 5 };
+  a = decide({ ...starve, village: vil });
+  assert.ok(a && a.key === 'food_village' && a.name === 'goto' && a.params.x === 300 && /не трогаю/.test(a.why), 'деревня в 150 м — иду: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...starve, village: vil, base, baseDist: 60 }).key, 'food_village', 'деревня раньше базы');
+  assert.strictEqual(decide({ ...starve, village: vil, rod: 1, water: lake, fish: open }).key, 'fish', 'рыба раньше деревни');
+  assert.strictEqual(decide({ ...starve, village: vil, animalSpot: { x: 40, y: 70, z: 0, d: 40, ago: 3, n: 2 } }).key, 'food_spot', 'место с животными раньше деревни');
+  assert.strictEqual(decide({ ...starve }).key, 'food_explore', 'деревни нет — поле');
+  assert.notStrictEqual((decide({ ...starve, village: vil, nightIn: 150 }) || {}).key, 'food_village', 'до ночи не дойти — не иду');
+  assert.notStrictEqual((decide({ ...starve, village: vil, blocked: { food_village: true } }) || {}).key, 'food_village', 'пауза после неудачи');
+  assert.notStrictEqual((decide({ ...starve, ...night, village: { ...vil, d: 20 } }) || {}).key, 'vh_wheat', 'ночью за урожаем не ходим');
+  // в деревне: пшеница -> морковь -> картофель (по разу за villageHarvestMin), потом дальше (не по кругу)
+  const here = { ...vil, d: 20 };
+  a = decide({ ...starve, village: here });
+  assert.ok(a && a.key === 'vh_wheat' && a.name === 'harvest' && a.params.crop === 'wheat' && a.params.replant === true && a.params.radius === T.villageHarvestR, 'в деревне — собираю пшеницу: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...starve, village: here, vhDone: { wheat: true } }).params.crop, 'carrot', 'пшеницу пробовала — морковь');
+  assert.strictEqual(decide({ ...starve, village: here, vhDone: { wheat: true, carrot: true } }).params.crop, 'potato');
+  a = decide({ ...starve, village: here, vhDone: { wheat: true, carrot: true, potato: true } });
+  assert.ok(a && a.key === 'food_explore', 'всё пробовала — не по кругу, а дальше: ' + JSON.stringify(a));
+  a = decide({ ...starve, village: vil, base, baseDist: 60, vhDone: { wheat: true, carrot: true, potato: true } });
+  assert.strictEqual(a.key, 'go_base', 'культуры пробованы — в деревню снова не возвращаюсь, иду на базу');
+  // пшеница из деревни — хлеб (уже было), еда в сумке — деревня не нужна
+  assert.notStrictEqual((decide({ ...day, village: vil }) || {}).key, 'food_village', 'еды хватает — за урожаем не иду');
+  // ---- ферма у базы (выученный farm_plot) ----
+  const full = { pickaxe: 3, sword: 3, shovel: 3, axe: 3 };
+  const near = { base, baseDist: 10 };
+  const farmW = { x: 5, z: 7 };
+  a = decide({ ...day, ...near, seeds: 3, hoe: true, farmWater: farmW });
+  assert.ok(a && a.key === 'farm' && a.kind === 'learned' && a.name === 'farm_plot' && a.params.x === 5 && a.params.z === 7 && a.params.seed === 'wheat_seeds' && a.params.size === T.farmSize && a.params.max_sec === T.farmMaxSec, 'база, вода, семена, мотыга — ферма: ' + JSON.stringify(a));
+  assert.strictEqual(decide({ ...day, ...near, seeds: 3, hoe: false, tools: { ...full, planks: 8, table: true }, farmWater: farmW }).key, 'farm', 'мотыги нет, но доски на неё есть (farm_plot крафтит сам)');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 3, hoe: false, tools: { ...full, planks: 1, table: true }, farmWater: farmW }) || {}).key, 'farm', 'мотыги нет и не из чего');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 1, hoe: true, farmWater: farmW }) || {}).key, 'farm', 'семян мало');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 0, hoe: true, farmWater: farmW }) || {}).key, 'farm', 'без семян не зовём');
+  assert.notStrictEqual((decide({ ...day, seeds: 3, hoe: true, farmWater: farmW }) || {}).key, 'farm', 'без базы не зовём');
+  assert.notStrictEqual((decide({ ...day, base, baseDist: 100, seeds: 3, hoe: true, farmWater: farmW }) || {}).key, 'farm', 'база далеко — сначала на базу');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 3, hoe: true }) || {}).key, 'farm', 'воды у базы не знаем — не зовём');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 3, hoe: true, farmWater: farmW, skillOff: { farm_plot: 'вручную' } }) || {}).key, 'farm', 'навык выключен — не предлагаем');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 3, hoe: true, farmWater: farmW, skillKnown: ['go_safe'] }) || {}).key, 'farm', 'навыка нет у исполнителя — не предлагаем');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 3, hoe: true, farmWater: farmW, nightIn: 60 }) || {}).key, 'farm', 'к закату грядки не начинаю');
+  assert.notStrictEqual((decide({ ...day, ...near, ...night, seeds: 3, hoe: true, farmWater: farmW }) || {}).key, 'farm', 'ночью — нет');
+  // уже посажено: пока рано — не зовём; прошло farmRevisitMin — собрать и пересадить на том же месте (семян не нужно: пересадка из урожая)
+  const planted = { x: 5, z: 7, sinceMin: 5 };
+  assert.notStrictEqual((decide({ ...day, ...near, farm: planted, farmWater: { x: 90, z: 90 } }) || {}).key, 'farm', 'посажено недавно — рано');
+  a = decide({ ...day, ...near, farm: { ...planted, sinceMin: T.farmRevisitMin + 1 }, farmWater: { x: 90, z: 90 } });
+  assert.ok(a && a.key === 'farm' && a.params.x === 5 && a.params.z === 7, 'пора собирать — на том же участке: ' + JSON.stringify(a));
+  assert.ok(T.farmScore > 35 && T.farmScore < 50, 'ферма: выше рутины (35), ниже цели мозга (50)');
+  // ---- живой цикл (start -> finish): память фермы, культур деревни и пауз рыбалки ----
+  const ctx = { events: { push() {} }, tasks: { current: null, history: [], queue: [] }, lastProgressAt: 0 };
+  const ap = AP.create(ctx);
+  let res = { ok: true };
+  ctx.runSkill = async () => res;
+  const go = async (key, params, r) => { res = r; ap._start({ key, kind: 'body', name: 'x', params, why: 't' }); await ap.running.promise; };
+  await go('farm', { x: 5, z: 7 }, { ok: true, result: { ok: true, planted: 9 } });
+  assert.ok(ap.farm && ap.farm.x === 5 && ap.farm.z === 7 && ap.farm.t > 0, 'ферма запомнена');
+  ap.farm = null; await go('farm', { x: 5, z: 7 }, { ok: false, error: 'на участке нечего вскапывать/сажать' });
+  assert.strictEqual(ap.farm, null, 'провал фермы не запоминаем');
+  // вода для фермы: база на y=67, речка на дне каньона (y≈36) — не берём; на уровне базы — берём; провал фермы метит точку
+  const wb = { x: -393, y: 67, z: 36 }, canyon = { at: [-376, 36, 40] }, pond = { at: [-390, 66, 30] };
+  assert.strictEqual(AP.farmWaterPick([canyon], wb, [], Date.now()), null, 'вода ниже базы на 30 блоков — ферму не выбираем');
+  assert.deepStrictEqual(AP.farmWaterPick([canyon, pond], wb, [], Date.now()), { x: -390, z: 30 }, 'ближайшая в каньоне, дальше пруд на уровне базы — берём пруд');
+  assert.strictEqual(AP.farmWaterPick([pond], wb, [{ x: -388, z: 32, t: Date.now() }], Date.now()), null, 'точка недавно провалилась — не выбираем');
+  assert.deepStrictEqual(AP.farmWaterPick([pond], wb, [{ x: -388, z: 32, t: Date.now() - (T.farmBadMin + 1) * 60000 }], Date.now()), { x: -390, z: 30 }, 'давно провалилась — снова можно');
+  assert.notStrictEqual((decide({ ...day, ...near, seeds: 3, hoe: true, farmWater: AP.farmWaterPick([canyon], wb, [], Date.now()) }) || {}).key, 'farm', 'воды у базы нет (только каньон) — decide не зовёт ферму');
+  await go('farm', { x: -390, z: 30 }, { ok: false, error: 'у участка -392,28..-388,32 нет воды в 4 клетках на уровне y=66' });
+  assert.ok(ap.farmBad.some(b => b.x === -390 && b.z === 30 && b.t > 0), 'ферма провалилась из-за воды — точка в farmBad');
+  const nBad = ap.farmBad.length;
+  await go('farm', { x: 50, z: 70 }, { ok: false, error: 'ничего не сделано: hoe' });
+  assert.strictEqual(ap.farmBad.length, nBad, 'провал не про воду/участок — точку не метим');
+  await go('vh_wheat', { crop: 'wheat' }, { ok: true, result: { harvested: 0 } });
+  assert.ok(ap.vh.wheat > 0, 'пшеницу в деревне пробовала');
+  await go('vh_carrot', { crop: 'carrot' }, { ok: false, error: 'ничего не собрано: x' });
+  assert.ok(ap.vh.carrot > 0, 'провал тоже считается пробой — по кругу не ходим');
+  await go('fish', {}, { ok: true, result: { casts: 3, caught: {}, errors: 0 } });
+  assert.ok(ap.until.fish > Date.now(), 'заход без улова — пауза');
+  delete ap.until.fish;
+  await go('fish', {}, { ok: true, result: { casts: 3, caught: { cod: 2 }, errors: 0 } });
+  assert.ok(!ap.until.fish || ap.until.fish <= Date.now() + 20000, 'с уловом — паузы рыбалки нет (дальше решает запас)');
+  await go('fish_go', { x: 10, y: 63, z: 10 }, { ok: true });
+  assert.ok(ap.until.fish_go > Date.now() + T.fishGoPauseMs - 5000, 'дошла до воды — снова к ней не сразу');
+  // fishSpot: открытая вода — ловим; воды под льдом — берём ближайший лёд над водой; ничего — null/пусто
+  const Vec3 = require('vec3').Vec3, vision = require('../lib/vision');
+  const grid = new Map(); const put = (x, y, z, name) => grid.set(x + ',' + y + ',' + z, { name, boundingBox: name === 'air' ? 'empty' : 'block' });
+  const fbot = { registry: { blocksByName: { water: { id: 1 }, ice: { id: 2 } } }, entity: { position: new Vec3(0, 64, 0) },
+    blockAt: q => grid.get(q.x + ',' + q.y + ',' + q.z) || { name: 'air', boundingBox: 'empty' } };
+  const realFind = vision.find; const found = { 1: [], 2: [] };
+  vision.find = (c, ids) => found[ids[0]];
+  try {
+    found[1] = [new Vec3(5, 63, 0)]; put(5, 63, 0, 'water');
+    assert.deepStrictEqual(AP.fishSpot({ bot: fbot }), { open: true, ice: null }, 'над водой воздух — открытая');
+    put(5, 64, 0, 'ice'); // замёрзла: над водой лёд
+    assert.strictEqual(AP.fishSpot({ bot: fbot }).open, false);
+    found[2] = [new Vec3(5, 64, 0), new Vec3(9, 64, 0)]; put(9, 63, 0, 'water'); put(9, 64, 0, 'ice');
+    put(5, 64, 0, 'ice'); // над льдом воздух, под льдом вода
+    assert.deepStrictEqual(AP.fishSpot({ bot: fbot }), { open: false, ice: { x: 5, y: 64, z: 0 } }, 'прорубь: ближайший лёд над водой');
+    found[2] = [new Vec3(20, 64, 0)]; put(20, 64, 0, 'ice'); // лёд на суше (под ним не вода) — не годится
+    assert.deepStrictEqual(AP.fishSpot({ bot: fbot }), { open: false, ice: null });
+  } finally { vision.find = realFind; }
+
+  // ---- утопление: тону ли, куда плыть, что ломать (чистые решения reflexes.js) ----
+  const now0 = 100000;
+  const mk = pts => pts.map(([dt, y]) => ({ t: now0 - dt, y })); // [сколько мс назад, высота]
+  assert.strictEqual(R.isDrowning(T.drownUnderMs + 1, mk([[3000, 60.2], [2000, 60.2], [1000, 60.2], [0, 60.2]]), now0), true, 'под водой давно и y не растёт — тону');
+  assert.strictEqual(R.isDrowning(T.drownUnderMs - 1000, mk([[3000, 60.2], [0, 60.2]]), now0), false, 'под водой ещё недолго — не тону');
+  assert.strictEqual(R.isDrowning(T.drownUnderMs + 1, mk([[3000, 55], [2000, 56], [0, 58]]), now0), false, 'всплываю (y растёт) — не мешаем');
+  assert.strictEqual(R.isDrowning(T.drownUnderMs + 1, mk([[1000, 60.2], [0, 60.2]]), now0), false, 'истории короче окна нет — решения нет');
+  assert.strictEqual(R.isDrowning(0, mk([[3000, 60], [0, 60]]), now0), false, 'голова не под водой');
+  assert.strictEqual(R.isDrowning(T.drownUnderMs + 1, [], now0), false);
+  // мир-сетка: блок по умолчанию — вода (столб воды); put меняет клетки
+  const wg = new Map(); const wput = (x, y, z, name) => wg.set(x + ',' + y + ',' + z, name);
+  const wblock = name => name === 'water' ? { name, boundingBox: 'empty' } : name === 'air' ? { name, boundingBox: 'empty' } : { name, boundingBox: 'block', diggable: true };
+  const wget = (x, y, z) => wblock(wg.get(x + ',' + y + ',' + z) || 'water');
+  const pos0 = { x: 0.5, y: 60.2, z: 0.5 }; // ноги 60.2, глаза 61.7 -> клетка головы y=61
+  // под льдом: над головой лёд (y=62), воздуха рядом нет — ломать лёд
+  wput(0, 62, 0, 'ice');
+  let pl = R.rescuePlan(wget, pos0, {});
+  assert.strictEqual(pl.action, 'dig'); assert.deepStrictEqual([pl.target.x, pl.target.y, pl.target.z, pl.target.name], [0, 62, 0, 'ice']);
+  assert.ok(/ломаю ice/.test(pl.why), pl.why);
+  assert.strictEqual(R.blockOverhead(wget, pos0).kind, 'solid');
+  // ...ломать не вышло (noDig), блоков нет — просто вверх; блок есть и «стою» — подставляем под ноги
+  assert.strictEqual(R.rescuePlan(wget, pos0, { noDig: true }).action, 'up');
+  assert.strictEqual(R.rescuePlan(wget, pos0, { noDig: true, stuck: true, canPlace: true }).action, 'place');
+  // рядом (3 клетки) край с воздухом, по прямой льда нет: лёд над головой есть, но плывём к воздуху
+  wput(3, 61, 1, 'air'); wput(3, 62, 1, 'air'); wput(3, 60, 1, 'water');
+  pl = R.rescuePlan(wget, pos0, {});
+  assert.strictEqual(pl.action, 'swim'); assert.deepStrictEqual([pl.target.x, pl.target.y, pl.target.z], [3, 61, 1]);
+  assert.ok(/плыву к воздуху \(3 1\)/.test(pl.why), pl.why);
+  // к воздуху пробовали, не вышло — ломаем лёд над головой
+  assert.strictEqual(R.rescuePlan(wget, pos0, { skipSwim: true }).action, 'dig');
+  // воздух за стеной (камень между) — не цель
+  wput(1, 61, 0, 'stone'); wput(1, 61, 1, 'stone'); wput(1, 61, 2, 'stone'); wput(1, 60, 0, 'stone'); wput(1, 60, 1, 'stone'); wput(1, 60, 2, 'stone'); wput(2, 61, 1, 'stone'); wput(2, 60, 1, 'stone');
+  assert.strictEqual(R.findAirCell(wget, pos0), null, 'воздух за стеной — не цель');
+  // дальше радиуса — не цель
+  wg.clear(); wput(0, 62, 0, 'ice'); wput(9, 61, 0, 'air'); wput(9, 62, 0, 'air');
+  assert.strictEqual(R.findAirCell(wget, pos0), null, 'дальше drownSurfaceR — не ищем');
+  // воздух прямо над головой — всплываем вверх; воздух выше +2 клеток по высоте не берём
+  wg.clear(); wput(0, 62, 0, 'air'); wput(0, 63, 0, 'air');
+  assert.strictEqual(R.rescuePlan(wget, pos0, {}).action, 'up');
+  assert.strictEqual(R.rescuePlan(wget, pos0, { stuck: true, canPlace: true }).action, 'place', 'вверх не поднимаюсь, блок есть — подставляем');
+  wg.clear(); wput(2, 65, 0, 'air'); wput(2, 66, 0, 'air');
+  assert.strictEqual(R.findAirCell(wget, pos0), null, 'воздух выше +drownSurfaceDy — не цель');
+  // глубокая вода без потолка и без воздуха рядом — просто вверх
+  wg.clear();
+  assert.strictEqual(R.rescuePlan(wget, pos0, {}).action, 'up');
+  assert.strictEqual(R.blockOverhead(wget, pos0).kind, 'water');
+  // пороги утопления на месте
+  for (const k of ['drownUnderMs', 'drownStillMs', 'drownRiseMin', 'drownStuckMs', 'drownRescueMs', 'drownPauseMs']) assert.ok(T[k] > 0, k);
+}

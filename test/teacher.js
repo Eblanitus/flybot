@@ -79,16 +79,15 @@ function testQueue() {
   T.scan(cfg);
   assert.strictEqual(st().cases.filter(c => c.status === 'pending').length, 0, 'разные ошибки не склеиваются в провал');
 
-  // выученный навык (версия): случай с первого же провала — повод заказать другой вариант; второй провал рядом — в тот же случай
+  // выученный навык (версия): первый провал ещё не случай (бывает случайность); два одинаковых подряд — повод заказать другой вариант
   now += 10 * 60000;
   run({ id: 1, type: 'run_end', name: 'build_hut', ok: false, error: 'нет места у -397 66 29' });
   T.scan(cfg);
-  pend = st().cases.filter(c => c.status === 'pending');
-  assert.strictEqual(pend.length, 1, 'один провал версии — уже случай'); assert.strictEqual(pend[0].type, 'fail');
+  assert.strictEqual(st().cases.filter(c => c.status === 'pending').length, 0, 'один провал версии — ещё не случай');
   run({ id: 2, type: 'run_end', name: 'build_hut', ok: false, error: 'нет места у -390 66 30' });
   T.scan(cfg);
   pend = st().cases.filter(c => c.status === 'pending');
-  assert.strictEqual(pend.length, 1); assert.strictEqual(pend[0].type, 'fail');
+  assert.strictEqual(pend.length, 1, 'два провала версии — один случай'); assert.strictEqual(pend[0].type, 'fail');
   assert.strictEqual(pend[0].items[0].by, 'skill:build_hut');
 
   // сообщение хозяина (игра и аудит) — отдельный случай, склеивается сам с собой; итог дня случаем больше не заводится
@@ -100,10 +99,12 @@ function testQueue() {
   pend = st().cases.filter(c => c.status === 'pending');
   assert.deepStrictEqual(pend.map(c => c.type).sort(), ['fail', 'owner'], 'итог дня — не случай');
   assert.strictEqual(pend.find(c => c.type === 'owner').items.length, 2, 'хозяин: две реплики в одном случае, чужие не считаются');
-  // порядок взятия: хозяин раньше провала
+  // порядок взятия: хозяин раньше провала; чисто провальный случай ждёт 10 мин («справилась сама») и лишь потом берётся
   now += 100000; T.scan(cfg);
   r = T.take(cfg); assert.strictEqual(r.type, 'owner');
   T.finish(cfg, r.id, 'ok');
+  assert(T.take(cfg).none, 'провал ждёт HEAL_MS');
+  now += T.DEFAULTS.HEAL_MS; T.scan(cfg);
   r = T.take(cfg); assert.strictEqual(r.type, 'fail');
   // потерянный учитель (сторож перезапустился) — через 40 мин случай закрывается и не держит очередь
   now += 41 * 60000;
@@ -156,6 +157,211 @@ function testNeighbor() {
   T.scan(cfg2); T.scan(cfg2);
   assert(!T.loadState(T.paths(cfg2)).cases.some(c => c.type === 'neighbor'), 'нет папки соседа — молча');
   console.log('teacher neighbor: OK');
+}
+
+// стенд для проверок разгрузки: временная папка, подставное время, синтетические events.log / runner.log / blackbox
+function harness(start) {
+  const D = mkdirs();
+  const h = { D, now: start || Date.UTC(2026, 9, 25, 12, 0, 0), n: 0 };
+  const LG = require('../lib/teacher_ledger');
+  h.cfg = { dataDir: D.dataDir, brainDir: D.brainDir, now: () => h.now, neighborDir: null };
+  h.ev = o => fs.appendFileSync(path.join(D.dataDir, 'events.log'), JSON.stringify({ t: hms(h.now), ...o }) + '\n');
+  h.run = o => fs.appendFileSync(path.join(D.brainDir, 'runner.log'), JSON.stringify({ time: new Date(h.now).toISOString(), ...o }) + '\n');
+  h.bb = (kind, summary) => fs.writeFileSync(path.join(D.dataDir, 'blackbox', `${kind}-${String(20261025120000 + ++h.n * 7)}.json`), JSON.stringify({ kind, savedAt: new Date(h.now).toISOString(), summary, frames: [{}] }));
+  h.st = () => T.loadState(T.paths(h.cfg));
+  h.scan = () => T.scan(h.cfg);
+  h.mature = () => { h.now += T.DEFAULTS.HEAL_MS + 60000; return T.scan(h.cfg); };   // созрели все (и чисто провальные тоже)
+  h.accounts = () => LG.load(LG.paths(h.cfg), h.now).accounts;
+  h.post = (slug, title) => LG.caseFinished(h.cfg, { id: 'seed', type: 'death', items: [] }, 'done', `Проводка: ${slug} | ${title} | behavior | 10 | seed`);
+  h.cases = status => h.st().cases.filter(c => c.status === status && c.type !== 'invoice');   // счета-«invoice» от бухгалтерии в проверках не считаем
+  h.scan();                                                        // первый запуск: пустая очередь
+  return h;
+}
+
+// прерывание — не случай; первый провал выученного навыка — не случай; два — случай, но неясный уходит модели
+function testInterruptFilter() {
+  const h = harness();
+  for (const reason of ['вытеснен мозгом', 'прервана: POST /abort', 'отключён автопилот', 'уступка мозгу', 'занят навыком build_hut', 'безопасность: spider', 'навык выключен'])
+    assert(T.INTERRUPT_RE.test(reason), reason);
+  assert(!T.INTERRUPT_RE.test('не нашёл log в радиусе 48'));
+  for (let i = 0; i < 2; i++) { h.ev({ id: 10 + i, type: 'task_failed', name: 'collect', reason: 'безопасность: spider рядом' }); h.now += 5000; }
+  h.scan();
+  assert.strictEqual(h.cases('pending').length, 0, 'провал «безопасность: spider» дважды — случая нет');
+  for (let i = 0; i < 3; i++) { h.ev({ id: 20 + i, type: 'task_failed', name: 'goto_' + i, reason: 'вытеснен' }); h.ev({ id: 30 + i, type: 'task_failed', name: 'craft_' + i, reason: 'прерван' }); }
+  h.scan();
+  assert.strictEqual(h.cases('pending').length, 0, 'прерывания не складываются в «застряла»');
+  h.run({ id: 1, type: 'run_end', name: 'build_hut', ok: false, error: 'безопасность: spider' });
+  h.run({ id: 2, type: 'run_end', name: 'build_hut', ok: false, error: 'безопасность: spider' });
+  h.scan();
+  assert.strictEqual(h.cases('pending').length, 0, 'прерванный навык — не случай');
+  // выученный навык: один провал — нет случая, два — один случай, и разобрать его код не может (причина неясна) — ждёт модель
+  h.run({ id: 3, type: 'run_end', name: 'build_hut', ok: false, error: 'нет места у -397 66 29' }); h.scan();
+  assert.strictEqual(h.cases('pending').length, 0, 'первый провал выученного навыка');
+  h.run({ id: 4, type: 'run_end', name: 'build_hut', ok: false, error: 'нет места у -390 66 30' }); h.scan();
+  assert.strictEqual(h.cases('pending').length, 1, 'два провала выученного навыка — один случай');
+  h.mature();
+  assert.strictEqual(h.cases('pending').length, 1, 'неясная причина — модели, не кодом');
+  assert.strictEqual(T.take(h.cfg).type, 'fail');
+  console.log('teacher interrupt filter: OK');
+}
+
+// разбор кодом по таблице: почти-смерть, провалы, застревание, сосед
+function testCodeResolve() {
+  testInterruptFilter();
+  // --- почти-смерть: выжила — закрыть без проводки; HP ≤ 4 — проводка кодом на near_<задача>
+  let h = harness();
+  h.bb('near', { cause: 'почти-смерть (выжила)', minHp: 6.5, lastTask: { name: 'escape', by: 'reflex' } }); h.scan();
+  assert.strictEqual(h.cases('pending').length, 1);
+  assert.strictEqual(h.scan().pending, 1, 'не созрел — ещё ждёт');
+  h.now += 100000; let r = h.scan();
+  assert.strictEqual(h.cases('pending').length, 0, 'почти-смерть выжила — закрыта кодом');
+  let c = h.cases('done')[0];
+  assert(c.byCode && /разобрано кодом/.test(c.result) && !/проводки/.test(c.result), c.result);
+  assert.deepStrictEqual(Object.keys(h.accounts()), [], 'без проводки');
+  assert(r.ledger.some(m => /разобран кодом/.test(m)), 'сторож увидит в журнале');
+  const rep = fs.readFileSync(path.join(h.D.dataDir, 'teacher', path.basename(c.report)), 'utf8');
+  assert(/^# почти-смерть: разобрано кодом/.test(rep) && /^Вердикт: код/m.test(rep), 'короткий отчёт для аудита');
+  assert(T.take(h.cfg).none, 'модель не нужна');
+  h.now += 10 * 60000;
+  h.bb('near', { cause: 'почти-смерть (выжила)', minHp: 3, lastTask: { name: 'escape', by: 'reflex' } }); h.scan();
+  h.now += 100000; h.scan();
+  assert.strictEqual(h.cases('pending').length, 0, 'HP ≤ 4 — тоже кодом');
+  c = h.cases('done')[1];
+  assert(/проводки: near_escape/.test(c.result), c.result);
+  let acc = h.accounts().near_escape; assert(acc && acc.postings.length === 1 && acc.postings[0].min === 5 && /blackbox/.test(acc.postings[0].ev), JSON.stringify(acc));
+  assert(/^Проводка: near_escape \| .+ \| behavior \| 5 \| blackbox\/near-/m.test(fs.readFileSync(path.join(h.D.dataDir, 'teacher', path.basename(c.report)), 'utf8')));
+  // глаза идут в доказательство
+  h.now += 10 * 60000;
+  const pad2 = n => String(n).padStart(2, '0'), ed = new Date(h.now - 30000);
+  fs.writeFileSync(path.join(h.D.dataDir, 'eyes.log'), `[${ed.getFullYear()}-${pad2(ed.getMonth() + 1)}-${pad2(ed.getDate())} ${pad2(ed.getHours())}:${pad2(ed.getMinutes())}:${pad2(ed.getSeconds())}] (таймер) Видно: скелет стреляет, муха бежит\n`);
+  h.bb('near', { cause: 'почти-смерть (выжила)', minHp: 2, lastTask: { name: 'escape' } }); h.scan();
+  h.now += 100000; h.scan();
+  acc = h.accounts().near_escape; assert.strictEqual(acc.postings.length, 2);
+  assert(/глаза: «.*скелет/.test(acc.postings[1].ev), acc.postings[1].ev);
+  // нет данных о здоровье — не угадываем, модели
+  h.now += 10 * 60000; h.bb('near', { cause: 'почти-смерть (выжила)' }); h.mature();
+  assert.strictEqual(h.cases('pending').length, 1);
+
+  // --- провалы: инструмент / путь → проводка; нет в инвентаре → закрыть; «справилась сама» → снять; остальное → модели
+  h = harness();
+  const failTwice = (name, reason, id) => { h.ev({ id, type: 'task_failed', name, reason }); h.now += 1000; h.ev({ id: id + 1, type: 'task_failed', name, reason }); h.now += 1000; };
+  failTwice('collect', 'нужен инструмент для stone: wooden_pickaxe; скрафтить не вышло', 100); h.scan();
+  assert.strictEqual(h.cases('pending').length, 1); h.now += 100000; h.scan();
+  assert.strictEqual(h.cases('pending').length, 1, 'чисто провальный случай ждёт 10 мин: вдруг справится сама');
+  h.mature();
+  assert.strictEqual(h.cases('pending').length, 0);
+  assert(h.accounts().gather_tool_missing, 'нужен инструмент → gather_tool_missing');
+  failTwice('goto', 'путь не найден до (1, 2, 3)', 110); h.mature();
+  assert(h.accounts().goto_path, 'путь не найден → <навык>_path: ' + Object.keys(h.accounts()));
+  failTwice('build_blueprint', 'не достроено: 20 из 176; нет в инвентаре: cobblestone; не хватило: cobblestone ×8', 120); h.mature();
+  assert.strictEqual(h.cases('pending').length, 0);
+  assert(/не хватило материалов/.test(h.cases('done').pop().result) && !/проводки/.test(h.cases('done').pop().result));
+  assert.deepStrictEqual(Object.keys(h.accounts()).sort(), ['gather_tool_missing', 'goto_path']);
+  // справилась сама: тот же навык успешно завершился в течение 10 мин
+  failTwice('shelter', 'укрытие не до конца закрыто (открыто: 1 2 3)', 130); h.scan();
+  h.now += 4 * 60000; h.ev({ id: 140, type: 'task_done', name: 'shelter' }); h.scan();
+  h.mature();
+  assert.strictEqual(h.cases('pending').length, 0);
+  assert(/справилась сама/.test(h.cases('done').pop().result), 'снят до разбора');
+  // тот же провал без успеха — модели
+  failTwice('shelter', 'нечем закрыть яму (блоков нет)', 150); h.mature();
+  assert.strictEqual(h.cases('pending').length, 1, 'неясный провал — модели');
+  // выученный навык: путь не найден тоже кодом
+  h.run({ id: 9, type: 'run_end', name: 'build_hut', ok: false, error: 'путь не найден' }); h.run({ id: 10, type: 'run_end', name: 'build_hut', ok: false, error: 'путь не найден' }); h.mature();
+  assert(h.accounts().build_hut_path && h.accounts().build_hut_path.kind === 'skill', 'навык: build_hut_path');
+
+  // --- застряла → stuck_<задача> кодом; сосед → закрыт без проводки
+  h = harness();
+  ['a', 'b', 'c', 'd', 'e', 'f'].forEach((n, i) => h.ev({ id: 200 + i, type: 'task_failed', name: i % 2 ? 'goto' : 'collect', reason: 'путь ' + n }));
+  h.scan(); assert(h.cases('pending').some(x => x.type === 'stuck'));
+  h.mature(); assert.strictEqual(h.cases('pending').length, 0);
+  assert(Object.keys(h.accounts()).some(k => /^stuck_(goto|collect)$/.test(k)), Object.keys(h.accounts()).join());
+  const nb = path.join(h.D.root, 'neighbor'); fs.mkdirSync(path.join(nb, 'lib', 'skills'), { recursive: true }); fs.writeFileSync(path.join(nb, 'lib', 'skills', 'combat.js'), '// бой\n');
+  h.cfg.neighborDir = nb; const before = Object.keys(h.accounts()).length; h.scan();
+  assert.strictEqual(h.cases('pending').filter(x => x.type === 'neighbor').length, 1); h.mature();
+  assert.strictEqual(h.cases('pending').length, 0, 'сосед закрыт кодом'); assert.strictEqual(Object.keys(h.accounts()).length, before, 'без проводки');
+
+  // --- смерть: убил игрок — модели; моб — счёт death_<моб>_<фаза>: нет → модели, есть → кодом; хозяин всегда моделям
+  h = harness();
+  const die = (cause, phase) => { h.ev({ id: 300 + ++h.n, type: 'death', cause, message: `FlyBot_01 was slain by ${cause}`, phase }); h.now += 100000; h.scan(); };
+  die('eblanitus228', 'день');
+  assert.strictEqual(h.cases('pending').length, 1, 'убил игрок — модели');
+  let t = T.take(h.cfg); assert.strictEqual(t.type, 'death'); T.finish(h.cfg, t.id, 'crash');
+  die('zombie', 'ночь');
+  assert.strictEqual(h.cases('pending').length, 1, 'новый вид смерти (счёта нет) — модели');
+  t = T.take(h.cfg); T.finish(h.cfg, t.id, 'crash');
+  h.post('death_zombie_night', 'смерть от зомби ночью');
+  h.now += 10 * 60000; die('zombie', 'ночь');
+  assert.strictEqual(h.cases('pending').length, 0, 'повтор смерти от моба при существующем счёте — кодом');
+  assert.strictEqual(h.accounts().death_zombie_night.postings.length, 2);
+  assert.strictEqual(h.accounts().death_zombie_night.postings[1].min, 30);
+  h.now += 10 * 60000; die('zombie', 'день');
+  assert.strictEqual(h.cases('pending').length, 1, 'другая фаза — другой вид, новый → модели'); t = T.take(h.cfg); T.finish(h.cfg, t.id, 'crash');
+  h.post('death_eblanitus228_night', 'не должен сработать'); h.now += 10 * 60000; die('eblanitus228', 'ночь');
+  assert(h.cases('pending').length >= 1, 'игрока не разбирает код даже при счёте');
+  // вид, разобранный моделью, дальше идёт кодом на счёт модели (даже если она назвала счёт по-своему)
+  h = harness();
+  h.ev({ id: 400, type: 'death', cause: 'skeleton', message: 'x', phase: 'ночь' }); h.now += 100000; h.scan();
+  t = T.take(h.cfg); assert.strictEqual(t.type, 'death');
+  fs.mkdirSync(path.join(h.D.dataDir, 'teacher'), { recursive: true });
+  fs.writeFileSync(path.join(h.D.dataDir, 'teacher', path.basename(JSON.parse(fs.readFileSync(path.join(h.D.dataDir, 'teacher_cases', t.id + '.json'), 'utf8')).report)), '# смерть\nВердикт: код — стрелки\nПроводка: escape_arrows | не уходит от стрел | behavior | 20 | events.log #400\n');
+  assert.strictEqual(T.finish(h.cfg, t.id, 'ok').status, 'done');
+  h.now += 10 * 60000; h.ev({ id: 401, type: 'death', cause: 'skeleton', message: 'x', phase: 'ночь' }); h.now += 100000; h.scan();
+  assert.strictEqual(h.cases('pending').length, 0, 'повтор вида, который уже разбирала модель, — кодом');
+  assert.strictEqual(h.accounts().escape_arrows.postings.length, 2, 'на счёт модели');
+  // хозяин и счёт — всегда моделям
+  h.ev({ id: 410, type: 'chat', from: 'eblanitus228', text: 'ягоды можно есть' }); h.mature();
+  assert.strictEqual(h.cases('pending').length, 1); assert.strictEqual(T.take(h.cfg).type, 'owner');
+
+  // --- простой: счёт по причине (по последнему понятному провалу); счёт есть — кодом, нет — моделям
+  h = harness();
+  const idle = (min, reasonFail) => { if (reasonFail) h.ev({ id: 500 + ++h.n, type: 'task_failed', name: 'build_blueprint', reason: reasonFail }); h.now += 1000; h.ev({ id: 600 + ++h.n, type: 'progress_idle', min }); h.now += 100000; h.scan(); };
+  idle(30, 'не достроено: 20 из 176; нет в инвентаре: cobblestone');
+  assert.strictEqual(h.cases('pending').length, 1, 'причина простоя ясна, но счёта нет — модели');
+  assert.strictEqual(h.st().cases[0].items[0].d.reason, 'materials');
+  t = T.take(h.cfg); T.finish(h.cfg, t.id, 'crash');
+  h.post('idle_materials', 'простой: нет материалов');
+  h.now += 61 * 60000; idle(30, 'не достроено: 20 из 176; не хватило: cobblestone ×8');
+  assert.strictEqual(h.cases('pending').length, 0, 'простой при существующем счёте — кодом');
+  assert.strictEqual(h.accounts().idle_materials.postings.length, 2);
+  h.now += 61 * 60000; h.ev({ id: 700, type: 'progress_idle', min: 40 }); h.now += 5 * 3600000; h.scan();   // причины нет (провалы давно) — модели
+  assert.strictEqual(h.cases('pending').length, 1, 'простой без понятной причины — модели');
+  console.log('teacher code resolve: OK');
+}
+
+// бюджет запусков: 6 в час и 40 в сутки; хозяин и счёт мимо часового предела
+function testBudget() {
+  let h = harness();
+  const cycle = (cause) => { h.ev({ id: 800 + ++h.n, type: 'death', cause, message: 'x', phase: 'день' }); h.now += 100000; h.scan(); return T.take(h.cfg); };
+  for (let i = 0; i < 6; i++) { const t = cycle('player' + i); assert.strictEqual(t.type, 'death', 'запуск ' + (i + 1)); T.finish(h.cfg, t.id, 'crash'); }
+  const t7 = cycle('player7');
+  assert(t7.none && t7.budget === 'hour' && t7.retryAt > h.now, JSON.stringify(t7));
+  assert.strictEqual(t7.retryAt, h.st().launches[0].t + 3600000, 'retryAt — когда уйдёт самый старый запуск');
+  assert.strictEqual(T.budgetCheck(h.cfg).over, true);
+  // хозяин и счёт — мимо часового предела
+  h.ev({ id: 900, type: 'chat', from: 'eblanitus228', text: 'привет, покажи постройку' }); h.now += 100000; h.scan();
+  const o = T.take(h.cfg); assert.strictEqual(o.type, 'owner', 'хозяин мимо часового предела'); T.finish(h.cfg, o.id, 'crash');
+  assert.strictEqual(T.take(h.cfg).budget, 'hour', 'остальные ждут');
+  // час прошёл — снова можно (запуски хозяина часовой счёт не засоряют)
+  h.now += 3600000; assert.strictEqual(T.budgetCheck(h.cfg).over, false);
+  const t8 = T.take(h.cfg); assert.strictEqual(t8.type, 'death'); T.finish(h.cfg, t8.id, 'crash');
+  // помощник считается в том же бюджете
+  const nb = T.budgetCheck(h.cfg).hour; T.noteHelper(h.cfg); assert.strictEqual(T.budgetCheck(h.cfg).hour, nb + 1);
+
+  // сутки: 40 запусков на всех, хозяин тоже
+  h = harness();
+  h.cfg.limits = { HOUR_LIMIT: 1000 };
+  for (let i = 0; i < 40; i++) { const t = cycle('p' + i); assert.strictEqual(t.type, 'death', 'запуск ' + (i + 1)); T.finish(h.cfg, t.id, 'crash'); }
+  const d41 = cycle('p41'); assert(d41.none && d41.budget === 'day' && d41.retryAt > h.now, JSON.stringify(d41));
+  h.ev({ id: 950, type: 'chat', from: 'eblanitus228', text: 'ещё одно сообщение' }); h.now += 100000; h.scan();
+  assert.strictEqual(T.take(h.cfg).budget, 'day', 'суточный предел — и для хозяина');
+  h.now += 24 * 3600000; h.scan(); assert.strictEqual(T.take(h.cfg).type, 'owner', 'через сутки бюджет свободен');
+  // пустая очередь без бюджета — просто none
+  h = harness(); const e = T.take(h.cfg); assert(e.none && !e.budget);
+  // CLI знает budget / note
+  const out = require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'lib', 'teacher_triggers.js'), 'nope']).toString();
+  assert(/budget/.test(JSON.parse(out).error) && /note/.test(JSON.parse(out).error), 'CLI знает budget и note');
+  console.log('teacher budget: OK');
 }
 
 function testHelpers() {
@@ -264,6 +470,8 @@ module.exports = async function () {
   const D = testQueue();
   testNeighbor();
   testIdle();
+  testCodeResolve();
+  testBudget();
   await testAudit(D);
   await testConfigs();
 };

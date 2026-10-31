@@ -51,6 +51,8 @@ const AG = L('aggressors');
 const vision = L('vision');
 const { parseGoal, parseBuild, parseBase, baseTravel } = L('basegoal');
 const T = require('./thresholds');
+const PL = require('./plan');   // v0.3 очередь «## План» в notes.md (шаг 3): работа без мозга
+const SW = L('switches');       // пульт: включён ли мозг (data/switches.json)
 const D = L('danger');
 
 const RUNNER = (process.env.RUNNER_URL || 'http://127.0.0.1:3200').replace(/\/+$/, '');
@@ -81,12 +83,124 @@ const normReason = r => String(r || '').toLowerCase().replace(/[0-9]+/g, '').rep
 // вниз копать нельзя: пустота (пещера), лава, вода — укрытие только стенами, блоки в пустоту не ставим
 const NO_DIG = /пустота|пещера|нельзя копать|копать негде|лава|вода/i;
 // своё дело автопилота, которое безопасность бросает при мобе рядом (behavior_autopilot_collect_dusk)
-const WORK_KEYS = new Set(['collect_stone', 'collect_log', 'night_dirt', 'build', 'build_go', 'build_gather', 'goal', 'explore', 'day_routine', 'go_base', 'night_collect']);
+const WORK_KEYS = new Set(['collect_stone', 'collect_log', 'night_dirt', 'build', 'build_go', 'build_gather', 'goal', 'explore', 'day_routine', 'go_base', 'night_collect',
+  'hunt_stock', 'food_spot', 'food_explore', 'cook', 'bread', 'surface', 'surface_stairs', // v0.3 еда: охота впрок, поход к животным, жарка, подъём
+  'fish', 'fish_go', 'fish_ice', 'craft_rod', 'food_village', 'vh_wheat', 'vh_carrot', 'vh_potato', 'farm', // v0.3 еда, этап 2: рыбалка, деревня, ферма
+  'bed_craft', 'bed_wool', 'bed_home', 'light_base']); // v0.3 ночь у базы (шаг 6): кровать (крафт, шерсть, постановка у базы), факелы на закате
 // провал добора не потому, что материала нет, а потому что муху отвлекли (рефлекс, мозг, связь) — добор продолжаем
 const GATHER_INTERRUPT = /вытеснен|прерван|POST \/abort|отключ|уступка мозгу|занят навыком|смерть/i;
-const NOTES = path.join(process.env.FLYBOT_CORE || path.join(__dirname, '..'), 'brain', 'notes.md');
+const CORE_DIR = process.env.FLYBOT_CORE || path.join(__dirname, '..');
+const NOTES = path.join(CORE_DIR, 'brain', 'notes.md');
+const BLUEPRINTS = path.join(CORE_DIR, 'brain', 'blueprints');
+const PLAN_FILE = path.join(CORE_DIR, 'data', 'autopilot_plan.json'); // память пунктов очереди (вне git)
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const MOD = {}; // метка этой версии модуля: после перезагрузки поведения автопилот создаётся заново
+
+// ---------- v0.3 инструменты: кирка, меч, лопата, топор (шаг 2) ----------
+// Чистые функции (проверяются без бота). k — набор из gather(): {pickaxe, sword, shovel, axe: ранг лучшего (0 — нет; 1 дерево/золото,
+// 2 камень/медь, 3 железо, 4 алмаз, 5 незерит), planks, sticks, logs (брёвна), cobble, table (верстак в сумке или рядом)}.
+const TOOL_TIER = { wooden: 1, golden: 1, stone: 2, copper: 2, iron: 3, diamond: 4, netherite: 5 };
+const TOOL_KINDS = ['pickaxe', 'sword', 'shovel', 'axe'];
+const TOOL_KEY = { pickaxe: 'craft_pick', sword: 'craft_sword', shovel: 'craft_shovel', axe: 'craft_axe' };
+const TOOL_RU = { pickaxe: 'кирка', sword: 'меч', shovel: 'лопата', axe: 'топор' };
+// цена инструмента: n — досок (деревянный) или булыжника (каменный), s — палок; каменный и деревянный стоят одинаково
+const TOOL_COST = { pickaxe: { n: 3, s: 2 }, sword: { n: 2, s: 1 }, shovel: { n: 1, s: 2 }, axe: { n: 3, s: 2 } };
+const TOOL_UPGRADE = new Set(['pickaxe', 'sword']); // деревянные кирку и меч меняем на каменные; лопату и топор — только если их нет
+// ранги инструментов в сумке: берём лучший каждого вида
+function toolTiers(items) {
+  const out = { pickaxe: 0, sword: 0, shovel: 0, axe: 0 };
+  for (const i of items || []) {
+    const m = /^(\w+)_(pickaxe|sword|shovel|axe)$/.exec(i.name);
+    if (m && TOOL_TIER[m[1]] > out[m[2]]) out[m[2]] = TOOL_TIER[m[1]];
+  }
+  return out;
+}
+// хватает ли материала на инструмент kind из mat ('stone' | 'wooden'): палки из досок (2 доски → 4 палки), верстак (4 доски), брёвна → доски
+function toolFeasible(k, kind, mat) {
+  const c = TOOL_COST[kind];
+  if (mat === 'stone' && (k.cobble || 0) < c.n) return false;
+  const planks = Math.ceil(Math.max(0, c.s - (k.sticks || 0)) / 4) * 2 + (mat === 'wooden' ? c.n : 0) + (k.table ? 0 : 4);
+  return (k.planks || 0) + 4 * (k.logs || 0) >= planks;
+}
+// что сделать из недостающего, по порядку важности (кирка, меч, лопата, топор): [{kind, item, tier, upgrade}]; каменный — если хватает булыжника
+function toolNext(k) {
+  const out = [];
+  for (const kind of TOOL_KINDS) {
+    const tier = k[kind] || 0;
+    if (tier >= 2 || (tier > 0 && !TOOL_UPGRADE.has(kind))) continue;
+    if (toolFeasible(k, kind, 'stone')) out.push({ kind, item: 'stone_' + kind, tier, upgrade: tier > 0 });
+    else if (tier === 0 && toolFeasible(k, kind, 'wooden')) out.push({ kind, item: 'wooden_' + kind, tier, upgrade: false });
+  }
+  return out;
+}
+// v0.3 еда, этап 2: хватает ли материала. k — s.tools (+ string): палки из досок (2 доски → 4 палки), верстак (4 доски), брёвна → доски
+// удочка: 3 палки + rodString нитей (нить — только с пауков: нет — ветку рыбалки пропускаем)
+function rodFeasible(k) {
+  const planks = Math.ceil(Math.max(0, 3 - (k.sticks || 0)) / 4) * 2 + (k.table ? 0 : 4);
+  return (k.string || 0) >= T.rodString && (k.planks || 0) + 4 * (k.logs || 0) >= planks;
+}
+// мотыга (farm_plot крафтит деревянную): 2 палки + 2 доски
+function hoeFeasible(k) {
+  const planks = Math.ceil(Math.max(0, 2 - (k.sticks || 0)) / 4) * 2 + 2 + (k.table ? 0 : 4);
+  return (k.planks || 0) + 4 * (k.logs || 0) >= planks;
+}
+// вода под ферму: из кандидатов памяти мира (ближние первыми, у каждого at=[x,y,z]) — только на уровне базы (farm_plot ищет воду у поверхности
+// в survey от y−4 до y+3 вокруг себя, речка на дне каньона ему невидима) и не из «неподходящих» точек (farmBad: [{x,z,t}] после провала фермы)
+function farmWaterPick(cands, base, bad, now) {
+  const by = base && Number.isFinite(base.y) ? base.y : null;
+  const old = b => now - b.t < T.farmBadMin * 60000;
+  for (const c of cands || []) {
+    if (!c || !c.at) continue;
+    if (by != null && Math.abs(c.at[1] - by) > T.farmWaterDy) continue;
+    if ((bad || []).some(b => old(b) && Math.hypot(b.x - c.at[0], b.z - c.at[2]) <= T.farmBadR)) continue;
+    return { x: c.at[0], z: c.at[2] };
+  }
+  return null;
+}
+// какой инструмент нужен для добычи блока/предмета (по имени), null — рукой нормально
+const TOOL_PICK_RE = /(^|_)(stone|cobblestone|cobbled_deepslate|deepslate|andesite|diorite|granite|tuff|blackstone|sandstone|netherrack|basalt|obsidian|calcite|bricks?)$|_ore$|^(coal|raw_iron|raw_copper|raw_gold|iron|copper|gold|diamond|redstone|lapis_lazuli|emerald|quartz)$/;
+const TOOL_SHOVEL_RE = /^(dirt|grass_block|coarse_dirt|podzol|mycelium|rooted_dirt|mud|clay|sand|red_sand|gravel|soul_sand|soul_soil|snow|snow_block|dirt_path|farmland)$/;
+const TOOL_AXE_RE = /^(log|wood)$|_(log|wood|stem|hyphae)$/;
+function toolFor(name) {
+  const n = String(name || '').replace(/^minecraft:/, '').toLowerCase();
+  if (!n || /_(pickaxe|sword|shovel|axe|hoe)$/.test(n)) return null;
+  if (TOOL_SHOVEL_RE.test(n)) return 'shovel';
+  if (TOOL_AXE_RE.test(n)) return 'axe';
+  if (TOOL_PICK_RE.test(n)) return 'pickaxe';
+  return null;
+}
+// какие инструменты нужны делу автопилота: collect (block) или gather_list (items: «cobblestone:20,dirt:5» / объект / массив)
+function toolsForAct(act) {
+  if (!act || !act.params) return [];
+  const p = act.params;
+  let names = [];
+  if (act.name === 'collect') names = [p.block || p.type || p.name];
+  else if (act.name === 'gather_list') {
+    let it = p.items;
+    if (typeof it === 'string' && /^\s*[\[{]/.test(it)) { try { it = JSON.parse(it); } catch (e) {} }
+    if (typeof it === 'string') names = it.split(',').map(x => x.split(':')[0].trim());
+    else if (Array.isArray(it)) names = it.map(x => (x && typeof x === 'object' ? x.name || x.item : x));
+    else if (it && typeof it === 'object') names = Object.keys(it);
+  }
+  const kinds = new Set(names.map(toolFor).filter(Boolean));
+  return ['pickaxe', 'shovel', 'axe'].filter(x => kinds.has(x));
+}
+
+// какие выученные навыки исполнитель сейчас не даст запустить: {off:{имя:причина}, known:[имена]} или null (список не получен).
+// Выключенный авто из-за прерываний (POST /abort, уступка мозгу) сюда не входит: его возвращает в работу finish() (reenable) —
+// иначе он остался бы выключенным навсегда. known пуст — исполнитель не отдал список: «не найден» по нему не судим.
+function skillGate(list) {
+  if (!Array.isArray(list)) return null;
+  const off = {};
+  for (const x of list) {
+    if (!x || !x.name || x.enabled !== false) continue;
+    const reason = String(x.disabledReason || 'вручную');
+    if (/^авто:/.test(reason) && INTERRUPT_ERR.test(reason)) continue;
+    off[x.name] = reason;
+  }
+  const known = list.filter(x => x && x.name).map(x => x.name);
+  return { off, known: known.length ? known : null };
+}
 
 // ---------- Решение (чистая функция) ----------
 // А: «мало HP» по последствию (lib/danger.js outlook в s.outlook): бой проигран и, не отбиваясь, муха умрёт раньше apReactSec
@@ -123,7 +237,9 @@ function lowHpOf(s) {
 //     outlook (А, lib/danger.js outlook: {win, ttdSec, passiveTtdSec, hitsToDie, mobs…}; нет — пороги HP),
 //     idleBuildMin (v0.2: минуты без блока стройки; нет поля — давления нет, всё как раньше),
 //     build:{name,x,y,z,rot,sig,need:{предмет:n}|null}|null (v0.2: «Постройка:» в работе — не готова и не на паузе),
-//     buildDist (горизонтальная дистанция до места постройки)}
+//     buildDist (горизонтальная дистанция до места постройки)
+//     tools (v0.3 инструменты: набор для toolNext — ранги кирки/меча/лопаты/топора, доски, палки, брёвна, булыжник, верстак; нет поля — не крафтим),
+//     skillOff {навык:причина} и skillKnown [имена] (выученные навыки: выключенный/не найденный decide не предлагает; нет полей — как раньше)}
 // -> null | {key, kind:'body'|'learned', name, params, why, preempt?, score?, others?} (score/others — В: счёт выбранного дела и следующих)
 function decide(s) {
   if (!s.on) return null;
@@ -141,7 +257,9 @@ function decide(s) {
   const body = (key, name, params, why, preempt) => ({ key, kind: 'body', name, params: params || {}, why, ...(preempt ? { preempt: true } : {}) });
   const crashed = s.crashed || {};
   // навык, упавший со сбоем кода, автопилот не повторяет: тот же вызов упадёт так же — ждём правки от мозга
-  const learned = (key, name, params, why) => (crashed[name] ? null : { key, kind: 'learned', name, params: params || {}, why });
+  // выключенный (или не найденный) у исполнителя навык не предлагаем вовсе — иначе «навык выключен» каждые 2–60 с (night_mine ×60)
+  const skillGone = name => !!(s.skillOff && s.skillOff[name]) || (Array.isArray(s.skillKnown) && s.skillKnown.length > 0 && !s.skillKnown.includes(name));
+  const learned = (key, name, params, why) => (crashed[name] || skillGone(name) ? null : { key, kind: 'learned', name, params: params || {}, why });
 
   // L052 (смерть 23): ночная защита, когда моб в hostileR или по муху били — те же варианты, что у рефлекса
   // (behavior/reflexes.js defensePrior): бой с оружием (HP в норме) → укрытие стенами (НЕ яма — копка ямы
@@ -199,7 +317,8 @@ function decide(s) {
   // тело защите (бой/стены/отход); пока мозг командовал недавно — не отбираем (мозг главнее, L013)
   const nightSoon = s.isNight || s.nightIn < T.nightSoonSec;
   // behavior_reflexes_mob_near: крипер у порога прерывает ожидание и на рассвете (там nightSoon уже false)
-  if (run === 'wait_night' && s.idle && ((nightSoon && (s.hostilesNear > 0 || s.hitRecent)) || creeperClose())) {
+  // v0.3 ночь у базы: то же для сна (sleep) — моб подошёл или ударил, пока ложилась/спала: просыпаемся и защищаемся
+  if ((run === 'wait_night' || run === 'sleep') && s.idle && ((nightSoon && (s.hostilesNear > 0 || s.hitRecent)) || creeperClose())) {
     const a = nightDefense(true);
     if (a) return a;
   }
@@ -221,33 +340,101 @@ function decide(s) {
     const why = `продолжаю цель мозга: ${g.name}${Object.keys(g.params).length ? ' ' + JSON.stringify(g.params) : ''}${press ? ` (простой ${Math.round(idleMin)} мин)` : ''}`;
     return g.kind === 'learned' ? learned('goal', g.name, g.params, why) : body('goal', g.name, g.params, why); // упала со сбоем кода — её нет
   };
-// v0.2 постройка: не хватает материала — добор до ИТОГА (need из ответа build_blueprint); далеко — к месту; иначе — строю по чертежу
+// v0.3 постройка шагами (behavior_autopilot_build_step): не «добрать весь список 101 и построить», а ставить то,
+// что есть (build_partial: пол/стены раньше крыши), и добирать ШАГ (<= buildStepItems каждого вида), пока не достроим.
   const buildAct = () => {
     const tail = press ? ` (простой ${Math.round(idleMin)} мин)` : '';
     const need = b.need && Object.keys(b.need).length ? b.need : null;
-    // ночью добор не начинаем только при угрозе (моб рядом, удары); behavior_reflexes_shelter_no_mobs: ночь без мобов —
-    // добор вместо «жду утра» (ночная работа и так только у базы — гейт atBase ниже)
+    const have = b.have || {};
+    // в сумке есть хоть что-то из материала постройки (have — из итога build_blueprint/gather_list) — ставим это частью
+    const haveAny = need ? Object.values(have).some(n => (Number(n) || 0) > 0) : false;
+    // камень без кирки не доберём («нужен инструмент для stone» — 49 с впустую): пусть день сначала даст кирку
+    const stoneNeed = need ? Object.keys(need).some(k => /cobble|stone|deepslate|andesite|diorite|granite|tuff|blackstone/.test(k)) : false;
+    // ночью добор/стройку не начинаем только при угрозе (моб рядом, удары); ночь без мобов — работа у базы
     if (need && (s.isNight || (s.nightIn != null && s.nightIn < T.nightSoonSec)) && (s.hostilesNear > 0 || s.hitRecent)) {
       return null;
     }
     // behavior_autopilot_build_gather (дыра 2): здесь добор уже ничего не дал (материала физически нет — пещера, 160 м
-    // от места) — сначала к месту постройки, добираем там, а не тот же gather_list с того же места
+    // от места) — сначала к месту постройки, добираем/ставим там, а не тот же gather_list с того же места
     if (need && b.gatherAway && s.buildDist != null && s.buildDist > T.buildNearDist)
       return body('build_go', 'goto', { x: b.x, y: b.y, z: b.z, r: T.buildNearDist / 2, timeout: T.baseTimeoutSec, label: 'к постройке', fail: 'до постройки не дошла', priority: true },
         `материала для ${b.name} тут нет — иду к постройке (${Math.round(s.buildDist)} м), доберу там${tail}`);
+    // есть чем ставить — ставим часть (build_partial), а не копим материал на весь список
+    if (need && haveAny && !b.partialStuck) {
+      const has = Object.entries(have).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
+      return learned('build_partial', 'build_partial_v1', { blueprint: b.name, x: b.x, y: b.y, z: b.z, rot: b.rot },
+        `постройка ${b.name}: ставлю, что есть (${has}) — осталось добрать ${lackStr(need)}${tail}`);
+    }
+    // без кирки камень не доберём — не тратим заход: день сначала collect_log → craft_pickaxe
+    if (need && stoneNeed && !s.hasPickaxe) return null;
     if (need) {
       const items = Object.entries(need).map(([k, n]) => `${k}:${n}`).join(',');
-      return learned('build_gather', 'gather_list', { items, max_sec: T.buildGatherSec }, `добираю для постройки ${b.name}: ${items.replace(/,/g, ', ')}${tail}`);
+      return learned('build_gather', 'gather_list', { items, max_sec: T.buildGatherSec }, `добираю шагом для постройки ${b.name}: ${items.replace(/,/g, ', ')}${tail}`);
     }
     if (s.buildDist != null && s.buildDist > T.buildNearDist)
       return body('build_go', 'goto', { x: b.x, y: b.y, z: b.z, r: T.buildNearDist / 2, timeout: T.baseTimeoutSec, label: 'к постройке', fail: 'до постройки не дошла', priority: true }, `иду к постройке ${b.name} (${Math.round(s.buildDist)} м)${tail}`);
     return body('build', 'build_blueprint', { name: b.name, x: b.x, y: b.y, z: b.z, rot: b.rot }, `строю ${b.name} у ${b.x} ${b.y} ${b.z}${b.rot ? ' rot=' + b.rot : ''}${tail}`);
   };
-  const job = b ? buildAct : g ? goalAct : null; // дело от мозга: постройка или старая цель
+  // ---- v0.3 инструменты (шаг 2): кирка, меч, лопата, топор — сделать, когда материал есть (верстак и палки тело делает само, craft) ----
+  // Дело, которому нужен инструмент (collect/gather_list: камень/руда — кирка, земля/песок/гравий — лопата, брёвна — топор), не начинаем
+  // без него: если материал есть — сначала крафт. Кирки нет и сделать не из чего — дело не берём (рукой камень не долбим: 51 провал
+  // «нужен инструмент для stone»), день даст дерево (collect_log). Лопата и топор — желательны: не сделать — дело идёт как раньше.
+  const tk = s.tools || null;
+  const toolHave = () => `есть: булыжник ${tk.cobble || 0}, доски ${tk.planks || 0}, палки ${tk.sticks || 0}, брёвна ${tk.logs || 0}`;
+  const toolActs = () => (!tk || workBan ? [] : toolNext(tk).map(c => ({ ...c,
+    act: body(TOOL_KEY[c.kind], 'craft', { item: c.item }, `${c.upgrade ? 'улучшаю' : 'делаю'} ${TOOL_RU[c.kind]} (${c.item}); ${toolHave()}`) })).filter(c => ok(c.act.key)));
+  const withTool = act => {
+    if (!tk || !act) return act;
+    for (const kind of toolsForAct(act)) {
+      if ((tk[kind] || 0) > 0) continue;
+      const c = toolNext(tk).find(x => x.kind === kind);
+      if (c && ok(TOOL_KEY[kind])) return body(TOOL_KEY[kind], 'craft', { item: c.item }, `перед «${act.key}» нет инструмента (${TOOL_RU[kind]}) — сначала ${c.item}; ${toolHave()}`);
+      if (kind === 'pickaxe') return null;
+    }
+    return act;
+  };
+  const job0 = b ? buildAct : g ? goalAct : null; // дело от мозга: постройка или старая цель
+  const job = job0 ? () => withTool(job0()) : null;
   const inBase = (x, z) => Math.hypot(x - s.base.x, z - s.base.z) <= s.base.r;
   const gp = b ? { x: b.x, z: b.z } : g && g.params || {};
   const atBase = !!(s.base && s.baseDist != null && s.baseDist <= s.base.r &&
     !(Number.isFinite(gp.x) && Number.isFinite(gp.z) && !inBase(gp.x, gp.z))); // ночная стройка — у базы, не в поле
+  // ---- v0.3 ночь у базы (шаг 6): кровать (точка возрождения и сон), свет на закате ----
+  // nearBase — просто муха в радиусе «База:» (atBase выше ещё требует, чтобы точка цели тоже была у базы)
+  const nearBase = !!(s.base && s.baseDist != null && s.baseDist <= s.base.r);
+  const bedItems = Number(s.bedItem) || 0;                       // кроватей в сумке
+  const bedPlaced = !!s.bedHome || (nearBase && !!s.freeBed);    // своя кровать у базы: запомненная (поставила bring_bed_home) или видна рядом
+  const woodEq = tk ? (tk.planks || 0) + 4 * (tk.logs || 0) : 0; // досок-эквивалент (брёвна -> доски)
+  const woolN = Number(s.wool) || 0;                             // шерсти одного цвета (лучший цвет)
+  // кровать: шерсть есть — крафт (3 шерсти + 3 доски, верстак ещё 4 доски); шерсти нет, а овцы рядом — make_bed (стрижёт ножницами или бьёт овец);
+  // кровать в сумке и муха у базы — поставить у базы (bring_bed_home), ночью sleep сам ставит кровать из сумки, если дома не успела
+  const bedActs = duskSoon => {
+    const out = [];
+    if (workBan || threat) return out;
+    if (bedItems === 0 && !bedPlaced && tk && woodEq >= 3 + (tk.table ? 0 : 4)) {
+      if (woolN >= T.bedWool && s.woolColor)
+        out.push([T.apBedCraft, body('bed_craft', 'craft', { item: `${s.woolColor}_bed` }, `делаю кровать (${s.woolColor}_bed): шерсти ${woolN}, досок ${woodEq} в пересчёте — точка возрождения и сон у базы`)]);
+      else if (woolN < T.bedWool && (Number(s.sheep) || 0) > 0 && !duskSoon)
+        out.push([T.apBedWool, learned('bed_wool', 'make_bed', { max_sec: T.bedWoolSec },
+          `нужна кровать: шерсти ${woolN} из ${T.bedWool}, овцы рядом (${s.sheep}) — ${s.shears ? 'стригу' : 'охочусь на овец'} (make_bed)`)]);
+    }
+    if (bedItems > 0 && !bedPlaced && nearBase && s.base && Number.isFinite(s.base.y))
+      out.push([T.apBedPlace, learned('bed_home', 'bring_bed_home', { x: s.base.x, y: s.base.y, z: s.base.z, place: 1, max_sec: T.bedHomeSec },
+        'кровать в сумке, я у базы — ставлю её у базы (точка возрождения)')]);
+    return out;
+  };
+  // факелы вокруг базы на закате: свои факелы или уголь на них (запас lightCoalKeep остаётся печи), не чаще lightRepeatMin
+  const torchN = Number(s.torches) || 0, coalN = Number(s.coal) || 0;
+  const sticksEq = tk ? (tk.sticks || 0) + 2 * Math.floor(woodEq / 2) : 0; // палки: свои + из досок (как считает light_base)
+  const torchCan = torchN + 4 * Math.min(Math.max(0, coalN - T.lightCoalKeep), sticksEq);
+  const lightAct = () => {
+    if (workBan || threat || !nearBase || s.isNight || s.nightIn == null || s.nightIn >= T.lightDuskSec) return null;
+    if (torchCan < T.lightMinTorches) return null;
+    if (s.lightSinceMin != null && s.lightSinceMin < T.lightRepeatMin) return null;
+    return learned('light_base', 'light_base', { x: s.base.x, y: s.base.y, z: s.base.z, r: Math.max(6, Math.min(T.lightRadius, s.base.r)), step: T.lightStep,
+      max: Math.min(T.lightMax, torchCan), max_sec: T.lightMaxSec },
+      `закат (до ночи ${s.nightIn} с): расставляю факелы вокруг базы (факелов ${torchN}${coalN ? `, угля ${coalN}` : ''})`);
+  };
   // идущий wait_night: простой давно, угрозы нет, у базы — будим ради цели (после угроз и go_base_escape, мозг молчит)
   if (run === 'wait_night' && s.idle && job && !workBan && atBase && !threat && idleMin >= T.idleBreakWaitMin && !lowHpOf(s)
       && !(s.inLava || s.suffocating || s.stuck || s.underWater)) {
@@ -287,6 +474,79 @@ function decide(s) {
       ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec, priority: true }, why + ' (go_safe)')
       : body('go_base', 'goto', { x: s.base.x, y: s.base.y, z: s.base.z, r: s.base.r, timeout: T.baseTimeoutSec, priority: true }, why))
     : null);
+  // ---- v0.3 еда, этап 1: муха сама добывает еду, а не сидит с HP 2 без регенерации (сытость < 18) ----
+  const fiF = s.failInfo || {};
+  const triedF = k => (fiF[k] ? fiF[k].count || 0 : 0);
+  // под землёй — наверх: в пещере ни животных, ни дерева (113 раз «не вижу log», 257 раз «путь…» у explore).
+  // climb_up; дважды не вышел (или упал со сбоем кода) — climb_stairs; оба не вышли — null (дальше другие способы)
+  const surfaceAct = why => {
+    if (!s.underground) return null;
+    const y = Math.round(s.surfaceY != null ? s.surfaceY : 64);
+    const a = triedF('surface') < T.failSameCount && ok('surface') ? learned('surface', 'climb_up', { y, max_sec: T.surfaceSec }, why + ' (climb_up)') : null;
+    if (a) return a;
+    return triedF('surface_stairs') < T.failSameCount && ok('surface_stairs') ? learned('surface_stairs', 'climb_stairs', { target_y: y }, why + ' (climb_stairs)') : null;
+  };
+  // туда, где недавно видела животных (память поведения: s.animalSpot), не дальше maxD
+  const spotAct = (why, maxD) => {
+    const sp = s.animalSpot;
+    if (!sp || sp.d > (maxD || T.foodSpotMaxDist) || !ok('food_spot')) return null;
+    return body('food_spot', 'goto', { x: sp.x, y: sp.y, z: sp.z, r: 8, timeout: 180, label: 'к животным', fail: 'до места с животными не дошла' },
+      `${why} — иду туда, где видела животных (${Math.round(sp.d)} м, ${sp.ago} мин назад)`);
+  };
+  // ---- v0.3 еда, этап 2: рыбалка (удочка; вода подо льдом — сначала лёд) и деревня из памяти мира ----
+  const fv = s.fish || null, wat = s.water || null;  // fv: {open, ice:{x,y,z}|null} (есть удочка), wat: ближайшая вода {x,y,z,d}
+  const fishOpen = fv ? !!fv.open : !!(wat && wat.d <= T.fishNearDist);
+  const fishAct = tag => {
+    if ((s.rod || 0) > 0) {
+      if (fishOpen && ok('fish')) {
+        const casts = Math.min(T.fishCasts, Math.max(3, T.foodStockWant + 1 - (Number(s.foodUnits) || 0))); // до запаса, не «до упора»
+        return body('fish', 'fish', { casts, max_sec: T.fishMaxSec }, `${tag} — рыбачу (до ${T.foodStockWant} еды или ${T.fishMaxSec} с)`);
+      }
+      if (!fishOpen && fv && fv.ice && ok('fish_ice')) // прорубь: ломаем блок льда над водой, дальше fish видит открытую воду
+        return body('fish_ice', 'dig_at', { x: fv.ice.x, y: fv.ice.y, z: fv.ice.z }, `${tag} — вода подо льдом: ломаю лёд (${fv.ice.x} ${fv.ice.y} ${fv.ice.z}), потом рыбачу`);
+      if (!fishOpen && wat && wat.d > T.fishNearDist && ok('fish_go'))
+        return body('fish_go', 'goto', { x: wat.x, y: wat.y, z: wat.z, r: 6, timeout: 150, label: 'к воде', fail: 'до воды не дошла' }, `${tag} — иду к воде (${wat.d} м) рыбачить`);
+      return null;
+    }
+    if (!wat && !fishOpen && !(fv && fv.ice)) return null; // воды нет — удочка ни к чему
+    if (rodFeasible({ ...(tk || {}), string: s.string }) && ok('craft_rod'))
+      return body('craft_rod', 'craft', { item: 'fishing_rod' }, `${tag} — делаю удочку (3 палки + ${T.rodString} нити), вода рядом`);
+    return null; // нити нет (она только с пауков) или нечего на палки — ветку пропускаем
+  };
+  const VIL = ['wheat', 'carrot', 'potato'];
+  const villageAct = tag => {
+    const v = s.village, vh = s.vhDone || {};
+    if (!v || VIL.every(c => vh[c])) return null; // деревни нет / всё уже пробовала (villageHarvestMin) — по кругу не ходим
+    if (v.d > T.villageHereDist) {
+      if (!ok('food_village') || (s.nightIn != null && s.nightIn < T.apDuskSec + v.d / T.villageSpeed)) return null; // до ночи не дойти
+      return body('food_village', 'goto', { x: v.x, y: v.y, z: v.z, r: 10, timeout: 240, label: 'в деревню', fail: 'до деревни не дошла' },
+        `${tag} — иду в деревню из памяти (${v.d} м): созревшие грядки; жителей не трогаю`);
+    }
+    for (const c of VIL) if (!vh[c] && ok('vh_' + c))
+      return body('vh_' + c, 'harvest', { crop: c, radius: T.villageHarvestR, replant: true }, `${tag} — в деревне собираю созревшее: ${c}`);
+    return null;
+  };
+  // поиск еды по порядку: животные рядом → наверх из пещеры → место, где были животные → рыбалка → деревня из памяти → база → поле (explore шире с каждым провалом).
+  // nearOnly (ночь) — только ближнее: охота рядом, подъём, место с животными в foodSpotNightDist; в поле ночью не идём
+  const foodQuest = (tag, nearOnly) => {
+    if (s.animals > 0 && ok('hunt')) return body('hunt', 'hunt', { count: T.huntCount }, `${tag} — охочусь (животные рядом, мобов нет)`);
+    const up = surfaceAct(`${tag} — под землёй еды нет, поднимаюсь наверх`); if (up) return up;
+    const sp = spotAct(tag, nearOnly ? T.foodSpotNightDist : T.foodSpotMaxDist); if (sp) return sp;
+    if (nearOnly) return null;
+    const fa = fishAct(tag); if (fa) return fa;
+    const va = villageAct(tag); if (va) return va;
+    const gb = goBase(`${tag} — иду на базу`); if (gb) return gb;
+    if (!ok('food_explore')) return null;
+    const d = Math.min(96, T.exploreDist + 24 * triedF('food_explore'));
+    return body('food_explore', 'explore', { distance: d }, `${tag} — ищу животных в поле (explore ${d} м)`);
+  };
+  // зомби рядом, оружие есть и бой по оценке выигран — гнилая плоть тоже еда (без оценки боя — не лезем)
+  const zombieFood = () => {
+    const zh = s.hostile;
+    if (!zh || !/^(zombie|husk|drowned|zombie_villager)$/.test(String(zh.name)) || !s.hasWeapon || !s.outlook || !s.outlook.win || !ok('food_zombie')) return null;
+    return body('food_zombie', 'fight', { target: String(zh.name).toLowerCase(), radius: T.fightRadius, flee_hp: Math.max(2, Math.min(T.apFleeHp, s.hp - 2)), timeout: T.apFightTimeout },
+      `HP ${s.hp}, сытость ${s.food}, еды нет — ${zh.name} (${zh.d} м) по силам: бью ради гнилой плоти`);
+  };
   if (lowHpOf(s)) {
     const dark = s.isNight || s.nightIn < T.nightSoonSec;   // ночью в поле не выходим: стены и ждать утра
     // «еле жива» — про настоящий низкий HP: крипер «убьёт одним взрывом» и при HP 20 (hitsToDie 1), это не повод ждать регенерацию
@@ -297,6 +557,14 @@ function decide(s) {
     const fi = s.failInfo || {};
     const bad = k => !!(fi[k] && fi[k].count >= T.failSameCount); // эта тактика уже провалилась одинаково
     const need = T.apLowHpBlocks;                 // блоков надо на стены укрытия
+    // v0.3 еда: регенерации нет (сытость < 18) и есть нечего — ждать бесполезно, HP не растёт (388 раз «жду N с из 120» с HP 2):
+    // зомби рядом и бой по оценке выигран — гнилая плоть тоже еда; угрозы нет — сразу за едой (ночью — только ближнее)
+    const starving = s.food < T.goBaseMinFood && !s.hasFood;
+    const zf = starving ? zombieFood() : null; if (zf) return zf;
+    if (starving && !threat && !(s.enemies && s.enemies.length)) { // враг-игрок рядом — из укрытия не выходим
+      const a = foodQuest(`мало HP (${s.hp}), сытость ${s.food}, еды нет — регенерации нет`, dark);
+      if (a) return a;
+    }
     if (danger && !s.sheltered) {
       // 1) лесенка (L003, не трогаем): блоки → укрытие. При crit наружу не ходим — только укрыться.
       if (!crit && s.blocks < need && !bad('lowhp_dirt') && ok('lowhp_dirt')) {
@@ -362,7 +630,7 @@ function decide(s) {
   const fiAll = s.failInfo || {};
   const tried = k => (fiAll[k] ? fiAll[k].count || 0 : 0);
   const cands = [];
-  const add = (score, act) => { if (act && ok(act.key)) cands.push({ score: score - T.apFailPenalty * tried(act.key), act }); };
+  const add = (score, act) => { act = withTool(act); if (act && ok(act.key)) cands.push({ score: score - T.apFailPenalty * tried(act.key), act }); };
   const wider = (k, r0) => Math.min(96, r0 + 24 * tried(k)); // повтор сбора — шире радиус
   const pick = () => {
     if (!cands.length) return null;
@@ -382,8 +650,16 @@ function decide(s) {
       if (s.hasPickaxe && s.hostilesNear === 0) add(Math.max(0, (calm ? 25 : 75) - press), body('night_shelter_dig', 'shelter', { mode: 'dig' }, calm ? 'ночь: дел нет — закапываюсь до утра' : `ночь, мало HP (${s.hp}): закапываюсь`));
       add(Math.max(0, (calm ? 25 : 70) - press), body('night_shelter', 'shelter', {}, calm ? 'ночь: дел нет — строю укрытие' : `ночь, мало HP (${s.hp}): строю укрытие`));
     }
-    if (s.phase === 'ночь' || s.phase === 'закат') add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью')); // упал со сбоем кода — его нет в выборе
-    if (s.isNight && s.freeBed) add(Math.max(0, 45 + (s.hp < 20 || s.food < T.huntFood ? 10 : 0) - press), body('sleep', 'sleep', {}, 'сплю в кровати')); // ранена или голодна — сон полезнее
+    if (s.phase === 'ночь' || s.phase === 'закат') add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью'));
+    // v0.3 инструменты: ночь спокойная (мобов нет, ударов нет) — вместо ожидания делаю недостающее (верстак тело ставит само)
+    if (calm && s.hostilesNear === 0) { const ta = toolActs()[0]; if (ta) add(T.apToolNight, ta.act); }
+    // v0.3 еда: регенерации нет и есть нечего, а животные рядом (мобов нет — иначе выше защита) — охота и ночью
+    if (!s.hasFood && s.food < T.eatRegenFood && s.hp < T.apFullHp && s.animals > 0) add(60, body('hunt', 'hunt', { count: T.huntCount }, `ночь, HP ${s.hp}, сытость ${s.food}, еды нет — охочусь рядом (мобов нет)`)); // упал со сбоем кода — его нет в выборе
+    // v0.3 ночь у базы: кровать в сумке и я у базы — sleep сам ставит её рядом и ложится (точка возрождения); выше укрытия и wait_night
+    if (s.isNight && (s.freeBed || (bedItems > 0 && nearBase)))
+      add(Math.max(0, (nearBase ? T.apSleepBase : 45) + (s.hp < 20 || s.food < T.huntFood ? 10 : 0) - press), body('sleep', 'sleep', {}, s.freeBed ? 'сплю в кровати' : 'сплю: ставлю кровать из сумки у базы')); // ранена или голодна — сон полезнее
+    // v0.3 ночь у базы: закат ещё не ночь (nightIn < nightSoonSec) — свет успеть до темноты; спокойно (мобов нет)
+    if (calm && s.hostilesNear === 0) { const la = lightAct(); if (la) add(T.apLight, la); }
     // v0.2: цель мозга ночью — только у базы (без «База:» или вне радиуса — нет: ночью в поле не строим)
 // Гейт: ночью с мобами рядом не начинаем дело — сначала укрытие/ожидание
     if (job && !workBan && atBase && s.hostilesNear === 0) add(50 + press, job());
@@ -428,14 +704,53 @@ function decide(s) {
   if (!workBan) add(35 - (s.nightIn != null && s.nightIn < T.dayRoutineSec ? 10 : 0), learned('day_routine', 'day_routine', { max_sec: T.dayRoutineSec }, 'дневная работа (day_routine)'));
   // голод: чем меньше сытость (а еды нет), тем важнее охота — голодная муха охотится раньше цели мозга
   if (s.food < T.huntFood && !s.hasFood && s.animals > 0) add(20 + (T.huntFood - s.food) * 3, body('hunt', 'hunt', { count: T.huntCount }, 'охочусь: нечего есть'));
+  // v0.3 еда (ловушка «HP 10 — здорова»): HP не полный, сытость < 18 и есть нечего — HP сам не вернётся: за едой раньше работы
+  const noRegen = s.hp < T.apFullHp && s.food < T.eatRegenFood && !s.hasFood;
+  if (noRegen && !workBan) add(30 + (T.eatRegenFood - s.food) * 3 + (T.apFullHp - s.hp) * 2, zombieFood() || foodQuest(`HP ${s.hp}, сытость ${s.food}, еды нет — без еды регенерации нет`, false));
+  // v0.3 запас еды: днём еды в сумке мало — охота впрок (ближе к закату важнее: ночью охоты нет); животных нет — к месту, где были
+  const units = Number(s.foodUnits) || 0;
+  const stockLow = s.foodUnits != null && units < T.foodStockWant;
+  const duskFood = s.nightIn != null && s.nightIn < T.foodStockDuskSec;
+  if (stockLow && !noRegen && !workBan) {
+    const sc = 28 + (duskFood ? 18 : 0) + (T.foodStockWant - units) * 2;
+    if (s.animals > 0) add(sc, body('hunt_stock', 'hunt', { count: T.huntCount }, `запас еды мал (${units}/${T.foodStockWant}) — охочусь впрок${duskFood ? ' до ночи' : ''}`));
+    else if (!duskSoon) add(sc - 12, spotAct(`запас еды мал (${units}/${T.foodStockWant})`));
+    // v0.3 еда, этап 2: животных рядом нет — рыбалка (удочка; нет — крафт, если есть нить), счёт выше рутины, когда еды совсем мало
+    if (s.animals === 0 && !duskSoon) add(sc - 2, fishAct(`запас еды мал (${units}/${T.foodStockWant})`));
+  }
+  // v0.3 жарка: сырое есть, топливо есть, печь рядом или булыжник на неё (тело ставит печь само) — smelt тела, без охоты
+  // (cook_food 0/8: звали без мяса — он охотился без животных рядом и падал за 0.1 с; раз — без топлива)
+  if (s.rawFood && s.fuel && (s.furnaceNear || s.cobble >= T.furnaceCobble) && !workBan)
+    add(30 + (stockLow ? 10 : 0) + (duskFood ? 6 : 0), body('cook', 'smelt', { item: s.rawFood.name, count: s.rawFood.count },
+      `жарю ${s.rawFood.name} ×${s.rawFood.count} (печь ${s.furnaceNear ? 'рядом' : 'поставлю из булыжника'})`));
+  // хлеб из пшеницы (craft тела)
+  if ((Number(s.wheat) || 0) >= T.breadWheat && !workBan)
+    add(24 + (stockLow ? 8 : 0), body('bread', 'craft', { item: 'bread', count: Math.floor(s.wheat / T.breadWheat) }, `пеку хлеб из пшеницы (${s.wheat})`));
+  // v0.3 ферма у базы (этап 2): база рядом, вода у базы, семена (wheat_seeds) и мотыга (или материал на неё) — выученный farm_plot
+  // (грядки у воды: вскопать, посадить; повторный вызов — собрать спелое и пересадить), потом каждые farmRevisitMin минут
+  if (!workBan && !duskSoon && s.base && s.baseDist != null && s.baseDist <= T.farmBaseDist) {
+    const fm = s.farm || null, spot = fm || s.farmWater || null, seeds = Number(s.seeds) || 0;
+    const canStart = !!fm || (seeds >= T.farmSeedsMin && (!!s.hoe || hoeFeasible(tk || {})));
+    if (spot && canStart && (!fm || fm.sinceMin >= T.farmRevisitMin))
+      add(T.farmScore + (stockLow ? 4 : 0), learned('farm', 'farm_plot', { x: spot.x, z: spot.z, size: T.farmSize, seed: 'wheat_seeds', max_sec: T.farmMaxSec },
+        fm ? `ферма у базы: проверяю урожай (${Math.round(fm.sinceMin)} мин) — собрать и пересадить` : `ферма у базы: семян ${seeds}, мотыга ${s.hoe ? 'есть' : 'сделаю'} — грядки у воды (${spot.x} ${spot.z})`));
+  }
   // золото: сначала собираем бревно, потом кнущим кирку, потом камень
   // когда нет кирки — сначала собрать logs, а не сразу идти к камню
   if (!s.hasPickaxe) {
     // gather_list_alt_seek (второй фронт): радиус задаём всегда — collect днём идёт к известным из памяти тела точкам
     // в пределах радиуса (approachKnownLimited), а не только в 16 м; «не вижу» — шире радиус, а не случайная разведка
-    if (s.logs < T.needLogs && !workBan) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, radius: wider('collect_log', 48) }, tried('collect_log') ? `рублю дерево: рядом не нашла — ищу по памяти в ${wider('collect_log', 48)} м` : 'рублю дерево'));
-    if (s.logs >= T.pickLogs) add(30, body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку'));
+    // v0.3: нужно дерево, а муха под землёй — сначала наверх (в пещере log не найти); подъём не вышел — сбор по памяти, как раньше
+    const upForLog = s.logs < T.needLogs && !workBan ? surfaceAct('нужно дерево, а я под землёй — сначала наверх') : null;
+    if (upForLog) add(28, upForLog);
+    else if (s.logs < T.needLogs && !workBan) add(28, body('collect_log', 'collect', { block: 'log', count: T.logCount, radius: wider('collect_log', 48) }, tried('collect_log') ? `рублю дерево: рядом не нашла — ищу по памяти в ${wider('collect_log', 48)} м` : 'рублю дерево'));
+    if (!tk && s.logs >= T.pickLogs) add(30, body('craft_pick', 'craft', { item: 'wooden_pickaxe' }, 'делаю деревянную кирку')); // набора нет (старый снимок) — как раньше
   }
+  // v0.3 ночь у базы: кровать (крафт / шерсть / поставить у базы) и факелы на закате — по счёту выше цели мозга (50): дело короткое и разовое, давление простоя его иначе вечно перебивало бы
+  for (const [sc, act] of bedActs(duskSoon)) add(sc, act);
+  { const la = lightAct(); if (la) add(T.apLight, la); }
+  // v0.3 инструменты: недостающее/слабое делаю раньше рутины (day_routine 35, сбор 26–28) и после еды при низком HP (там счёт выше)
+  for (const c of toolActs()) add(c.upgrade ? T.apToolUpgrade : c.kind === 'pickaxe' ? T.apToolPick : c.kind === 'sword' ? T.apToolSword : T.apToolMisc, c.act);
   // если кирка есть — собираем камень
   const edgeHazard = s.snapshot?.hazards?.includes('обрыв') || s.survey?.edges?.some(e => e.drop >= 3);
   const duskNoWeapon = duskSoon && !s.hasWeapon; // на закате без оружия за камнем далеко не идём
@@ -626,9 +941,13 @@ function goalAfter(ap, run, verdict, reason, now, progressed) {
 
 // ---------- v0.2 «Постройка:» — муха строит сама ----------
 // ap.build — строка из notes.md {name,x,y,z,rot,sig}; ap.buildSt — как идёт эта строка:
-// {sig, need:{предмет:n}|null (добрать), gathers (доборов без нового блока), pauseUntil, reason, done, doneAt}
-const BUILD_KEYS = new Set(['build', 'build_go', 'build_gather']);
-const newBuildSt = sig => ({ sig, need: null, gathers: 0, pauseUntil: 0, reason: null, done: false, doneAt: 0 });
+// {sig, need:{предмет:n}|null (добрать), gathers (доборов без нового блока), pauseUntil, reason, done, doneAt,
+//  pauses — пауз подряд без нового блока: planFailPauses штук — пункт очереди проваливается, behavior/plan.js}
+const BUILD_KEYS = new Set(['build', 'build_partial', 'build_go', 'build_gather']);
+// v0.3 (behavior_autopilot_build_step): стройка шагами — need (что добрать) не больше buildStepItems каждого вида,
+// stuck — build_partial не поставил ни клетки (материал есть, но не подошёл/не дотянуться) — сразу добор шага.
+// have — что из материала постройки было в сумке по последнему итогу (build_blueprint/gather_list); есть — decide даёт build_partial.
+const newBuildSt = sig => ({ sig, need: null, have: null, gathers: 0, pauseUntil: 0, reason: null, done: false, doneAt: 0, stuck: false, partialEmpty: 0, pauses: 0 });
 // behavior_autopilot_build_gather (дыра 1): известная нехватка переживает рестарт тела — data/autopilot_build.json
 // {sig, need, at}; после рестарта первым делом добор по памяти, а не build_blueprint с пустой сумкой (data/ — вне git)
 const BUILD_MEM = path.join(process.env.FLYBOT_CORE || path.join(__dirname, '..'), 'data', 'autopilot_build.json');
@@ -643,6 +962,17 @@ function loadBuildNeed(sig) {
   } catch (e) { return null; }
 }
 const lackStr = m => Object.entries(m || {}).map(([k, n]) => `${k} ×${n}`).join(', ');
+// шаг добора: каждого недостающего не больше buildStepItems (не «довести сумку до 101»); 0/пусто — пусто.
+// gather_list считает ИТОГ в сумке, поэтому цель = что уже есть (have) + шаг
+const stepNeed = (m, have) => {
+  const out = {};
+  for (const [k, n] of Object.entries(m || {})) {
+    const q = Math.ceil(Number(n) || 0);
+    if (q > 0) out[k] = (Number(have && have[k]) || 0) + Math.min(q, T.buildStepItems);
+  }
+  return out;
+};
+const haveOf = r => r && r.have && typeof r.have === 'object' ? { ...r.have } : null;
 // недостающий материал из итога build_blueprint: поле missing (оно точнее), иначе текст «не хватает: a ×n, b ×m»
 // (смета до стройки) или «не достроено: … не хватило: a ×n» (кончилось по ходу)
 function lackOf(err, result) {
@@ -657,8 +987,8 @@ function lackOf(err, result) {
 // постройка для decide: готова или на паузе — её нет (в выборе другие дела); иначе со списком добора
 function buildState(ap, now) {
   const b = ap.build, st = ap.buildSt;
-  if (!b || !st || st.sig !== b.sig || st.done || now < (st.pauseUntil || 0)) return { build: null };
-  return { build: { ...b, need: st.need && Object.keys(st.need).length ? { ...st.need } : null, gatherAway: !!st.gatherAway } };
+  if (!b || ap.buildHold || !st || st.sig !== b.sig || st.done || now < (st.pauseUntil || 0)) return { build: null };
+  return { build: { ...b, need: st.need && Object.keys(st.need).length ? { ...st.need } : null, have: st.have ? { ...st.have } : null, gatherAway: !!st.gatherAway, partialStuck: !!st.stuck } };
 }
 // итог запуска дела постройки (verdict 'ok' | 'провал'): -> {note, done?} | null. Мозг тут не будится — всё решает муха.
 function buildAfter(ap, run, verdict, err, result, now, progressed) {
@@ -667,10 +997,10 @@ function buildAfter(ap, run, verdict, err, result, now, progressed) {
   if (!st || !b || st.done || st.sig !== run.sig || (verdict !== 'ok' && verdict !== 'провал')) return null;
   const why = String(err || 'провал').split('\n')[0].slice(0, 120);
   const pause = text => {
-    st.pauseUntil = now + T.buildRetryMs; st.reason = text; st.need = null; st.gathers = 0;
+    st.pauseUntil = now + T.buildRetryMs; st.reason = text; st.need = null; st.have = null; st.gathers = 0; st.stuck = false; st.partialEmpty = 0; st.pauses = (st.pauses || 0) + 1;
     return { note: `постройка ${b.name}: ${text} — повтор через ${Math.round(T.buildRetryMs / 1000)} с` };
   };
-  if (progressed) st.gathers = 0;
+  if (progressed) { st.gathers = 0; st.pauses = 0; }
   if (run.key === 'build') {
     if (verdict === 'ok') {
       st.done = true; st.doneAt = now; st.need = null; st.reason = null;
@@ -679,12 +1009,37 @@ function buildAfter(ap, run, verdict, err, result, now, progressed) {
     const lack = lackOf(err, result);
     if (Object.keys(lack).length) {
       if (st.gathers >= T.buildGatherMax) return pause(`добор не помогает (${st.gathers} раз без нового блока), не хватает ${lackStr(lack)}`);
-      // ИТОГ для добора — need из ответа build_blueprint (сколько всего нужно в сумке), а не дельта missing
-      const totalNeed = result && result.need && typeof result.need === 'object' ? result.need : lack;
-      st.need = totalNeed; st.reason = null;
-      return { note: `постройка ${b.name}: не хватает ${lackStr(lack)} — добираю до ${lackStr(totalNeed)}` };
+      // v0.3: добор — ШАГ (<= buildStepItems каждого вида), а не «довести сумку до всего списка»
+      st.have = haveOf(result);
+      st.need = stepNeed(lack, st.have); st.reason = null; st.stuck = false; st.partialEmpty = 0;
+      return { note: `постройка ${b.name}: не хватает ${lackStr(lack)} — что есть, ставлю частью, добираю шагом до ${lackStr(st.need)}` };
     }
     return pause(`провал (${why})`);
+  }
+  if (run.key === 'build_partial') {
+    // v0.3: поставили часть — фиксируем прогресс и добираем ШАГ по названной нехватке; ничего не поставили —
+    // не повторяем ту же пустую стройку, сразу шаг добора (stuck), а если и он пуст — пауза/смена способа
+    const lack = lackOf(err, result);
+    st.have = null;   // что подходило — поставлено (или не встало); сумку узнаем из следующего итога
+    if (verdict === 'ok') {
+      st.gathers = 0; st.stuck = false; st.partialEmpty = 0; st.reason = null;
+      if (result && result.complete) {
+        st.done = true; st.doneAt = now; st.need = null;
+        return { note: `постройка ${b.name}: готово — все клетки стоят`, done: true };
+      }
+      const placed = Number(result && result.placed) || 0;
+      st.need = Object.keys(lack).length ? stepNeed(lack) : null;
+      return {
+        note: placed > 0
+          ? `постройка ${b.name}: поставил ${placed} клеток${st.need ? `, осталось добрать ${lackStr(st.need)}` : ''} — продолжаю шагами`
+          : `постройка ${b.name}: всё, что было, поставил — проверяю остаток`
+      };
+    }
+    st.stuck = true; st.partialEmpty = (st.partialEmpty || 0) + 1;
+    st.need = stepNeed(Object.keys(lack).length ? lack : (st.need || {}));
+    if (!Object.keys(st.need).length) return pause(`нечего ставить (${why})`);
+    if (st.partialEmpty >= T.buildGatherMax) return pause(`нечего ставить ${st.partialEmpty} раз подряд (${lackStr(st.need)}) — меняю способ`);
+    return { note: `постройка ${b.name}: нечего ставить (${why}) — добираю шагом ${lackStr(st.need)}` };
   }
   if (run.key === 'build_gather') {
     // behavior_autopilot_build_gather (3 дыры): (1) «ok» без всего нужного — не «строю снова» вслепую, а добор дальше;
@@ -699,11 +1054,13 @@ function buildAfter(ap, run, verdict, err, result, now, progressed) {
       return { note: `постройка ${b.name}: добор прерван (${why}) — продолжаю`, resume: true };
     }
     st.gathers++;
-    if (verdict === 'ok' && (!hasResult || got)) {
-      // have известен: всего ли хватает? нет — need остаётся (добираем дальше), да — строю
-      const short = {};
-      if (hasResult && result.have && st.need) for (const [k, n] of Object.entries(st.need)) if ((Number(result.have[k]) || 0) < n) short[k] = n - (Number(result.have[k]) || 0);
-      st.gatherAway = false;
+    if (hasResult && result.have) st.have = haveOf(result);
+    // have известен: всего ли хватает? нет — need остаётся (добираем дальше), да — строю
+    const short = {};
+    if (hasResult && result.have && st.need) for (const [k, n] of Object.entries(st.need)) if ((Number(result.have[k]) || 0) < n) short[k] = n - (Number(result.have[k]) || 0);
+    const enough = !!(hasResult && result.have && st.need && !Object.keys(short).length);
+    if (verdict === 'ok' && (!hasResult || got || enough)) {   // ok без итога — верим навыку, строю
+      st.gatherAway = false; st.stuck = false;
       if (Object.keys(short).length) {
         return { note: `постройка ${b.name}: добор сделал (${added}), ещё не хватает ${lackStr(short)} — добираю дальше` };
       }
@@ -712,7 +1069,7 @@ function buildAfter(ap, run, verdict, err, result, now, progressed) {
     }
     // провал, но что-то собрал — это прогресс: need остаётся, без паузы
     if (got) {
-      st.gatherAway = false;
+      st.gatherAway = false; st.stuck = false;
       return { note: `постройка ${b.name}: добор не до конца (${why}), но собрал ${added} — добираю дальше` };
     }
     // пустой добор: первый раз — меняем место (к постройке, decide даст build_go), повтор там же — честная пауза
@@ -724,6 +1081,7 @@ function buildAfter(ap, run, verdict, err, result, now, progressed) {
     }
     // st.need НЕ сбрасываем — после паузы перестройка вернёт тот же итог
     st.gatherAway = false;
+    st.pauses = (st.pauses || 0) + 1;
     st.pauseUntil = now + T.buildRetryMs; st.reason = `добор ничего не дал и на новом месте (${haveStr}, нужно ${needStr}) — материала нет, меняю способ`;
     return { note: `постройка ${b.name}: ${st.reason} — повтор через ${Math.round(T.buildRetryMs / 1000)} с` };
   }
@@ -736,12 +1094,81 @@ function buildStatus(ap, now) {
   const st = ap.buildSt && ap.buildSt.sig === b.sig ? ap.buildSt : newBuildSt(b.sig);
   const run = ap.running && BUILD_KEYS.has(ap.running.key) ? ap.running.key : null;
   let status;
-  if (st.done) status = 'готово';
+  if (ap.buildHold) { // «Постройка:» из «Текущей цели» закрыта (готова / провалена) или ждёт очереди — только для показа, в выбор не идёт
+    const e = ap.planState && ap.planState.items[b.sig];
+    status = e && e.status === 'done' ? 'готово' : e && e.status === 'failed' ? `провал (${e.reason || '—'}), повтор позже` : 'ждёт очереди';
+  } else if (st.done) status = 'готово';
   else if (now < (st.pauseUntil || 0)) status = `пауза до ${new Date(st.pauseUntil).toTimeString().slice(0, 8)} (${st.reason})`;
   else if (run === 'build_go') status = 'иду к месту';
   else if (st.need && Object.keys(st.need).length) status = 'добираю ' + lackStr(st.need);
+  else if (run === 'build_partial') status = st.stuck ? 'нечего ставить — добираю шаг' : 'ставлю, что есть';
   else status = run === 'build' ? 'строю' : 'строю (сейчас другое дело)';
   return { name: b.name, at: [b.x, b.y, b.z], rot: b.rot, status };
+}
+
+// ---------- v0.3 еда: где видела животных, что в сумке, под землёй ли ----------
+// своя память поведения (worldmem животных не помнит): до 8 мест, места ближе 16 м склеиваем, свежее — первым
+function noteAnimalSpot(ap, a, now) {
+  const list = ap.animalSpots || (ap.animalSpots = []);
+  const near = list.find(q => Math.hypot(q.x - a.x, q.z - a.z) < 16);
+  if (near) Object.assign(near, { x: a.x, y: a.y, z: a.z, t: now, n: a.n });
+  else list.push({ x: a.x, y: a.y, z: a.z, t: now, n: a.n });
+  list.sort((q, w) => w.t - q.t);
+  if (list.length > 8) list.length = 8;
+}
+// пришла на место, животных нет — место забываем (иначе ходит туда по кругу)
+function forgetAnimalSpot(ap, x, z) {
+  if (ap.animalSpots) ap.animalSpots = ap.animalSpots.filter(q => Math.hypot(q.x - x, q.z - z) >= 16);
+}
+// ближайшее свежее место с животными: не «тут» (foodSpotMinDist) и не путешествие (foodSpotMaxDist)
+function animalSpotOf(ap, p, now) {
+  let best = null;
+  for (const q of ap.animalSpots || []) {
+    if (now - q.t > T.foodSpotTtlMin * 60000) continue;
+    const d = Math.hypot(q.x - p.x, q.z - p.z);
+    if (d < T.foodSpotMinDist || d > T.foodSpotMaxDist) continue;
+    if (!best || d < best.d) best = { x: q.x, y: q.y, z: q.z, d: Math.round(d), ago: Math.round((now - q.t) / 60000), n: q.n };
+  }
+  return best;
+}
+const RAW_FOOD = ['beef', 'porkchop', 'mutton', 'chicken', 'rabbit', 'cod', 'salmon', 'potato'];
+// еда в сумке для decide: единиц запаса (съедобное не из чёрного списка), сырое на жарку (чего больше, не больше 16 за заход),
+// топливо (уголь, или брёвна/доски от 4 — дерево нужно и на кирку), пшеница на хлеб
+function foodInv(inv, foods, bl) {
+  let units = 0;
+  for (const [n, c] of Object.entries(inv)) if (foods[n] && !bl.has(n) && !n.endsWith('_bucket')) units += c;
+  const raw = RAW_FOOD.filter(n => inv[n] > 0).sort((a, b) => inv[b] - inv[a])[0];
+  const sum = re => Object.entries(inv).filter(([n]) => re.test(n)).reduce((s, [, c]) => s + c, 0);
+  return {
+    foodUnits: units,
+    rawFood: raw ? { name: raw, count: Math.min(16, inv[raw]) } : null,
+    fuel: sum(/^(coal|charcoal|coal_block)$/) > 0 || sum(/_(log|stem)$|_planks$/) >= 4,
+    wheat: inv.wheat || 0
+  };
+}
+// под землёй: ниже поверхности (y базы, без базы — 63) больше чем на undergroundDy, над головой свод (твёрдое в 24 блоках)
+// и неба не видно (skyLight < 8, если сервер его дал). Каньон под открытым небом — не «под землёй»
+function undergroundOf(bot, p, surfaceY) {
+  if (p.y >= surfaceY - T.undergroundDy) return false;
+  let roof = false;
+  for (let dy = 2; dy < 26 && !roof; dy++) { const b = bot.blockAt(p.offset(0, dy, 0)); if (b && b.boundingBox === 'block') roof = true; }
+  if (!roof) return false;
+  const h = bot.blockAt(p.offset(0, 1, 0));
+  return !(h && typeof h.skyLight === 'number' && h.skyLight >= 8);
+}
+
+// v0.3 еда, этап 2: куда ловить. open — есть открытая вода (над водой воздух, как требует fish) в 16 м; нет — ближайший блок льда
+// над водой (прорубь: сломать лёд, тогда вода открыта) или null. Тяжёлый обход мира — вызывать редко (кэш в gather)
+function fishSpot(ctx) {
+  const bot = ctx.bot, reg = bot.registry.blocksByName, p = bot.entity.position;
+  if (!reg.water) return null;
+  const up = q => bot.blockAt(q.offset(0, 1, 0));
+  const open = vision.find(ctx, [reg.water.id], { radius: 16, count: 60 }).some(w => { const u = up(w); return !!u && A.isAirLike(u); });
+  if (open || !reg.ice) return { open, ice: null };
+  const ice = vision.find(ctx, [reg.ice.id], { radius: 16, count: 40 })
+    .filter(q => { const b = bot.blockAt(q.offset(0, -1, 0)), u = up(q); return !!b && b.name === 'water' && !!u && A.isAirLike(u); })
+    .sort((a, b) => a.distanceTo(p) - b.distanceTo(p))[0];
+  return { open: false, ice: ice ? { x: ice.x, y: ice.y, z: ice.z } : null };
 }
 
 function gather(ctx, ap) {
@@ -750,6 +1177,8 @@ function gather(ctx, ap) {
   const p = bot.entity.position;
   const items = bot.inventory.items();
   const sum = re => items.filter(i => re.test(i.name)).reduce((s, i) => s + i.count, 0);
+  const inv = {};
+  for (const i of items) inv[i.name] = (inv[i.name] || 0) + i.count;
   let FOOD_BL = new Set(); try { FOOD_BL = require('./reflexes').FOOD_BLACKLIST; } catch (e) {}
   const foods = bot.registry.foodsByName || {};
   const head = bot.blockAt(p.offset(0, 1.6, 0)); const feet = bot.blockAt(p);
@@ -765,6 +1194,47 @@ function gather(ctx, ap) {
       .some(b => b && !(b.getProperties && b.getProperties().occupied));
   } catch (e) {}
   let sheltered = false; try { sheltered = L('skills/survival').isSheltered(bot); } catch (e) {}
+  // v0.3 еда: животные рядом — запомнить место (ближайшее), печь рядом, под землёй ли
+  const animalEnts = ents.filter(e => isAnimal(e) && GAME.includes(entName(e)) && e.position.distanceTo(p) <= T.animalsR);
+  const overworld = baseDimOk(bot);
+  if (animalEnts.length && overworld) {
+    const a = animalEnts.slice().sort((x, y) => x.position.distanceTo(p) - y.position.distanceTo(p))[0];
+    noteAnimalSpot(ap, { x: Math.floor(a.position.x), y: Math.floor(a.position.y), z: Math.floor(a.position.z), n: animalEnts.length }, now);
+  }
+  let tableNear = (inv.crafting_table || 0) > 0;
+  try { const tb = bot.registry.blocksByName.crafting_table; if (!tableNear && tb) tableNear = vision.find(ctx, [tb.id], { radius: 24, count: 1 }).length > 0; } catch (e) {}
+  let furnaceNear = false;
+  try { const fb = bot.registry.blocksByName.furnace; if (fb) furnaceNear = vision.find(ctx, [fb.id], { radius: 24, count: 1 }).length > 0; } catch (e) {}
+  // v0.3 еда, этап 2: вода и деревня из памяти мира (worldmem), вода у базы под ферму, вода вокруг для удочки (кэш 5 с)
+  let water = null, village = null, farmWater = null, fish = null;
+  try {
+    const wm = overworld ? ctx.worldmem : null;
+    if (wm) {
+      const at = v => ({ x: v.at[0], y: v.at[1], z: v.at[2], d: Math.round(v.dist) });
+      const w1 = wm.near('water', p, { limit: 1, maxDist: T.fishWaterDist })[0]; if (w1) water = at(w1);
+      const v1 = wm.near('village', p, { limit: 1, maxDist: T.villageMaxDist })[0]; if (v1) village = { ...at(v1), villagers: v1.villagers || 0 };
+      // вода у базы под ферму: несколько ближних, по высоте базы (не речка на дне каньона) и мимо точек, где ферма уже проваливалась
+      if (ap.base) farmWater = farmWaterPick(wm.near('water', ap.base, { limit: T.farmWaterCands, maxDist: T.farmWaterDist }), ap.base, ap.farmBad, now);
+    }
+    if (overworld && (inv.fishing_rod || 0) > 0) {
+      if (!ap.fishView || now - ap.fishView.t > 5000) ap.fishView = { t: now, v: fishSpot(ctx) };
+      fish = ap.fishView.v;
+    }
+  } catch (e) {}
+  const vhDone = {}; for (const [c, t] of Object.entries(ap.vh || {})) if (now - t < T.villageHarvestMin * 60000) vhDone[c] = true; // культуры деревни, уже пробованные
+  const surfaceY = ap.base && Number.isFinite(ap.base.y) ? ap.base.y : 63;
+  let underground = false; try { underground = overworld && undergroundOf(bot, p, surfaceY); } catch (e) {}
+  // v0.3 ночь у базы (шаг 6): шерсть лучшего цвета, кровать в сумке, овцы рядом, своя поставленная кровать у базы (память; блока нет — забываем)
+  let wool = 0, woolColor = null;
+  for (const [n, c] of Object.entries(inv)) { const m = /^(\w+)_wool$/.exec(n); if (m && c > wool) { wool = c; woolColor = m[1]; } }
+  let bedHome = null;
+  if (ap.bed) {
+    try {
+      const bb = bot.blockAt(p.offset(ap.bed.x - p.x, ap.bed.y - p.y, ap.bed.z - p.z));
+      if (bb && !/_bed$/.test(bb.name)) { ap.bed = null; } // кровать сломали/убрали — поставим заново (блок загружен и не кровать)
+      else bedHome = { x: ap.bed.x, y: ap.bed.y, z: ap.bed.z };
+    } catch (e) { bedHome = { x: ap.bed.x, y: ap.bed.y, z: ap.bed.z }; }
+  }
   const ti = timeInfo(bot);
   const cur = ctx.tasks.current;
   const ld = ctx.lastDeath;
@@ -793,9 +1263,20 @@ function gather(ctx, ap) {
     hostile: hostilesIn[0] || null, // ближайший враждебный моб в hostileR — ночью для защиты (L052)
     hitRecent: !!(ap.lastHit && now - ap.lastHit <= T.apHitFreshMs), // по муху били недавно (урон между тиками)
     enemies, alone: hostiles.filter(h => h.d <= T.aloneR).length === 0 && enemies.filter(e => e.d <= T.aloneEnemyR).length <= 1,
-    freeBed, animals: ents.filter(e => isAnimal(e) && GAME.includes(entName(e)) && e.position.distanceTo(p) <= T.animalsR).length,
+    freeBed, animals: animalEnts.length,
+    ...foodInv(inv, foods, FOOD_BL), furnaceNear, underground, surfaceY, // v0.3 еда: запас, сырое, топливо, пшеница; печь; под землёй
+    animalSpot: overworld ? animalSpotOf(ap, p, now) : null,  // v0.3: где недавно видела животных (не тут и не далеко)
+    // v0.3 еда, этап 2: удочка, нить, семена, мотыга; вода/лёд, деревня, вода у базы, пробованные культуры деревни, ферма
+    rod: inv.fishing_rod || 0, string: inv.string || 0, seeds: inv.wheat_seeds || 0, hoe: items.some(i => /_hoe$/.test(i.name)),
+    water, fish, village, farmWater, vhDone, farm: ap.farm ? { x: ap.farm.x, z: ap.farm.z, sinceMin: (now - ap.farm.t) / 60000 } : null,
     recoverable: !!(ld && ld.at && now - ld.ts < T.recoverMs && ap.recoverFor !== ld.ts),
     blocked, failInfo: failInfoOf(ap, now),
+    // v0.3 инструменты: что в сумке (лучший ранг каждого вида) и из чего делать; навыки, которые исполнитель не запустит
+    tools: { ...toolTiers(items), planks: sum(/_planks$/), sticks: inv.stick || 0, logs: sum(/_(log|stem)$/), cobble: sum(/^(cobblestone|cobbled_deepslate)$/), table: tableNear },
+    skillOff: ap.skillOff || {}, skillKnown: ap.skillKnown || null,
+    // v0.3 ночь у базы: кровать (в сумке / поставлена у базы), шерсть, овцы, ножницы; факелы и уголь, когда светила в последний раз
+    bedItem: sum(/_bed$/), bedHome, wool, woolColor, shears: (inv.shears || 0) > 0, sheep: animalEnts.filter(e => entName(e) === 'sheep').length,
+    torches: inv.torch || 0, coal: inv.coal || 0, lightSinceMin: ap.light ? (now - ap.light.t) / 60000 : null,
     waitSec: ap.waitSince ? Math.round((now - ap.waitSince) / 1000) : 0, // сколько тело свободно, а автопилот ждёт (потолок apWaitMaxSec)
     ...goalState(ap, now), // цель мозга: пауза после провала/успеха, шаг после провала (v0.2)
     ...buildState(ap, now), // v0.2 «Постройка:»: в работе (не готова, не на паузе) и что добрать
@@ -814,16 +1295,23 @@ function create(ctx) {
     on: true, lastBrainCmd: Date.now(), lastBusy: 0, running: null, runnerOther: false,
     goal: null, goalDone: null, goalMtime: -1, base: null, baseSig: '', goalSkills: { t: 0, names: new Set(), enabled: {} },
     goSafe: false, goSafeT: 0, // go_safe включён у исполнителя? — раз в 30 с узнаём (дорогу к базе ведёт он, заявка 21.10)
+    skillOff: {}, skillKnown: null, // v0.3: выключенные/не найденные выученные навыки (из того же GET /skills раз в 30 с) — decide их не выбирает
     goalFail: null,   // проваленная цель мозга: {sig, name, reason, at} — повтор через goalRetryMs (v0.2)
     goalDiv: 1, goalDivSig: null, // шаг цели после провалов: count/n делим на goalDiv
     goalDoneAt: 0, goalEmpty: null, // выполнена когда; выполнена без прогресса (sig) — не повторяем
     goalFailNote: null, // что написать в журнал про проваленную цель (сразу после строки о провале)
-    build: null, buildSt: null, // v0.2 «Постройка:» из notes.md и как она идёт (newBuildSt)
+    build: null, buildSt: null, // v0.2 «Постройка:» (из «Текущей цели» или пункт очереди) и как она идёт (newBuildSt)
+    buildHold: false,           // build — «Постройка:» из notes.md, но закрыта/ждёт очереди: показываем в статусе, в выбор не идёт
+    // v0.3 очередь «## План» (behavior/plan.js): разобранный список, память пунктов (data/autopilot_plan.json), что выбрано
+    planState: PL.emptyPlan(), planFile: null, planItems: [], planCopy: false, planInfo: null, planNoted: {}, notesBuild: null,
+    notesFile: null, bpDir: null, switchesDir: undefined, brainT: 0, brainV: true, goalSigSeen: undefined, // *File/bpDir/switchesDir — подмена путей в тестах
     codeCrash: {},    // навыки, упавшие со сбоем кода: {навык: {reason, at}} — автопилот их не зовёт
     _mod: MOD, fails: {}, failInfo: {}, until: {}, lastChat: 0, recoverFor: 0, stuckSince: 0, wetSince: 0, lastPos: null, ticking: false, history: [],
     lastHp: null, // HP на прошлом тике: упало — по муху били (ap.lastHit), ночью тогда не wait_night (L052)
     lastHit: 0,   // последний урон: свежий apHitFreshMs — блокирует wait_night и ямы (L052, смерть 23)
-    yields: 0, yieldWatch: null
+    yields: 0, yieldWatch: null,
+    farm: null, farmBad: [], vh: {}, fishView: null, // v0.3 еда, этап 2: ферма у базы {x,z,t}, культуры деревни {crop: когда пробовала}, кэш воды/льда для удочки
+    bed: null, light: null // v0.3 ночь у базы: своя кровать у базы {x,y,z,t}, когда последний раз расставляла факелы {t}
   };
   const note = (text, chat) => {
     ctx.events.push('info', { msg: 'автопилот: ' + text, autopilot: true });
@@ -919,6 +1407,66 @@ function create(ctx) {
     note(`мобы рядом ночью${st.hostile ? ` (${st.hostile.name} ${st.hostile.d} м)` : ''} — жду в укрытии${st.hitRecent ? ', по муху били — укрытия нет, жду паузу после отхода' : ''}`);
   };
 
+  // ---- v0.3 очередь «## План» (behavior/plan.js): память пунктов, выбор, итоги ----
+  const savePlanState = () => { if (ap.planFile) PL.savePlan(ap.planFile, ap.planState); };
+  // включён ли мозг на пульте (data/switches.json), кэш 30 с; нет файла/мусор — включён (как в lib/switches.js)
+  const brainIsOn = () => {
+    const t = Date.now();
+    if (t - ap.brainT > 30000) { ap.brainT = t; try { ap.brainV = SW.isOn('brain', ap.switchesDir); } catch (e) { ap.brainV = true; } }
+    return ap.brainV;
+  };
+  // пропуск пункта: нет файла чертежа / неизвестный или выключенный навык (проверяется заново каждый тик — пропуск не навсегда)
+  const planVeto = it => {
+    if (it.kind === 'build') {
+      return fs.existsSync(path.join(ap.bpDir || BLUEPRINTS, it.build.name + '.txt')) ? null : { reason: `нет чертежа ${it.build.name}.txt в brain/blueprints` };
+    }
+    const name = it.goal.name;
+    if ((ctx.skillNames || []).some(k => norm(k) === norm(name))) return null;
+    const known = ap.skillKnown || (ap.goalSkills.names.size ? [...ap.goalSkills.names] : null); // список не получали — не судим
+    if (known && !known.includes(name)) return { reason: `неизвестный навык ${name}` };
+    if (ap.skillOff && ap.skillOff[name]) return { reason: `навык ${name} выключен у исполнителя` };
+    return null;
+  };
+  function pickPlan() {
+    const now = Date.now();
+    const pick = PL.planPick({ own: ap.notesBuild, goal: ap.goalRaw, items: ap.planItems, state: ap.planState, now, brainOn: brainIsOn(), veto: planVeto });
+    ap.planInfo = pick;
+    for (const s of pick.skipped) { // причина пропуска — в журнал один раз
+      const k = s.item.sig + '|' + s.reason;
+      if (!ap.planNoted[k]) { ap.planNoted[k] = 1; note(`очередь: пропускаю «${PL.label(s.item)}» — ${s.reason}`); }
+    }
+    if (pick.retry) { // проваленный пункт пора пробовать снова: чистый лист (память о провале и счётчик пауз)
+      const sig = pick.item ? pick.item.sig : pick.build.sig;
+      delete ap.planState.items[sig]; savePlanState();
+      note(`очередь: повторяю «${pick.item ? PL.label(pick.item) : 'Постройка: ' + pick.build.name}» — раньше не вышло`);
+    }
+    return pick;
+  }
+  // пункт готов: память, событие plan_item_done (для пунктов очереди), перечитать notes.md (мозг/хозяин увидят свежее)
+  function planDone(sig, label, isBuild, now, extra) {
+    PL.mark(ap.planState, sig, 'done', '', now, 0);
+    if (isBuild) ap.planState.doneAt = now;
+    savePlanState();
+    if (ap.planItems.some(i => i.sig === sig)) ctx.events.push('plan_item_done', { item: label, ...extra });
+    ap.goalMtime = -1; // кэш времени notes.md сбросить — файл перечитается
+  }
+  // итог «Автопилот:» из очереди: ok — готово (plan_item_done); провал planFailPauses раз подряд без нового блока — failed
+  function planGoalAfter(run, verdict, reason, now, progressed) {
+    const it = (ap.planItems || []).find(i => i.kind === 'goal' && i.mark === ' ' && i.sig === run.sig);
+    if (!it) return;
+    if (verdict === 'ok') { planDone(it.sig, PL.label(it), false, now, { kind: 'goal', skill: it.goal.name }); return; }
+    const prev = ap.planState.items[it.sig];
+    const n = (progressed ? 0 : (prev && prev.pauses) || 0) + 1;
+    if (n >= T.planFailPauses) { planFailed(it.sig, PL.label(it), reason, now); return; }
+    PL.mark(ap.planState, it.sig, 'open', reason, now, n); savePlanState();
+  }
+  function planFailed(sig, label, reason, now) {
+    PL.mark(ap.planState, sig, 'failed', reason, now, T.planFailPauses);
+    savePlanState();
+    note(`очередь: «${label}» не вышло ${T.planFailPauses} раза подряд без нового блока: ${reason} — иду к следующему пункту, повтор через ${Math.round(T.planRetryMs / 3600000)} ч`);
+    ap.goalMtime = -1;
+  }
+
   // цель мозга из notes.md (кэш по mtime); learned — если такой навык есть в исполнителе, иначе навык тела
   async function refreshGoal() {
     // go_safe включён у исполнителя? (заявка учителя, день 21) — раз в 30 с; не проверили (исполнитель молчит) — нет
@@ -929,32 +1477,48 @@ function create(ctx) {
         const r = await httpJson('GET', RUNNER + '/skills', undefined, 1500);
         const s = (r && r.skills || []).find(x => x.name === 'go_safe');
         ap.goSafe = !!(s && s.enabled !== false);
+        // v0.3: выключенные навыки (авто после провалов / вручную) не предлагаем; список не пришёл — прежний набор, ничего не меняем
+        const gate = skillGate(r && r.skills);
+        if (gate) {
+          const was = Object.keys(ap.skillOff || {}).sort().join(', '), nowOff = Object.keys(gate.off).sort().join(', ');
+          ap.skillOff = gate.off; ap.skillKnown = gate.known;
+          if (was !== nowOff) note(nowOff ? `выключены у исполнителя — не выбираю: ${Object.entries(gate.off).map(([k, v]) => k + ' (' + v.slice(0, 60) + ')').join('; ')}` : 'выключенных навыков нет — выбираю любые');
+        }
       } catch (e) {}
     }
-    let mt = 0; try { mt = fs.statSync(NOTES).mtimeMs; } catch (e) { ap.goal = null; ap.base = null; ap.build = null; return; }
+    let mt = 0; try { mt = fs.statSync(ap.notesFile || NOTES).mtimeMs; } catch (e) { ap.goal = null; ap.base = null; ap.build = null; ap.buildHold = false; ap.notesBuild = null; ap.planInfo = null; return; }
     if (mt !== ap.goalMtime) {
       ap.goalMtime = mt;
-      let g = null, txt = ''; try { txt = fs.readFileSync(NOTES, 'utf8'); g = parseGoal(txt); } catch (e) {}
+      let g = null, txt = ''; try { txt = fs.readFileSync(ap.notesFile || NOTES, 'utf8'); g = parseGoal(txt); } catch (e) {}
       ap.base = parseBase(txt);
-      // v0.2: новая строка «Постройка:» — всё сначала (пауза, добор, «готово» — про прежнюю строку)
-      const bl = parseBuild(txt);
-      if (bl && (!ap.buildSt || ap.buildSt.sig !== bl.sig)) {
-        ap.buildSt = newBuildSt(bl.sig);
-        for (const k of BUILD_KEYS) { delete ap.until[k]; delete ap.failInfo[k]; ap.fails[k] = 0; }
-        const mem = loadBuildNeed(bl.sig); // рестарт: нехватка по памяти — сначала добор
-        if (mem) { ap.buildSt.need = mem; note(`постройка ${bl.name}: не хватает по памяти (${lackStr(mem)}) — добираю`); }
-      }
-      ap.build = bl;
+      ap.notesBuild = parseBuild(txt);
+      // v0.3 очередь «## План»: раздел есть — он (и копия обновляется); пропал (мозг переписал файл) — последняя копия
+      const pl = PL.planList(txt, ap.planState);
+      ap.planItems = pl.items; ap.planCopy = pl.copy;
+      if (pl.changed) { ap.planState.list = pl.list; PL.prune(ap.planState, new Set(pl.items.map(i => i.sig)), Date.now()); savePlanState(); }
       const bsig = ap.base ? `${ap.base.x} ${ap.base.y} ${ap.base.z} ${ap.base.r}` : '';
       if (bsig !== ap.baseSig) { ap.baseSig = bsig; delete ap.until.go_base; ap.fails.go_base = 0; } // новая база — пауза не действует
-      // новая строка «Автопилот:» — новая попытка: проваленную цель можно пробовать снова
-      if (!ap.goal || !g || g.sig !== ap.goal.sig) {
-        delete ap.until.goal; ap.fails.goal = 0; ap.goalFail = null; ap.goalDiv = 1; ap.goalDivSig = null; ap.goalEmpty = null;
-        if (g && g.name) delete ap.codeCrash[g.name]; // сбой кода этого навыка — тоже новая попытка
-      }
       ap.goalRaw = g;
     }
-    const g = ap.goalRaw;
+    // что делать по цели — «Постройка:» из «Текущей цели» → очередь «## План» → «Автопилот:» (behavior/plan.js, planPick)
+    const pick = pickPlan();
+    const bl = pick.build || null;
+    // v0.2: новая строка «Постройка:» (или пункт очереди) — всё сначала (пауза, добор, «готово» — про прежнюю строку)
+    if (bl && (!ap.buildSt || ap.buildSt.sig !== bl.sig || pick.retry)) {
+      ap.buildSt = newBuildSt(bl.sig);
+      for (const k of BUILD_KEYS) { delete ap.until[k]; delete ap.failInfo[k]; ap.fails[k] = 0; }
+      const mem = loadBuildNeed(bl.sig); // рестарт: нехватка по памяти — сначала добор
+      if (mem) { ap.buildSt.need = mem; note(`постройка ${bl.name}: не хватает по памяти (${lackStr(mem)}) — добираю`); }
+    }
+    ap.build = bl || ap.notesBuild; ap.buildHold = !bl && !!ap.notesBuild;
+    // новая строка «Автопилот:» (или пункт очереди) — новая попытка: проваленную цель можно пробовать снова
+    const g = pick.goal || ap.goalRaw;
+    const gsig = g ? g.sig : null;
+    if (gsig !== ap.goalSigSeen || (pick.retry && pick.goal && pick.via === 'plan')) {
+      ap.goalSigSeen = gsig;
+      delete ap.until.goal; ap.fails.goal = 0; ap.goalFail = null; ap.goalDiv = 1; ap.goalDivSig = null; ap.goalEmpty = null;
+      if (g && g.name) delete ap.codeCrash[g.name]; // сбой кода этого навыка — тоже новая попытка
+    }
     if (!g) { ap.goal = null; return; }
     const bodyName = (ctx.skillNames || []).find(k => norm(k) === norm(g.name));
     if (Date.now() - ap.goalSkills.t > 30000) {
@@ -1037,6 +1601,7 @@ function create(ctx) {
     idleSec: Math.round((Date.now() - Math.max(ap.lastBrainCmd, ap.lastBusy)) / 1000),
     yields: ap.yields || 0,
     build: buildStatus(ap, Date.now()), // v0.2 «Постройка:»: имя, место, статус (строю / добираю / пауза до … / готово)
+    plan: PL.planStatus({ items: ap.planItems, state: ap.planState, now: Date.now(), pick: ap.planInfo, copy: ap.planCopy }), // v0.3 очередь «## План»: сколько открыто/готово/провал, что сейчас
     ...(ap.goalFail ? { goalFailed: `${ap.goalFail.name}: повтор через ${Math.max(0, Math.round((ap.goalFail.at + T.goalRetryMs - Date.now()) / 1000))} с (${ap.goalFail.reason})` } : {}),
     paused: Object.entries(ap.until).filter(([, t]) => t > Date.now()).map(([k, t]) => `${k} ${Math.round((t - Date.now()) / 1000)}с`)
   });
@@ -1108,6 +1673,7 @@ function create(ctx) {
         // v0.2: провал — повтор через goalRetryMs с шагом вдвое меньше; успех — следующий шаг через goalRepeatMs, без прогресса — стоп
         const reason = err ? String(err).split('\n')[0].slice(0, 120) : 'провал';
         ap.goalFailNote = goalAfter(ap, run, verdict, reason, now, (ctx.lastProgressAt || 0) >= run.started);
+        planGoalAfter(run, verdict, reason, now, (ctx.lastProgressAt || 0) >= run.started); // v0.3: пункт очереди «Автопилот:»
       } else {
         ap.until.goal = Math.max(ap.until.goal || 0, now + BACKOFF_MS); // прерванная/выключенная цель — тоже пауза (L013)
       }
@@ -1117,7 +1683,15 @@ function create(ctx) {
         // v0.2 постройка: готово — build_done один раз на строку; не хватило — добор; другое — пауза и повтор (мозг не будим)
         const r = buildAfter(ap, run, verdict, err, res && res.result, now, (ctx.lastProgressAt || 0) >= run.started);
         if (r && run.key === 'build' && ap.buildSt && ap.buildSt.need) { delete ap.until.build; delete ap.failInfo.build; ap.fails.build = 0; } // нехватка — шаг, а не провал
-        if (r && r.done) ctx.events.push('build_done', { name: ap.build.name, at: [ap.build.x, ap.build.y, ap.build.z], rot: ap.build.rot });
+        if (r && r.done) {
+          ctx.events.push('build_done', { name: ap.build.name, at: [ap.build.x, ap.build.y, ap.build.z], rot: ap.build.rot });
+          // v0.3: готова (своя «Постройка:» или пункт очереди) — в память; пункт очереди — ещё plan_item_done; мозг включён — ждёт 10 мин новую «Постройку:»
+          planDone(run.sig, PL.label({ kind: 'build', build: ap.build }), true, now, { kind: 'build', name: ap.build.name, at: [ap.build.x, ap.build.y, ap.build.z] });
+        } else if (r && ap.buildSt && ap.buildSt.sig === run.sig && !ap.buildSt.done && (ap.buildSt.pauses || 0) >= T.planFailPauses && now < (ap.buildSt.pauseUntil || 0)
+            && !(ap.planState.items[run.sig] && ap.planState.items[run.sig].status === 'failed')) {
+          // v0.3: planFailPauses пауз подряд без нового блока — провал: следующий пункт, повтор через planRetryMs
+          planFailed(run.sig, PL.label({ kind: 'build', build: ap.build }), ap.buildSt.reason || 'пауза стройки', now);
+        }
         if (r && r.note) ap.goalFailNote = r.note;
         if (ctx.bot && ap.buildSt) saveBuildNeed(ap.buildSt); // нехватка переживёт рестарт тела
         // добор прерван (вытеснен/abort) — не провал: без паузы и без счёта провалов, через тик продолжаем (behavior_autopilot_build_gather)
@@ -1135,6 +1709,25 @@ function create(ctx) {
         : `прерываю навык: ${String(run.aborting).slice(0, 60)}`;
       resetFails(run.name, why);
     }
+    // v0.3 еда: дошла к месту с животными — место забываем (животные тут — gather запомнит снова; нет — туда не ходим по кругу)
+    if (run.key === 'food_spot' && verdict === 'ok' && run.params) forgetAnimalSpot(ap, run.params.x, run.params.z);
+    // v0.3 еда, этап 2: деревня — культуру пробовала (ok или провал: снова не раньше villageHarvestMin); ферма — когда сделана; рыбалка — паузы
+    if (/^vh_/.test(run.key) && (verdict === 'ok' || verdict === 'провал')) (ap.vh || (ap.vh = {}))[run.key.slice(3)] = now;
+    if (run.key === 'farm' && verdict === 'ok' && run.params) ap.farm = { x: run.params.x, z: run.params.z, t: now };
+    // ферма провалилась из-за воды/участка («у участка нет воды», «на участке нечего вскапывать/сажать») — эту точку farmBad не выбираем farmBadMin минут
+    // (иначе цикл: та же вода из памяти, тот же провал); если это была уже посаженная ферма — забываем и её
+    if (run.key === 'farm' && verdict === 'провал' && run.params && /вод[аыуе]|участк/i.test(String(err))) {
+      ap.farmBad = (ap.farmBad || []).filter(b => now - b.t < T.farmBadMin * 60000).concat({ x: run.params.x, z: run.params.z, t: now }).slice(-8);
+      if (ap.farm && Math.hypot(ap.farm.x - run.params.x, ap.farm.z - run.params.z) <= T.farmBadR) ap.farm = null;
+    }
+    // v0.3 ночь у базы: кровать поставлена (bring_bed_home вернул at) — запоминаем; факелы — ok или провал, снова не раньше lightRepeatMin
+    if (run.key === 'bed_home' && verdict === 'ok') {
+      const rr = res && (res.result || res), at = rr && rr.placed !== false && Array.isArray(rr.at) ? rr.at.map(Number) : null;
+      if (at && at.length >= 3 && at.every(Number.isFinite)) ap.bed = { x: at[0], y: at[1], z: at[2], t: now };
+    }
+    if (run.key === 'light_base' && (verdict === 'ok' || verdict === 'провал')) ap.light = { t: now };
+    if (run.key === 'fish_go' && verdict === 'ok') ap.until.fish_go = now + T.fishGoPauseMs; // пришла, а ловить негде — к воде снова не сразу
+    if (run.key === 'fish' && verdict === 'ok') { const rr = res && (res.result || res); if (!(rr && rr.caught && Object.keys(rr.caught).length)) ap.until.fish = now + T.fishNoCatchMs; } // без улова — пауза
     if (ap.yieldWatch && ap.yieldWatch.name === run.name) ap.yieldWatch = null;
     ap.history.push({ key: run.key, name: run.name, verdict, sec: Math.round(sec), ...(byBrain ? { brain: cmdAction } : {}), ...(err ? { error: err.split('\n')[0].slice(0, 160) } : {}) });
     if (ap.history.length > 20) ap.history.shift();
@@ -1214,6 +1807,7 @@ function create(ctx) {
       console.log('[autopilot] tick:', e && e.message);
     } finally { ap.ticking = false; }
   };
+  ap.refreshGoal = refreshGoal;
   return ap;
 }
 
@@ -1225,7 +1819,8 @@ function attach(api) {
   if (!ap || ap._mod !== MOD) {
     const prev = ap;
     ap = create(ctx);
-    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.goalDiv = prev.goalDiv || 1; ap.goalDivSig = prev.goalDivSig || null; ap.goalDone = prev.goalDone || null; ap.goalDoneAt = prev.goalDoneAt || 0; ap.goalEmpty = prev.goalEmpty || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; ap.goSafe = !!prev.goSafe; ap.goSafeT = prev.goSafeT || 0; ap.buildSt = prev.buildSt || null; }
+    ap.planFile = PLAN_FILE; ap.planState = PL.loadPlan(PLAN_FILE); // v0.3: память пунктов очереди переживает рестарт тела
+    if (prev) { ap.on = prev.on !== false; ap.pausedUntil = prev.pausedUntil || 0; ap.lastBrainCmd = prev.lastBrainCmd || ap.lastBrainCmd; ap.yields = prev.yields || 0; ap.history = Array.isArray(prev.history) ? prev.history.slice(-20) : []; ap.goalFail = prev.goalFail || null; ap.goalDiv = prev.goalDiv || 1; ap.goalDivSig = prev.goalDivSig || null; ap.goalDone = prev.goalDone || null; ap.goalDoneAt = prev.goalDoneAt || 0; ap.goalEmpty = prev.goalEmpty || null; ap.codeCrash = prev.codeCrash || {}; ap.lastHp = prev.lastHp != null ? prev.lastHp : null; ap.lastHit = prev.lastHit || 0; ap.goSafe = !!prev.goSafe; ap.skillOff = prev.skillOff || {}; ap.skillKnown = prev.skillKnown || null; ap.goSafeT = prev.goSafeT || 0; ap.buildSt = prev.buildSt || null; ap.animalSpots = Array.isArray(prev.animalSpots) ? prev.animalSpots : []; ap.farm = prev.farm || null; ap.vh = prev.vh || {}; ap.bed = prev.bed || null; ap.light = prev.light || null; }
     ctx.autopilot = ap;
   }
   api.on(bot, 'death', () => { ap.yieldAll('смерть').catch(() => {}); });
@@ -1233,5 +1828,5 @@ function attach(api) {
   return { detach: reason => ap.yieldAll(reason || 'поведение выгружено') };
 }
 
-// версия (заявки 23.10, «простой страшнее смерти»): у любого «жду» потолок apWaitMaxSec (waitSec из тика), HP 20 без моба рядом — не «мало HP»; низкий HP без угрозы и с регеном — работа, без регена и с едой — ем сам; ночь без мобов — работа/добор, укрытие и wait_night — запас; своё дело прерывается мобом (safety_*, preempt); добор: прерван — продолжаю, пусто — к постройке, нехватка по памяти после рестарта. Прежняя: как 20261022-225845-1e05a2, но цель добора — ИТОГ (need из ответа build_blueprint), а не дельта (missing); «добор сделан» только по факту прибавки в сумке; после пустого добора — пауза с причиной и смена тактики, не повтор того же вызова; добор ночью не начинать; шаг build_gather в коде; по заявке учителя
-module.exports = { attach, decide, lowHpOf, gather, create, goalState, goalAfter, buildState, buildAfter, buildStatus, lackOf, newBuildSt, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };
+// версия (v0.3 ночь у базы, шаг 6): кровать — шерсти одного цвета ≥ 3 и досок хватает (3, +4 на верстак) → craft `<цвет>_bed`; шерсти нет, овцы рядом, день — make_bed (ножницы/охота на овец); кровать в сумке и муха у базы → bring_bed_home ставит её у базы (позиция в памяти, блок исчез — забываем), ночью у базы без угроз sleep (сам ставит кровать из сумки) со счётом выше wait_night и укрытия, моб подошёл во сне — защита как у wait_night; на закате (до ночи < 150 с) у базы light_base из факелов в сумке или угля сверх запаса 2 (не чаще раза в 15 мин). Прежняя (v0.3 еда, этап 2): рыбалка — нет еды и вода рядом (worldmem, 40 м): удочка (3 палки + 2 нити; нить только с пауков — нет, ветку пропускаем) → fish до запаса или 240 с, сырую рыбу жарит smelt как мясо; вода подо льдом — dig_at ломает лёд над водой, потом fish; заход без улова — пауза 10 мин; деревня из памяти (worldmem village ≤ 200 м) шагом foodQuest перед базой/полем: идём, собираем созревшую пшеницу/морковь/картофель (harvest с пересадкой, жителей не трогаем), культуру пробуем раз в 30 мин; ферма — база ≤ 48 м, вода у базы, семена ≥ 2 и мотыга (или доски на неё): выученный farm_plot с центром на воде, потом раз в 30 мин собрать и пересадить. Прежняя (v0.3 очередь, шаг 3): работа без мозга — раздел «## План» в brain/notes.md (behavior/plan.js): пункты `- [ ] чертёж x y z rot=…` и `- [ ] Автопилот: навык ключ=значение`, `[x]` готово, `[-]` пропуск, после « | » комментарий; порядок: «Постройка:» из «Текущей цели» (не готова и не провалена) → первый открытый пункт очереди → «Автопилот:» цели; пункт готов (build_done / ok навыка) — память data/autopilot_plan.json + событие plan_item_done + перечитать notes.md; planFailPauses пауз стройки (или провалов навыка) подряд без нового блока — пункт провален, идём к следующему, повтор через 6 ч (или через 30 мин, когда открытых нет); нет чертежа / неизвестный навык / битая строка — пропуск с причиной в журнале; раздел пропал из notes.md — работаем по последней копии; мозг включён (пульт) — после build_done 10 мин ждём его «Постройку:», выключен — берём сразу; статус очереди — в snapshot autopilot.plan. Прежняя (v0.3 инструменты, шаг 2): набор кирка/меч/лопата/топор — каменные при булыжнике ≥ цены (+палки), иначе деревянные, деревянные кирку и меч меняю на каменные; крафт (craft тела: верстак и палки сам) раньше рутины, после еды при низком HP и угроз; перед collect/gather_list (камень/руда — кирка, земля/песок/гравий — лопата, брёвна — топор) сначала крафт, а кирки нет и не из чего — дело не берём, день сначала даёт дерево; ночью без угроз крафт вместо ожидания; выключенный (или не найденный) у исполнителя выученный навык decide не предлагает вовсе (список раз в 30 с, как go_safe) — без «night_mine: навык выключен» ×60. Прежняя (v0.3 еда, этап 1): рефлекс доедает до 18 при HP < 20 (регенерация); низкий HP без еды — не «жду 120 с», а сразу за едой: охота рядом → наверх из пещеры (climb_up/climb_stairs) → место, где видела животных → база → поле (explore шире с каждым провалом), ночью только ближнее, враг-игрок рядом — ждём; зомби по силам — бой ради гнилой плоти; днём запас еды < 6 — охота впрок (к закату важнее), сырое + топливо — smelt тела, пшеница — хлеб; нужно дерево под землёй — сначала наверх; pathfinder обходит сталагмиты/сталактиты. Прежняя (заявки 23.10, «простой страшнее смерти»): у любого «жду» потолок apWaitMaxSec (waitSec из тика), HP 20 без моба рядом — не «мало HP»; низкий HP без угрозы и с регеном — работа, без регена и с едой — ем сам; ночь без мобов — работа/добор, укрытие и wait_night — запас; своё дело прерывается мобом (safety_*, preempt); добор: прерван — продолжаю, пусто — к постройке, нехватка по памяти после рестарта. До неё: как 20261022-225845-1e05a2, но цель добора — ИТОГ (need из ответа build_blueprint), а не дельта (missing); «добор сделан» только по факту прибавки в сумке; после пустого добора — пауза с причиной и смена тактики, не повтор того же вызова; добор ночью не начинать; шаг build_gather в коде; по заявке учителя
+module.exports = { rodFeasible, hoeFeasible, farmWaterPick, fishSpot, toolTiers, toolFeasible, toolNext, toolFor, toolsForAct, skillGate, attach, decide, lowHpOf, gather, create, noteAnimalSpot, forgetAnimalSpot, animalSpotOf, foodInv, undergroundOf, goalState, goalAfter, buildState, buildAfter, buildStatus, lackOf, newBuildSt, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };

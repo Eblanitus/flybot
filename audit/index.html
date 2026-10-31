@@ -80,6 +80,10 @@
   .btn2 { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 14px; font: inherit; font-size: 14px; cursor: pointer; }
   .btn2:disabled { opacity: .5; cursor: default; }
   .card .rv { font-size: 19px; font-weight: 700; }
+  .pult td { vertical-align: middle; }
+  .swb { min-width: 120px; border-radius: 999px; padding: 6px 16px; font: inherit; font-weight: 700; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--dim); }
+  .swb.on { background: var(--ok); color: #08111f; border-color: var(--ok); }
+  .swb:disabled { opacity: .5; cursor: default; }
   .detail { background: #0d1015; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 10px 0; }
 </style>
 </head>
@@ -91,6 +95,7 @@
 </header>
 <nav id="tabs"></nav>
 <main>
+  <section class="pane" id="p-pult"></section>
   <section class="pane" id="p-console"></section>
   <section class="pane" id="p-body"></section>
   <section class="pane" id="p-reflex"></section>
@@ -101,13 +106,14 @@
   <section class="pane" id="p-skills"></section>
   <section class="pane" id="p-showcase"></section>
   <section class="pane" id="p-models"></section>
+  <section class="pane" id="p-ledger"></section>
   <section class="pane" id="p-service"></section>
   <section class="pane" id="p-chat"></section>
 </main>
 
 <script>
 'use strict';
-const TABS = [['console', 'Консоль ролей'], ['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['skills', 'Навыки'], ['showcase', 'Витрина'], ['models', 'Модели'], ['service', 'Служебное'], ['chat', 'Чат']];
+const TABS = [['pult', 'Пульт'], ['console', 'Консоль ролей'], ['body', 'Тело'], ['reflex', 'Автопилот и рефлексы'], ['brain', 'Мозг'], ['engineer', 'Инженер'], ['deaths', 'Смерти и дни'], ['teacher', 'Учитель'], ['skills', 'Навыки'], ['showcase', 'Витрина'], ['models', 'Модели'], ['ledger', 'Бухгалтерия'], ['service', 'Служебное'], ['chat', 'Чат']];
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pad = n => String(n).padStart(2, '0');
@@ -158,18 +164,32 @@ async function get(path) {
 function lamp(cls, text) { return `<div class="lamp"><span class="dot ${cls}"></span><span>${esc(text)}</span></div>`; }
 function drawLamps(s) {
   let h = '';
-  if (!s.body.ok) h += lamp('bad', 'Тело: не отвечает');
+  const SW = s.switches || {};   // пульт: выключенная часть — серая лампа, а не красная ошибка
+  if (SW.body === false) h += lamp('', s.body.ok && s.body.ready ? 'Тело: выключается (пульт)' : 'Тело: выключено (пульт)');
+  else if (!s.body.ok) h += lamp('bad', 'Тело: не отвечает');
   else if (!s.body.ready) h += lamp('warn', 'Тело: запущено, но не в игре');
   else h += lamp('ok', `Тело: HP ${Math.round(s.body.hp)}/20, еда ${s.body.food}/20`);
   h += !s.runner.ok ? lamp('bad', 'Исполнитель: не отвечает') : s.runner.active ? lamp('ok', `Исполнитель: ${s.runner.active.name} (${s.runner.active.sec} с)`) : lamp('ok', 'Исполнитель: свободен');
   const b = s.brain;
-  if (!b.file) h += lamp('bad', 'Мозг: нет журнала');
+  const brainBusy = s.roles && s.roles.brain && s.roles.brain.known && s.roles.brain.working;
+  if (SW.brain === false) h += lamp('', brainBusy ? 'Мозг: выключается, доделывает (пульт)' : 'Мозг: выключен (пульт)');
+  else if (!b.file) h += lamp('bad', 'Мозг: нет журнала');
   else h += lamp(b.state === 'ok' ? 'ok' : b.state === 'slow' ? 'warn' : 'bad', `Мозг: журнал обновлялся ${ago(b.mtimeMs, s.now)}`);
+  const E = s.eyes || { state: 'never' };
+  if (SW.eyes === false) h += lamp('', E.state === 'off' || E.state === 'stopped' || E.state === 'never' ? 'Глаза: выключены (пульт)' : 'Глаза: выключаются (пульт)');
+  else if (E.state === 'never') h += lamp('', 'Глаза: не запускались');
+  else if (E.state === 'stopped') h += lamp('bad', 'Глаза: не запущены (eyes.cmd закрыт)');
+  else if (E.state === 'watching' && E.answerAgeSec != null && E.answerAgeSec < 120) h += lamp('ok', `Глаза: видят — ${clipS(E.lastAnswerText.replace(/^Видно:\s*/, ''), 70)}`);
+  else if (E.state === 'watching') h += lamp('warn', 'Глаза: смотрят, но Gemini давно не отвечал');
+  else if (E.state === 'limit') h += lamp('warn', 'Глаза: ждут лимит Gemini (минута)');
+  else if (E.state === 'connecting' || E.state === 'no_window') h += lamp('warn', `Глаза: запускаются${E.lastError ? ' — ' + clipS(E.lastError, 50) : ''}`);
+  else h += lamp('bad', `Глаза: ошибка — ${clipS(E.lastError || E.state, 60)}`);
   const R = s.roles;
   if (R) {
     for (const [r, name] of [['teacher', 'Учитель'], ['engineer', 'Инженер']]) {
       const x = R[r];
-      if (x.working && x.modelError && x.modelError.fresh) h += lamp('bad', `${name}: ошибка модели — ${clipS(x.modelError.text, 60)}`);
+      if (SW[r] === false) h += lamp('', x.working ? `${name}: выключается, доделывает (пульт)` : `${name}: выключен (пульт)${x.pending ? ', ждут ' + x.pending : ''}`);
+      else if (x.working && x.modelError && x.modelError.fresh) h += lamp('bad', `${name}: ошибка модели — ${clipS(x.modelError.text, 60)}`);
       else if (x.working) h += lamp('ok', `${name}: работает${x.session ? ' ' + Math.round((s.now - x.session.S) / 60000) + ' мин' : ''}`);
       else if (x.helping) h += lamp('ok', `${name}: помогает инженеру — ${x.helping.key} ${Math.round((s.now - x.helping.S) / 60000)} мин`);
       else h += lamp('', `${name}: свободен${x.pending ? ', ждут ' + x.pending : ''}`);
@@ -485,7 +505,7 @@ function renderBrain(d) {
 
 // ---------- Инженер ----------
 let openReq = null;
-const STC = { waiting: 'warn', working: 'blue', done: 'ok', notdone: 'bad' };
+const STC = { waiting: 'warn', working: 'blue', done: 'ok', notdone: 'bad', stale: 'dim' };
 function renderEngineer(d) {
   let h = `<h2>Заявки на новые навыки</h2><div class="box small dim">Инженер пишет навыки по заявкам мозга и учителя (модель сейчас: <b>${esc(d.model || '—')}</b>, меняется во вкладке «Модели»). Новый навык ложится новой версией рядом со старыми: старые не выключаются, какую версию брать, решает мозг по счёту (вкладка «Навыки»). Нажми на строку — увидишь текст заявки и ответ. <button class="btn2" data-con="engineer">Журнал инженера в консоли</button></div>`;
   if (!d.items.length) return h + '<div class="box dim">Заявок нет.</div>' + renderCore(d.core);
@@ -647,6 +667,54 @@ async function sendChat() {
   chatSending = false; $('chatSend').disabled = false; tick();
 }
 
+// ---------- Бухгалтерия учителя (только чтение): счета проблем мухи, загрузка инженера и порог заявки ----------
+const LEDGER_ST = { open: 'warn', queued: 'blue', invoiced: 'blue', watching: 'ok', closed: 'dim' };
+const LEDGER_KIND = { behavior: 'поведение', skill: 'навык', core: 'ядро' };
+function renderLedger(d) {
+  let h = '<h2>Бухгалтерия учителя</h2><div class="box small dim">Учитель не пишет заявку на каждый случай: он делает проводку на счёт проблемы (минуты потерянной стройки), баланс тает вдвое за ' + esc(d.halfLifeH || 24) + ' ч. Заявка инженеру — когда баланс счёта дошёл до порога. Порог зависит от загрузки инженера: заявок много — меньше инициативы, нет — больше. Сообщения хозяина идут мимо порога.</div>';
+  if (!d.ok) return h + `<div class="box bad">${esc(d.error || 'нет данных')}</div>`;
+  if (d.recovered) h += `<div class="box warn">${esc(d.recovered)}</div>`;
+  const lp = d.loadParts || {};
+  h += `<div class="grid" style="margin-top:12px">
+    <div class="card"><div class="t">Загрузка инженера L</div><div class="v">${d.load}</div><div class="dim small">заявок ${lp.skill || 0}, ядро ${lp.core || 0}, счетов в очереди ${lp.queued || 0}</div></div>
+    <div class="card"><div class="t">Порог заявки сейчас</div><div class="v">${d.threshold == null ? 'нет новых' : d.threshold + ' мин'}</div><div class="dim small">L = 0…${(d.thresholds || []).length - 1}: ${esc((d.thresholds || []).join(' / '))} мин</div></div>
+    <div class="card"><div class="t">Счетов</div><div class="v">${d.accounts.filter(a => a.status !== 'closed').length} / ${d.accounts.length}</div><div class="dim small">открытых / всего</div></div></div>`;
+  if (!d.exists && !d.accounts.length) return h + '<div class="box dim">Счетов пока нет (data/teacher_ledger.json появится после первой проводки).</div>';
+  h += '<table><tr><th>Счёт</th><th>Вид</th><th>Баланс сейчас</th><th>Порог</th><th>Проводок за сутки</th><th>Статус</th><th>Заявка</th></tr>';
+  for (const a of d.accounts) {
+    h += `<tr><td><b>${esc(a.title)}</b><div class="dim small">${esc(a.slug)}${a.lastAt ? ' · ' + ago(a.lastAt, d.now) : ''}</div></td><td>${esc(LEDGER_KIND[a.kind] || a.kind)}</td><td class="${a.threshold != null && a.balance >= a.threshold ? 'bad' : ''}">${a.balance} мин</td><td>${a.threshold == null ? '—' : a.threshold + ' мин'}</td><td>${a.day}</td><td><span class="tag ${LEDGER_ST[a.status] || ''}">${esc(a.statusRu)}</span>${a.note ? `<div class="dim small">${esc(a.note)}</div>` : ''}</td><td class="small">${esc(a.request || '—')}</td></tr>`;
+  }
+  return h + '</table>';
+}
+// ---------- Пульт: включить / выключить части мухи ----------
+const PULT_CLS = { on: 'ok', off: 'dim', stopping: 'warn', starting: 'blue', down: 'bad', unknown: 'warn' };
+const PULT_START = { body: 'тело (bot.js) в своём окне', night: 'night.cmd (петля мозга: тело, исполнитель, сторож)', guard: 'сторожа (brain_guard.ps1) к живой петле night.cmd', eyes: 'eyes.cmd' };
+let pultMsg = '';
+function renderPult(d) {
+  let h = `<h2>Пульт</h2><div class="box small dim">Выключенная часть не начинает новую работу и в opencode не ходит, а её цикл жив и ждёт — «включить» срабатывает без перезапуска окон. Идущая сессия не обрывается: пульт пишет «выключается, доделывает». Файл: ${esc(d.file)}${d.changedAt ? ' · менялся ' + ago(d.changedAt, d.now) : ''}.</div>`;
+  h += `<div style="margin:12px 0;display:flex;gap:10px;flex-wrap:wrap"><button class="btn2" data-preset="all_off">Всё выключить</button><button class="btn2" data-preset="body_eyes">Только тело и глаза (без LLM-ролей)</button><button class="btn2" data-preset="all_on">Всё включить</button> <span class="small" id="pultMsg">${pultMsg}</span></div>`;
+  h += '<table class="pult"><tr><th>Часть</th><th>Состояние</th><th>Что сейчас</th><th>Выключатель</th><th></th></tr>';
+  for (const r of d.rows || []) {
+    const st = `<span class="tag ${PULT_CLS[r.state] || ''}">${esc(r.stateRu)}</span>`;
+    const sw = `<button class="swb ${r.on ? 'on' : ''}" data-sw="${r.part}" data-on="${r.on ? 0 : 1}" title="${r.on ? 'выключить' : 'включить'}">${r.on ? 'включено' : 'выключено'}</button>`;
+    const go = r.state === 'down' && r.start ? `<button class="btn" data-start="${r.part}" title="${esc(PULT_START[r.start] || '')}">Запустить</button><div class="dim small">${esc(PULT_START[r.start] || '')}</div>` : '';
+    h += `<tr><td><b>${esc(r.label)}</b></td><td>${st}</td><td>${esc(r.what)}${r.note ? `<div class="small warn">${esc(r.note)}</div>` : ''}</td><td>${sw}</td><td>${go}</td></tr>`;
+  }
+  h += '</table>';
+  if (d.loops === null) h += '<div class="small dim" style="margin-top:8px">Процессы Windows не прочитались — «запущен ли» видно только по статус-файлам и ответу тела.</div>';
+  return h;
+}
+async function pultSend(body, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/switches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    pultMsg = d.ok ? (d.started ? '<span class="ok">запущено: ' + esc(PULT_START[d.started] || d.started) + '</span>' : '<span class="ok">сохранено</span>') : '<span class="bad">' + esc(d.error || 'ошибка') + '</span>';
+  } catch (e) { pultMsg = '<span class="bad">не отправлено: ' + esc(e.message) + '</span>'; }
+  if (btn) btn.disabled = false;
+  tick();
+}
+
 // ---------- Модели ----------
 const MD_ROLES = ['brain', 'teacher', 'engineer'];
 function modelsShell(d) {
@@ -788,7 +856,7 @@ function renderTeacher(d) {
   return h;
 }
 // Запросы на правку ядра: пишут мозг и учитель, хозяин разрешает кнопкой, инженер правит с тестами (иначе откат)
-const CST = { new: 'warn', approved: 'blue', working: 'blue', done: 'ok', reverted: 'bad', failed: 'bad' };
+const CST = { new: 'warn', approved: 'blue', working: 'blue', done: 'ok', reverted: 'bad', failed: 'bad', stale: 'dim' };
 let openCore = null;
 function renderCore(c) {
   let h = '<h2>Запросы на правку ядра <span class="dim small">(brain/core_requests.md: пишут мозг и учитель. «Разрешить» — сторож отдаст запрос инженеру, тот поправит ядро и прогонит тесты; стали хуже — правка откатывается. Без твоего разрешения ядро не трогают)</span></h2>';
@@ -920,8 +988,8 @@ function renderSkills(d) {
 }
 
 const RENDER = {
-  body: ['/api/body', renderBody], reflex: ['/api/reflex', renderReflex], brain: ['/api/brain', renderBrain], engineer: ['/api/engineer', renderEngineer],
-  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], showcase: ['/api/showcase', renderShowcase], skills: ['/api/skills', renderSkills], models: ['/api/models', renderModels], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
+  pult: ['/api/switches', renderPult], body: ['/api/body', renderBody], reflex: ['/api/reflex', renderReflex], brain: ['/api/brain', renderBrain], engineer: ['/api/engineer', renderEngineer],
+  deaths: ['/api/deaths', renderDeaths], teacher: ['/api/teacher', renderTeacher], showcase: ['/api/showcase', renderShowcase], skills: ['/api/skills', renderSkills], models: ['/api/models', renderModels], ledger: ['/api/ledger', renderLedger], service: ['/api/service', renderService], chat: [() => '/api/chat' + (showSys ? '?system=1' : ''), renderChat]
 };
 let busy = false;
 async function tick() {
@@ -966,6 +1034,12 @@ document.addEventListener('click', e => {
     if (ab.dataset.redo && !confirm('Этот запрос уже сделан, тесты прошли. Отдать инженеру переделать заново?')) return;
     approveCore(ab.dataset.approve, ab); return;
   }
+  const pb = e.target.closest('button[data-sw]');
+  if (pb) { e.stopPropagation(); pultSend({ set: { [pb.dataset.sw]: pb.dataset.on === '1' } }, pb); return; }
+  const pp = e.target.closest('button[data-preset]');
+  if (pp) { e.stopPropagation(); if (pp.dataset.preset === 'all_off' && !confirm('Выключить всё, включая тело (муха выйдет из игры)?')) return; pultSend({ preset: pp.dataset.preset }, pp); return; }
+  const ps = e.target.closest('button[data-start]');
+  if (ps) { e.stopPropagation(); pultSend({ start: ps.dataset.start }, ps); return; }
   const rb = e.target.closest('button[data-resend]');
   if (rb) { e.stopPropagation(); resendSkill(rb.dataset.resend, rb); return; }
   const tc = e.target.closest('tr[data-core]');

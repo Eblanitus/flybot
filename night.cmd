@@ -12,6 +12,14 @@ start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0brain_guar
 curl.exe -s -m 3 http://127.0.0.1:3199/health >nul 2>&1 || start "flybot-body" /min cmd /c "cd /d %~dp0 && node bot.js localhost 25565 FlyBot_01 3199 >> data\flybot.out.log 2>&1"
 curl.exe -s -m 3 http://127.0.0.1:3200/health >nul 2>&1 || start "flybot-brain-runner" /min cmd /c "cd /d %~dp0brain && node runner.js >> ..\data\runner.out.log 2>&1"
 timeout /t 5 /nobreak >nul
+set OPENCODE_DISABLE_CLAUDE_CODE=1& rem opencode must not read ~/.claude (Claude Code rules). Audit panel: brain off - no opencode, loop checks again in 30 s.     
+set BRAIN_SW=on
+for /f "delims=" %%s in ('node "%~dp0lib\switches.js" get brain 2^>nul') do set BRAIN_SW=%%s
+if /i "%BRAIN_SW%"=="off" (
+  echo [%time%] brain is switched off in the audit panel, checking again in 30 s
+  timeout /t 30 /nobreak >nul
+  goto loop
+)
 for /f "delims=" %%m in ('node "%~dp0models_config.js" get brain 2^>nul') do set MODEL=%%m
 rem Body not in the world (no answer or ready=false, e.g. server offline) - do not start the brain, check again in 60 s.
 curl.exe -s -m 5 http://127.0.0.1:3199/health 2>nul | findstr /r /c:"ready.:true" >nul
@@ -21,7 +29,19 @@ if errorlevel 1 (
   goto loop
 )
 rem v0.2: wait for a reason to wake the brain (not on failures, idle or deaths - those are the bot's business).
+rem WOKEN=1: a reason was found, but the brain was switched off before the session - data\wake.md is kept, no new reason needed.
+if "%WOKEN%"=="1" goto woken
 node "%~dp0tools\brain_wake.js" >> data\night.log 2>&1
+:woken
+set WOKEN=
+rem Switch again right before opencode: it could be switched off while waiting for a reason.
+set BRAIN_SW=on
+for /f "delims=" %%s in ('node "%~dp0lib\switches.js" get brain 2^>nul') do set BRAIN_SW=%%s
+if /i "%BRAIN_SW%"=="off" (
+  set WOKEN=1
+  echo [%time%] brain was switched off in the audit panel before the session, the reason is kept
+  goto loop
+)
 rem Handover in the loop too: tail of the previous brain session -> data\handover.md (the new brain reads it at start), fresh ready.flag.
 node "%~dp0tools\handover_note.js" data\night.log data\handover.md >nul 2>&1
 del /q brain\ready.flag >nul 2>&1

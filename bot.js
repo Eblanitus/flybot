@@ -190,6 +190,16 @@ const link = new Link(ctx, {
   }
 }); // ctx.link = link — состояние связи для снимка и команд
 
+// Пульт (data/switches.json, вкладка «Пульт» в аудите): тело выключено — выходит из игры и не заходит. Процесс и HTTP живы,
+// поэтому night.cmd и автоперезапуск не поднимают тело заново. Включили — заходит само (проверка раз в 5 с).
+const switches = require('./lib/switches');
+ctx.paused = false;
+function checkSwitch() {
+  let on = true; try { on = switches.isOn('body', DATA_DIR); } catch (e) {}
+  if (!on && !ctx.paused) { ctx.paused = true; console.log('[пульт] тело выключено — выхожу из игры и жду включения'); link.stop(); }
+  else if (on && ctx.paused) { ctx.paused = false; console.log('[пульт] тело включено — захожу в игру'); link.start(); }
+}
+
 // ---------- HTTP API ----------
 const MAX_BODY = 64 * 1024;
 function send(res, code, obj) {
@@ -227,7 +237,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET') {
       switch (url.pathname) {
-        case '/health': return send(res, 200, { ready: ctx.ready, connected: link.online, error: ctx.lastError, host: HOST, port: PORT, user: USER, link: link.info(), task: ctx.tasks.info() });
+        case '/health': return send(res, 200, { ready: ctx.ready, paused: !!ctx.paused, connected: link.online, error: ctx.lastError, host: HOST, port: PORT, user: USER, link: link.info(), task: ctx.tasks.info() });
         case '/do': {
           // быстрая команда без JSON-файла: /do?action=collect&block=log&count=8&wait=1
           if (fromBrowser(req)) return send(res, 403, { ok: false, error: 'запрос из браузера запрещён' });
@@ -364,5 +374,7 @@ server.listen(CONTROL, '127.0.0.1', () => {
   console.log('[http] GET /health /snapshot /stats /wait /events /task /variants /behavior /blackbox /ledger /showcase   POST /cmd /owner_msg /behavior/reload /behavior/rollback');
   try { const V = require('./lib/variants'); V.registry(); } catch (e) { console.log('[variants] не загрузились:', e.message); }
   behavior.init().catch(e => console.log('[behavior] init:', e && e.message)); // проверка behavior/ и включение (к боту подключится, когда он будет)
-  link.start();
+  checkSwitch(); // выключено с пульта — в игру не заходим
+  if (!ctx.paused) link.start();
+  setInterval(checkSwitch, 5000);
 });

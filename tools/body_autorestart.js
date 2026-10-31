@@ -7,6 +7,7 @@
 //   — днём на открытом месте: HP >= 10, на земле, нет врагов и угроз рядом, не в бою, навыка с ходьбой нет.
 // Тело не вошло в мир за 3 мин или упало 3 раза за 15 мин после перезапуска — откат последней правки тела
 // (из резерва data/core_tasks/<id>/backup), запрос помечается «откат», тело запускается снова.
+// Тело выключено на пульте (data/switches.json) — ничего не делает.
 // Пишет: data/guard.log и журнал петли (--log), события body_restart — в data/events.log, своё — data/body_restart.json.
 'use strict';
 const fs = require('fs');
@@ -168,6 +169,8 @@ async function rollback(pending, why) {
 
 async function main() {
   const i = process.argv.indexOf('--log'); if (i > 0) loopLog = process.argv[i + 1];
+  // пульт: тело выключено (на паузе вне игры) — не перезапускать и не поднимать
+  try { if (!require('../lib/switches').isOn('body', DATA)) return; } catch (e) {}
   const st = readJson(P.state, {});
   const now = Date.now();
 

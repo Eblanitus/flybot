@@ -3,6 +3,7 @@
 // Файлы мухи только читает. Четыре записи: POST /owner_msg в тело (через его HTTP-API), вкладка «Модели» — файл data/models.json (модель мозга, учителя, инженера),
 // кнопка «Разрешить» у запроса на правку ядра — файл data/core_requests_state.json (lib/core_requests.js; сам brain/core_requests.md не меняется)
 // и «Отправить инженеру снова» у заявки «не готово» — дописывает «ПОВТОР от хозяина» в brain/skill_requests/<имя>.md (сторож возьмёт её заново).
+// Вкладка «Пульт» — файл data/switches.json (lib/switches.js: какие части включены) и кнопка «Запустить» для незапущенной части (start отдельным окном).
 // Все запросы к телу и исполнителю идут с заголовком X-Observer: 1 — тело не считает их признаком «мозг жив».
 // Запуск: node audit/server.js   (или audit.cmd в корне проекта)
 'use strict';
@@ -16,7 +17,9 @@ const bbFiles = require('../lib/blackbox_files'); // файлы чёрного �
 const ledgerSummary = require('../lib/ledger_summary');
 const showcaseLib = require('../lib/showcase');
 const coreReq = require('../lib/core_requests'); // запросы на правку ядра: список с состоянием и «Разрешить» (только data/core_requests_state.json)
-const roles = require('./roles'); // консоль ролей: журналы мозга, учителя, инженера и сторожа построчно со временем
+const ledgerLib = require('../lib/teacher_ledger'); // бухгалтерия учителя: счета, загрузка инженера, порог (только чтение)
+const roles = require('./roles');
+const switchesLib = require('../lib/switches'); // пульт: какие части включены (его же читают bot.js, night.cmd, brain_guard.ps1, tools/eyes.js) // консоль ролей: журналы мозга, учителя, инженера и сторожа построчно со временем
 
 const ROOT = path.join(__dirname, '..');
 const DEFAULTS = {
@@ -446,16 +449,17 @@ function engineerList(cfg) {
   const names = new Set();
   for (const f of files) {
     let m;
-    if ((m = /^(.+)\.done\.md$/.exec(f))) names.add(m[1]);
+    if ((m = /^(.+)\.(done|stale)\.md$/.exec(f))) names.add(m[1]);
     else if ((m = /^(.+)\.working$/.exec(f))) names.add(m[1]);
     else if ((m = /^(.+)\.md$/.exec(f))) names.add(m[1]);
   }
   const mt = f => { try { return fs.statSync(path.join(dir, f)).mtimeMs; } catch (e) { return null; } };
   const items = [];
   for (const name of names) {
-    const req = mt(name + '.md'), done = mt(name + '.done.md'), work = mt(name + '.working');
+    const req = mt(name + '.md'), done = mt(name + '.done.md'), work = mt(name + '.working'), stale = mt(name + '.stale.md');
     let status, ts, verdict = '';
     if (work != null) { status = 'working'; ts = work; }
+    else if (stale != null && req != null && stale >= req && !(done != null && done >= req)) { status = 'stale'; ts = stale; verdict = 'снята бухгалтерией учителя: муха справилась сама'; }
     else if (done != null && (req == null || req <= done + 1000)) {
       ts = done;
       let first = ''; try { first = fs.readFileSync(path.join(dir, name + '.done.md'), 'utf8').split(/\r?\n/).find(l => l.trim()) || ''; } catch (e) {}
@@ -467,7 +471,7 @@ function engineerList(cfg) {
   }
   return items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
 }
-const STATUS_RU = { waiting: 'ждёт', working: 'в работе', done: 'готово', notdone: 'не готово' };
+const STATUS_RU = { waiting: 'ждёт', working: 'в работе', done: 'готово', notdone: 'не готово', stale: 'снята' };
 
 // Хозяин отдаёт заявку инженеру ещё раз (вместо сторожа и учителя): «ПОВТОР от хозяина» в конце заявки — она становится новее
 // ответа, и сторож берёт её снова (brain_guard.ps1 PickReq); счётчик техсбоев (<имя>.tech) обнуляется. Ответ .done.md остаётся — история.
@@ -505,7 +509,7 @@ function engineerDetail(cfg, name) {
 // ======================= учитель =======================
 // Только диск: очередь data/teacher_queue.json, отчёты data/teacher/*.md (учебника и журнала уроков больше нет).
 // Тело для этого не нужно — работает и со старым телом.
-const TEACH_TYPE_RU = { idle: 'простой', death: 'смерть', near: 'почти-смерть', owner: 'сообщение хозяина', stuck: 'застряла', fail: 'провал', day: 'итог дня', neighbor: 'новое у соседа', migrate: 'разовая: перенос правил' };
+const TEACH_TYPE_RU = { invoice: 'счёт: пора заявка', idle: 'простой', death: 'смерть', near: 'почти-смерть', owner: 'сообщение хозяина', stuck: 'застряла', fail: 'провал', day: 'итог дня', neighbor: 'новое у соседа', migrate: 'разовая: перенос правил' };
 const TEACH_STATUS_RU = { pending: 'ждёт', working: 'разбирает', done: 'разобран', failed: 'не вышло', dropped: 'выброшен (очередь полна)' };
 const REPORT_RE = /^[\w.-]+\.md$/;
 function readText(file, max) { try { return fs.readFileSync(file, 'utf8').slice(0, max || 60000); } catch (e) { return null; } }
@@ -1032,6 +1036,158 @@ function brainStatus(cfg) {
   return { file: nl.name, mtimeMs: nl.mtimeMs, ageSec: age, sizeKb: Math.round(nl.size / 1024), state: age < 180 ? 'ok' : age < 600 ? 'slow' : 'silent' };
 }
 
+// Глаза (tools/eyes.js) пишут data/eyes_status.json раз в ~3–15 с; старше 60 с — eyes.cmd закрыт
+function eyesStatus(cfg) {
+  let st, mtimeMs;
+  try { const f = path.join(cfg.dataDir, 'eyes_status.json'); mtimeMs = fs.statSync(f).mtimeMs; st = JSON.parse(fs.readFileSync(f, 'utf8')); }
+  catch (e) { return { state: 'never' }; }
+  const now = Date.now(), ans = Date.parse(st.lastAnswerAt) || 0;
+  return {
+    state: now - mtimeMs > 60000 ? 'stopped' : st.state || 'unknown', ageSec: Math.round((now - mtimeMs) / 1000),
+    answerAgeSec: ans ? Math.round((now - ans) / 1000) : null, lastAnswerText: String(st.lastAnswerText || '').slice(0, 200), lastError: String(st.lastError || '').slice(0, 200)
+  };
+}
+
+// ======================= пульт =======================
+// Выключатели частей (data/switches.json, lib/switches.js) и честное «работает / выключено / выключается, доделывает / не запущен».
+// Выключенная часть не берёт новую работу, её цикл ждёт; идущую сессию не убиваем. «Запустить» — только то, что не запущено:
+// отдельным окном (start), как запускает хозяин.
+
+// Петли и процессы по командным строкам: «pid<TAB>имя<TAB>командная строка»
+function parseLoopProcs(text) {
+  const out = { night: [], eyes: [], body: [] };
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const mm = /^(\d+)\t([^\t]*)\t(.*)$/.exec(line); if (!mm) continue;
+    const pid = +mm[1], name = mm[2].toLowerCase(), cl = mm[3];
+    if (name === 'cmd.exe' && /night(-[\d-]+)?\.cmd/i.test(cl)) out.night.push(pid);
+    else if ((name === 'cmd.exe' && /eyes\.cmd/i.test(cl)) || (name === 'node.exe' && /tools[\\/]eyes\.js/i.test(cl) && !/--(probe|client-cmd)/.test(cl))) out.eyes.push(pid);
+    else if (name === 'node.exe' && /bot\.js\s+localhost/i.test(cl)) out.body.push(pid);
+  }
+  return out;
+}
+// null — узнать не удалось (не Windows или PowerShell не ответил)
+async function loadLoopProcs(cfg) {
+  if (cfg.loopProcs) return cfg.loopProcs();
+  if (process.platform !== 'win32') return null;
+  return remoteCached('loops', 5000, () => new Promise(resolve => {
+    const script = "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe' or Name='node.exe'\" | Where-Object { $_.CommandLine -match 'night|eyes|bot\\.js' } | ForEach-Object { \"$($_.ProcessId)`t$($_.Name)`t$($_.CommandLine)\" }";
+    try {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 10000, windowsHide: true, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' },
+        (err, stdout) => resolve(err ? null : parseLoopProcs(stdout)));
+    } catch (e) { resolve(null); }
+  }));
+}
+
+const PULT_STATE_RU = { on: 'работает', off: 'выключено', stopping: 'выключается, доделывает', starting: 'включается', down: 'не запущен', unknown: 'не понять' };
+// Одна строка пульта. start — что запустит кнопка «Запустить» (null — запускать нечего или нельзя)
+function pultRow(part, on, state, what, start, note) {
+  return { part, label: switchesLib.LABELS[part], on, state, stateRu: PULT_STATE_RU[state], what: what || '', start: start || null, note: note || null };
+}
+
+async function pultStatus(cfg) {
+  const sw = switchesLib.read(cfg.dataDir);
+  const [procs, loops, h] = await Promise.all([
+    loadProcs(cfg).catch(() => ({ opencode: null, guards: null })), loadLoopProcs(cfg).catch(() => null),
+    httpJson(cfg.bodyUrl, 'GET', '/health', null, 2500)
+  ]);
+  const oc = procs.opencode, runOf = r => oc ? oc.filter(p => p.role === r) : null;
+  const nightUp = loops ? loops.night.length > 0 : null;
+  const guardUp = procs.guards ? procs.guards.length > 0 : null;
+  const loopUp = nightUp || guardUp ? true : nightUp === false && guardUp !== true ? false : null;   // сторож живёт только вместе с петлёй
+  const rows = [];
+
+  // тело: /health (paused — тело на паузе с пульта; нет поля — тело запущено до пульта)
+  {
+    const j = h.ok && h.json ? h.json : null;
+    if (!j) rows.push(pultRow('body', sw.body, 'down', 'тело (bot.js, порт 3199) не отвечает', 'body', loopUp ? 'петля night.cmd запущена — поднимет тело сама в течение минуты' : null));
+    else if (!sw.body) {
+      if (j.paused) rows.push(pultRow('body', false, 'off', 'вышло из игры и ждёт включения (процесс жив)'));
+      else if (!('paused' in j)) rows.push(pultRow('body', false, 'stopping', j.ready ? 'в игре' : 'не в игре', null, 'тело запущено до пульта и выключатель не читает — выключится после одного перезапуска тела (restart_body.cmd)'));
+      else rows.push(pultRow('body', false, 'stopping', 'выходит из игры (проверка раз в 5 с)'));
+    } else if (j.paused) rows.push(pultRow('body', true, 'starting', 'заходит в игру (проверка раз в 5 с)'));
+    else rows.push(pultRow('body', true, 'on', j.ready ? 'в игре' : 'запущено, но не в игре' + (j.link && j.link.text ? ': ' + String(j.link.text).slice(0, 160) : '')));
+  }
+  // мозг: сессии opencode из петли night.cmd
+  {
+    const bp = runOf('brain'), busy = bp && bp.length > 0;
+    const model = busy ? bp[0].model : null;
+    if (loopUp === false && !busy) rows.push(pultRow('brain', sw.brain, 'down', 'петля night.cmd не запущена', 'night'));
+    else if (!sw.brain) rows.push(busy ? pultRow('brain', false, 'stopping', 'доделывает сессию (' + model + '), новую не начнёт') : pultRow('brain', false, 'off', 'петля жива, opencode не зовёт'));
+    else if (busy) rows.push(pultRow('brain', true, 'on', 'думает (' + model + ')'));
+    else rows.push(pultRow('brain', true, loopUp ? 'on' : 'unknown', loopUp ? 'ждёт повода' : 'процессы не видны'));
+  }
+  // учитель и инженер: их запускает сторож (brain_guard.ps1 из night.cmd)
+  let pendingT = null, pendingE = null;
+  try { const q = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'teacher_queue.json'), 'utf8')); pendingT = (q.cases || []).filter(c => c.status === 'pending').length; } catch (e) {}
+  try { pendingE = engineerList(cfg).filter(i => i.status === 'waiting').length; } catch (e) {}
+  for (const [r, pend, what] of [['teacher', pendingT, 'случаев'], ['engineer', pendingE, 'заявок']]) {
+    const ps = runOf(r), busy = ps && ps.length > 0;
+    const q = pend ? `, ждут ${pend} ${what}` : '';
+    const start = nightUp ? 'guard' : 'night';
+    if (guardUp === false && !busy) rows.push(pultRow(r, sw[r], 'down', 'сторож (brain_guard.ps1) не запущен' + q, start, nightUp ? 'петля night.cmd жива, а сторожа нет — «Запустить» поднимет сторожа к этой петле' : 'сторожа запускает night.cmd'));
+    else if (!sw[r]) rows.push(busy ? pultRow(r, false, 'stopping', 'доделывает (' + ps[0].model + '), новое не возьмёт' + q) : pultRow(r, false, 'off', 'в opencode не ходит' + q));
+    else if (busy) rows.push(pultRow(r, true, 'on', 'работает (' + ps[0].model + ')' + q));
+    else rows.push(pultRow(r, true, guardUp ? 'on' : 'unknown', (guardUp ? 'свободен' : 'процессы не видны') + q));
+  }
+  // глаза: data/eyes_status.json (свежий — процесс жив) и процессы eyes.cmd / tools/eyes.js
+  {
+    const es = eyesStatus(cfg), fresh = es.state !== 'never' && es.state !== 'stopped';
+    const procUp = loops ? loops.eyes.length > 0 : null;
+    if (!fresh && procUp !== true) rows.push(pultRow('eyes', sw.eyes, 'down', es.state === 'never' ? 'не запускались' : 'eyes.cmd закрыт', 'eyes'));
+    else if (!fresh) rows.push(pultRow('eyes', sw.eyes, 'unknown', 'процесс есть, а статус не обновляется больше минуты'));
+    else if (!sw.eyes) rows.push(es.state === 'off' ? pultRow('eyes', false, 'off', 'Live, захват и клиент закрыты, ждут включения')
+      : pultRow('eyes', false, 'stopping', 'закрывают Live и клиент', null, 'если за минуту не выключились — eyes.js запущен до пульта: закрой окно eyes.cmd и запусти снова'));
+    else if (es.state === 'off') rows.push(pultRow('eyes', true, 'starting', 'поднимаются'));
+    else rows.push(pultRow('eyes', true, 'on', es.state + (es.lastError ? ' — ' + es.lastError.slice(0, 120) : '')));
+  }
+  return { now: Date.now(), switches: sw, changedAt: switchesLib.changedAt(cfg.dataDir), file: switchesLib.filePath(cfg.dataDir), presets: Object.keys(switchesLib.PRESETS), rows,
+    loops: loops ? { night: loops.night.length, eyes: loops.eyes.length, body: loops.body.length } : null, guard: guardUp };
+}
+
+// Команда «Запустить»: строка для cmd /c (окно отдельное, живёт после аудита)
+function launchCmd(cfg, what, loopPid) {
+  const root = cfg.root || ROOT;
+  if (what === 'body') return `start "flybot-body" /min cmd /c "cd /d ${root} && node bot.js localhost 25565 FlyBot_01 3199 >> data\\flybot.out.log 2>&1"`;
+  if (what === 'night') return `start "" "${path.join(root, 'night.cmd')}"`;
+  if (what === 'eyes') return `start "" "${path.join(root, 'eyes.cmd')}"`;
+  if (what === 'guard') {
+    const nl = latestNightLog(cfg.dataDir);
+    const log = nl ? nl.file : path.join(cfg.dataDir, 'night.log');
+    return `start "flybot-guard" /min powershell -NoProfile -ExecutionPolicy Bypass -File "${path.join(root, 'brain_guard.ps1')}" -Log "${log}" -LoopPid ${loopPid}`;
+  }
+  return null;
+}
+function launchReal(cfg, cmdline) {
+  const { spawn } = require('child_process');
+  const c = spawn('cmd.exe', ['/c', cmdline], { cwd: cfg.root || ROOT, detached: true, stdio: 'ignore', windowsVerbatimArguments: true, windowsHide: true });
+  c.unref();
+}
+
+// POST /api/switches: {set: {часть: true|false}} | {preset: 'all_off'|'body_eyes'|'all_on'} | {start: часть}
+async function pultPost(cfg, b) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return { ok: false, error: 'нужен объект' };
+  if (b.set != null || b.preset != null) {
+    const r = switchesLib.save(b.preset != null ? String(b.preset) : b.set, cfg.dataDir);
+    if (!r.ok) return r;
+    return { ok: true, switches: r.switches, pult: await pultStatus(cfg) };
+  }
+  if (b.start != null) {
+    if (!switchesLib.PARTS.includes(b.start)) return { ok: false, error: 'неизвестная часть: ' + String(b.start).slice(0, 40) };
+    remote.delete('loops'); remote.delete('procs');
+    const st = await pultStatus(cfg);
+    const row = st.rows.find(x => x.part === b.start);
+    if (!row || row.state !== 'down' || !row.start) return { ok: false, error: `«${switchesLib.LABELS[b.start]}» сейчас ${row ? row.stateRu : '?'} — запускать нечего`, pult: st };
+    const loops = await loadLoopProcs(cfg).catch(() => null);
+    const loopPid = loops && loops.night.length ? loops.night[0] : 0;
+    if (row.start === 'guard' && !loopPid) return { ok: false, error: 'петля night.cmd не найдена — запусти night.cmd', pult: st };
+    const cmd = launchCmd(cfg, row.start, loopPid);
+    try { (cfg.launch || (c => launchReal(cfg, c)))(cmd, row.start); } catch (e) { return { ok: false, error: 'не запустилось: ' + (e && e.message || e) }; }
+    remote.delete('loops'); remote.delete('procs');
+    return { ok: true, started: row.start, cmd };
+  }
+  return { ok: false, error: 'нужно set, preset или start' };
+}
+
 async function apiSummary(cfg) {
   const { events, mtimeMs } = loadEvents(cfg);
   const [body, run, rs] = await Promise.all([loadBody(cfg), loadRunner(cfg), roleStatus(cfg).catch(() => null)]);
@@ -1041,6 +1197,8 @@ async function apiSummary(cfg) {
     body: { ok: !!body.ok, error: body.error || null, ready: sn ? !!sn.ready : false, hp: sn ? sn.health : null, food: sn ? sn.food : null },
     runner: { ok: !!run.ok, error: run.error || null, active: run.ok && run.runner ? run.runner.active : null },
     brain: brainStatus(cfg),
+    eyes: eyesStatus(cfg),
+    switches: switchesLib.read(cfg.dataDir),
     events: { lastTs: events.length ? events[events.length - 1].ts : null, fileMtime: mtimeMs }
   };
 }
@@ -1069,7 +1227,9 @@ async function api(cfg, name, q) {
     case 'teacher': return { now, ...loadTeacher(cfg), model: savedModels(cfg).teacher || null };
     case 'teacher_report': return teacherReport(cfg, q.get('name'));
     case 'core_requests': return { now, ...loadCore(cfg) };
+    case 'ledger': try { return { now, ...ledgerLib.status({ dataDir: cfg.dataDir, brainDir: cfg.brainDir }) }; } catch (e) { return { now, ok: false, error: String(e && e.message || e), accounts: [] }; }
     case 'models': return apiModels(cfg, q);
+    case 'switches': return pultStatus(cfg);
   }
   return null;
 }
@@ -1103,6 +1263,21 @@ function createServer(opts) {
           if (!b || typeof b !== 'object' || Array.isArray(b)) return sendJson(res, 400, { ok: false, error: 'нужен объект {роль: модель}' });
           const r = saveModels(cfg, b);
           return sendJson(res, r.ok ? 200 : 400, r);
+        });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/switches') {
+        // пульт: только со страницы аудита (свой адрес), как остальные POST
+        const origin = req.headers.origin;
+        if (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) { req.resume(); return sendJson(res, 403, { ok: false, error: 'чужой сайт' }); }
+        if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) { req.resume(); return sendJson(res, 415, { ok: false, error: 'нужен Content-Type: application/json' }); }
+        let s = ''; let big = false;
+        req.on('data', c => { if (big) return; s += c; if (s.length > 2000) { big = true; req.resume(); sendJson(res, 413, { ok: false, error: 'слишком большой запрос' }); } });
+        req.on('end', async () => {
+          if (big) return;
+          let b; try { b = JSON.parse(s || '{}'); } catch (e) { return sendJson(res, 400, { ok: false, error: 'bad json' }); }
+          try { const r = await pultPost(cfg, b); return sendJson(res, r.ok ? 200 : 400, r); }
+          catch (e) { return sendJson(res, 500, { ok: false, error: String(e && e.message || e) }); }
         });
         return;
       }
@@ -1172,7 +1347,7 @@ module.exports = {
   createServer, DEFAULTS, readTail, tailLines, decodeBuf, resolveTimes, hmsToSec, parseEventLines, reflexFeed, brainCommands, chatFeed,
   stripAnsi, parseCurl, parseNightLog, parseNotes, parseDeathLine, parseDayLine, parseGuardLine, parseHandoverLine,
   parseVerboseModels, parsePlainFree, parseOpencodeProcs, parseGuardProcs, roleStatus, apiConsole, loadSkills, modelErrors, loadFreeModels, apiModels, saveModels,
-  engineerList, engineerDetail, resendSkill, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, loadCore, api, taskRu
+  engineerList, engineerDetail, resendSkill, parseLoopProcs, pultStatus, pultPost, launchCmd, collapsePolls, loadShowcase, loadEvents, loadBrainLog, scanBrainStarts, latestNightLog, loadService, loadDeaths, loadBlackbox, loadLedger, loadBlackboxFile, loadTeacher, teacherReport, loadCore, api, taskRu
 };
 
 if (require.main === module) {
