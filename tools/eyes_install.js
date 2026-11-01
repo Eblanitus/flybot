@@ -1,5 +1,5 @@
 // Ставит датапак flyeyes в мир хозяина: tools/eyes_datapack/flyeyes -> <мир>/datapacks/flyeyes.
-// Мир берётся из data/eyes.json (ключ world) или по умолчанию это мир «muha 0_2». Запуск: node tools/eyes_install.js [путь_к_миру]
+// Мир берётся из data/eyes.json (ключ world) или по умолчанию это мир «Muha 0_3» (0.3). Запуск: node tools/eyes_install.js [путь_к_миру]
 // Хозяину после установки один раз: /reload в игре (или перезайти в мир). Дальше датапак работает сам.
 'use strict';
 const path = require('path');

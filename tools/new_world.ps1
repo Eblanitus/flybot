@@ -55,6 +55,10 @@ $notes = @"
 Постройка: (нет — мозг выберет чертёж и место)
 База: (нет — мозг выберет место)
 "@
+# заготовка блокнота нового мира (тот же сид — те же координаты: база, проект и очередь «## План» стройки заново); {date} и {arch} подставляются
+$tpl = "$root\brain\notes_new_world.md"
+if (Test-Path $tpl) { $notes = [IO.File]::ReadAllText($tpl, [Text.Encoding]::UTF8).Replace('{date}', $date).Replace('{arch}', $arch) }
 [IO.File]::WriteAllText("$root\brain\notes.md", $notes, (New-Object Text.UTF8Encoding $false))
 
-"Готово: старый мир в $arch ($($items.Count) шт.), блокнот и очередь учителя чистые. Навыки не тронуты."
+$how = if (Test-Path $tpl) { 'блокнот из brain\notes_new_world.md (база и очередь стройки)' } else { 'блокнот чистый' }
+"Готово: старый мир в $arch ($($items.Count) шт.), $how, очередь учителя чистая. Навыки не тронуты."

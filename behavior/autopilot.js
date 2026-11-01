@@ -781,8 +781,13 @@ function decide(s) {
     // запасная ночная работа (night_mine выключен, постройки нет): камень рядом малым радиусом, не поход в поле
     if (calm && !workBan && s.hasPickaxe && s.cobble < T.cobbleWant && !(s.base && s.baseDist != null && s.baseDist > s.base.r))
       add(30, body('night_collect', 'collect', { block: 'stone', count: T.stoneCount, radius: 16 }, 'ночь, мобов рядом нет — добываю камень рядом'));
-    // L052: wait_night только без врагов рядом и без свежих ударов (иначе выше сработала ночная защита)
-    if (s.isNight) add(Math.max(0, 20 - press), body('wait_night', 'wait_night', { max_sec: T.waitNightSec }, calm ? 'дел нет — пережидаю ночь' : 'пережидаю ночь'));
+    // L052 / behavior_autopilot_wait_night_idle: wait_night только в укрытии или у базы; на открытой местности без укрытия — короткое ожидание (жесткий лимит max_sec) или низкий счёт
+    if (s.isNight) {
+      const waitShelteredOrBase = s.sheltered || nearBase;
+      const waitMaxSec = waitShelteredOrBase ? T.waitNightSec : Math.min(30, T.apWaitMaxSec);
+      const waitScore = waitShelteredOrBase ? Math.max(0, 20 - press) : 2;
+      add(waitScore, body('wait_night', 'wait_night', { max_sec: waitMaxSec }, waitShelteredOrBase ? (calm ? 'дел нет — пережидаю ночь' : 'пережидаю ночь') : 'на открытой местности без укрытия — жду недолго, строю укрытие или ухожу на базу'));
+    }
     return pick();
   }
 

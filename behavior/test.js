@@ -209,45 +209,62 @@ module.exports = async function selfTest() {
   // сбой кода навыка — автопилот этот навык не зовёт
   assert.strictEqual(decide({ ...goalState, crashed: { build_hut: { reason: 'brain/learned/build_hut.js:250', at: Date.now() } } }).key, 'day_routine', 'упавшую цель не повторяем');
   assert.strictEqual(decide({ ...base, crashed: { day_routine: { reason: 'x.js:1', at: Date.now() } } }).key, 'explore', 'упавший навык не повторяем');
-  assert.strictEqual(decide({ ...base, phase: 'ночь', isNight: true, nightIn: 0, sheltered: true, crashed: { night_mine: { reason: 'x.js:1', at: Date.now() } } }).key, 'wait_night', 'ночью без упавшего навыка — пережидаем');
+  assert.strictEqual(decide({ ...base, crashed: { day_routine: { reason: 'x.js:1', at: Date.now() } } }).key, 'explore', 'упавший навык не повторяем');
+  const nz = { ...base, phase: 'ночь', isNight: true, nightIn: 0, sheltered: true, crashed: { night_mine: { reason: 'x.js:1', at: Date.now() } } };
+  assert.strictEqual(decide(nz).key, 'wait_night', 'ночью без упавшего навыка — пережидаем');
+  // behavior_autopilot_wait_night_idle: на открытой местности без укрытия автопилот выбирает укрытие (night_shelter_dig), а не wait_night
+  const nightOpen = { ...nz, sheltered: false, base: null, baseDist: null, hostilesNear: 0, hostile: null, crashed: { night_mine: { reason: 'x.js:1', at: Date.now() } } };
+  const openAct = decide(nightOpen);
+  assert.strictEqual(openAct.key, 'night_shelter_dig', 'на открытой местности ночью — укрытие, а не стояние в wait_night');
+
+  // если укрытие заблокировано, wait_night имеет короткий max_sec и низкий счёт
+  const nightOpenBlocked = { ...nightOpen, blocked: { night_shelter_dig: true, night_shelter: true } };
+  const wnOpen = decide(nightOpenBlocked);
+  assert.strictEqual(wnOpen.key, 'wait_night');
+  assert.ok(wnOpen.params.max_sec <= 30, 'на открытой местности max_sec короткий: ' + wnOpen.params.max_sec);
+  assert.ok(wnOpen.score <= 5, 'на открытой местности счёт wait_night низкий: ' + wnOpen.score);
+
+  const nightSheltered = { ...nz, sheltered: true, hostilesNear: 0, hostile: null, crashed: { night_mine: { reason: 'x.js:1', at: Date.now() } } };
+  const wnSheltered = decide(nightSheltered);
+  assert.strictEqual(wnSheltered.key, 'wait_night');
+  assert.strictEqual(wnSheltered.params.max_sec, T.waitNightSec, 'в укрытии max_sec полный');
   // сбой кода (В): не 30 минут — запись живёт, пока файл навыка тот же; поменялся файл — пробуем снова
   const apc = { codeCrash: { build_hut: { reason: 'x.js:1', at: Date.now() - 1000, mtime: 111 }, fixed: { reason: 'y.js:2', at: Date.now() - 1000, mtime: 111 } } };
   const cl = crashList(apc, Date.now(), n => (n === 'fixed' ? 222 : 111));
   assert.ok(cl.build_hut, 'файл тот же — сбой кода в списке');
   assert.ok(!cl.fixed && !apc.codeCrash.fixed, 'файл поменялся — сбой забыт, навык снова можно');
   assert.strictEqual(T.apCodeCrashSkipMs, undefined, 'тридцатиминутной паузы больше нет');
-  // ---- L052-автопилот (заявка учителя, смерть 23): «укрытие объявлено» ≠ «безопасно ждать» ----
-  const nz = { ...base, phase: 'ночь', isNight: true, nightIn: 0, sheltered: true };
+  const nz2 = { ...base, phase: 'ночь', isNight: true, nightIn: 0, sheltered: true };
   // мобов нет и ударов нет — пережидаем ночь (как было; night_mine отключен, чтобы дойти до wait_night)
-  assert.strictEqual(decide({ ...nz, crashed: { night_mine: { reason: 'x.js:1', at: Date.now() } } }).key, 'wait_night', 'ночь чиста — пережидаем');
+  assert.strictEqual(decide({ ...nz2, crashed: { night_mine: { reason: 'x.js:1', at: Date.now() } } }).key, 'wait_night', 'ночь чиста — пережидаем');
   // моб рядом ночью — wait_night не берём: бой/стены/отход
-  let nd = decide({ ...nz, hostilesNear: 1, hostile: { name: 'zombie', d: 9.7 } });
+  let nd = decide({ ...nz2, hostilesNear: 1, hostile: { name: 'zombie', d: 9.7 } });
   assert.ok(nd && nd.key !== 'wait_night', 'моб рядом ночью — не wait_night');
   assert.notStrictEqual(nd.key, 'night_shelter_dig', 'яму при мобе не копаем');
-  assert.strictEqual(decide({ ...nz, sheltered: false, hasWeapon: false, hostilesNear: 1, hostile: { name: 'zombie', d: 9.7 } }).params.mode, 'walls', 'рядом моб, без оружия — укрытие стенами, не яма: копка 3-4 с, зомби успевает влезть (9.7 → 2.7 м)');
+  assert.strictEqual(decide({ ...nz2, sheltered: false, hasWeapon: false, hostilesNear: 1, hostile: { name: 'zombie', d: 9.7 } }).params.mode, 'walls', 'рядом моб, без оружия — укрытие стенами, не яма: копка 3-4 с, зомби успевает влезть (9.7 → 2.7 м)');
   // с оружием и HP в норме — отбиваемся; а начавшийся wait_night прерываем (не молча держим)
-  nd = decide({ ...nz, hostilesNear: 1, hostile: { name: 'zombie', d: 0.3 }, running: { name: 'wait_night', key: 'wait_night', kind: 'body' } });
+  nd = decide({ ...nz2, hostilesNear: 1, hostile: { name: 'zombie', d: 0.3 }, running: { name: 'wait_night', key: 'wait_night', kind: 'body' } });
   assert.strictEqual(nd.key, 'night_fight', 'оружие есть — отбиваемся от зомби');
   assert.strictEqual(nd.params.target, 'zombie', 'цель — моб');
   assert.strictEqual(nd.preempt, true, 'wait_night прерываем — тело отдаём защите');
   // без оружия и моб вплотную уже бил — стены не успеть: отходим
-  nd = decide({ ...nz, sheltered: false, hasWeapon: false, hitRecent: true, hostilesNear: 1, hostile: { name: 'zombie', d: 0.8 } });
+  nd = decide({ ...nz2, sheltered: false, hasWeapon: false, hitRecent: true, hostilesNear: 1, hostile: { name: 'zombie', d: 0.8 } });
   assert.strictEqual(nd.key, 'night_escape', 'враг вплотную и по муху били — отход (L052: та же смерть 23)');
   // по муху били, даже моба не видно (strея издалека) — wait_night отменяется
-  nd = decide({ ...nz, hitRecent: true, hostilesNear: 0, hostile: null });
+  nd = decide({ ...nz2, hitRecent: true, hostilesNear: 0, hostile: null });
   assert.ok(nd && nd.key !== 'wait_night', 'свежие удары — не wait_night');
   assert.strictEqual(nd.key, 'night_escape', 'в укрытии, но по муху били — выхожу и отхожу');
   // behavior_reflexes_shelter_no_mobs: мобов нет — укрытие не дело: работа ночью (туннель), а не яма
-  nd = decide({ ...nz, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true });
+  nd = decide({ ...nz2, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true });
   assert.ok(nd && !/^night_shelter|^wait_night$/.test(nd.key), 'мобов нет — не закапываюсь: ' + JSON.stringify(nd));
   // дел нет совсем (туннель упал, камня хватает) — яма как запасной вариант остаётся
-  assert.strictEqual(decide({ ...nz, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true, crashed: { night_mine: {} } }).key, 'night_shelter_dig', 'дел нет — закапываюсь');
+  assert.strictEqual(decide({ ...nz2, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true, crashed: { night_mine: {} } }).key, 'night_shelter_dig', 'дел нет — закапываюсь');
   // HP низкий ночью — укрытие по-прежнему выше работы
-  assert.strictEqual(decide({ ...nz, hp: 8, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true }).key, 'lowhp_shelter', 'мало HP ночью — укрываюсь');
+  assert.strictEqual(decide({ ...nz2, hp: 8, sheltered: false, hostilesNear: 0, hostile: null, hasPickaxe: true }).key, 'lowhp_shelter', 'мало HP ночью — укрываюсь');
   // все варианты защиты на паузе — не берём ни яму, ни ночную работу, ни wait_night
-  assert.strictEqual(decide({ ...nz, hostilesNear: 1, hostile: { name: 'zombie', d: 7.2 }, blocked: { night_fight: true, night_shelter: true, night_escape: true } }), null, 'защита на паузе — ничего не начинаем');
+  assert.strictEqual(decide({ ...nz2, hostilesNear: 1, hostile: { name: 'zombie', d: 7.2 }, blocked: { night_fight: true, night_shelter: true, night_escape: true } }), null, 'защита на паузе — ничего не начинаем');
   // в закрытом укрытии ударов нет — без оружия ждём моба в укрытии (не вместо wait_night — журнальная строка в тике)
-  nd = decide({ ...nz, hasWeapon: false, hostilesNear: 1, hostile: { name: 'zombie', d: 5 } });
+  nd = decide({ ...nz2, hasWeapon: false, hostilesNear: 1, hostile: { name: 'zombie', d: 5 } });
   assert.strictEqual(nd, null, 'в укрытии, ударов нет, без оружия — стоим (не wait_night!)');
   // ---- А: опасность по последствию (lib/danger.js fight/outlook), а не по порогу HP ----
   const Dg = require('./core')('danger');

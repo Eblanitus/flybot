@@ -279,12 +279,12 @@
   },
   "lamp_posts": {
     "enabled": true,
-    "runs": 21,
+    "runs": 24,
     "ok": 0,
-    "fail": 21,
-    "consecutiveFails": 21,
-    "lastError": "не хватает блоков: cobblestone ×3, spruce_fence ×12, torch ×4",
-    "lastRun": "2026-10-31T01:47:02.527Z",
+    "fail": 24,
+    "consecutiveFails": 24,
+    "lastError": "смета столба 1 68 2: not ready: ECONNREFUSED",
+    "lastRun": "2026-10-31T04:49:54.662Z",
     "lastOk": null
   },
   "climb_up": {
@@ -923,12 +923,12 @@
   },
   "night_mine_v2": {
     "enabled": true,
-    "runs": 0,
+    "runs": 1,
     "ok": 0,
-    "fail": 0,
-    "consecutiveFails": 0,
-    "lastError": null,
-    "lastRun": null,
+    "fail": 1,
+    "consecutiveFails": 1,
+    "lastError": "навык вернул ok:false без error",
+    "lastRun": "2026-10-31T12:51:31.081Z",
     "lastOk": null
   },
   "night_mine_v1": {
@@ -1283,12 +1283,12 @@
   },
   "night_mine_v3": {
     "enabled": true,
-    "runs": 0,
+    "runs": 1,
     "ok": 0,
-    "fail": 0,
-    "consecutiveFails": 0,
-    "lastError": null,
-    "lastRun": null,
+    "fail": 1,
+    "consecutiveFails": 1,
+    "lastError": "night_mine: survey не работает: навык тела \"survey\" не удался: для survey по координатам нужны все числа x1,y1,z1,x2,y2,z2",
+    "lastRun": "2026-10-31T12:50:52.723Z",
     "lastOk": null
   },
   "gather_list_tool_alt": {
@@ -1712,6 +1712,21 @@
     "emptyOk": 0
   },
   "collect_v3": {
+    "enabled": true,
+    "runs": 0,
+    "ok": 0,
+    "fail": 0,
+    "consecutiveFails": 0,
+    "lastError": null,
+    "lastRun": null,
+    "lastOk": null,
+    "nestedRuns": 0,
+    "nestedOk": 0,
+    "nestedFail": 0,
+    "emptyRuns": 0,
+    "emptyOk": 0
+  },
+  "farm_plot_v1": {
     "enabled": true,
     "runs": 0,
     "ok": 0,
