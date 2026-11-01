@@ -7,3 +7,5 @@ brain/learned/.tmp/
 lib/.hermes-tmp.*
 brain/ready.flag
 
+hardcore/config.json
+hardcore/archive/

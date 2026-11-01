@@ -1,0 +1,14 @@
+{
+  "serverDir": "C:\\Users\\user\\mc-hardcore",
+  "serverJar": "server.jar",
+  "java": "java",
+  "javaArgs": ["-Xmx4G"],
+  "version": "26.1",
+  "port": 25566,
+  "levelName": "hc_world",
+  "bots": 2,
+  "botPrefix": "HC_",
+  "maxWorldMin": 120,
+  "worldsTarget": 20,
+  "keepArchives": 10
+}
