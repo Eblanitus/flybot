@@ -96,7 +96,7 @@
 > **Сделано 31.10.** npm test 47/47, поведение подгружено (1e603e). 3.1 очередь: ремонт пролёта 1 → mine_tunnel_1 → lamp_posts → light_base.
 > Ядро (lib/daylog.js cut/minHp/lowHpMin/duskFood, lib/skills/blueprint.js onCut) — после перезапуска тела. `node tools/night_report.js 12` — сводка ночи.
 > Ротация out.log (tools/rotate_log.js, >20 МБ, 3 архива) — перед стартом тела в night.cmd, restart_body.ps1, body_autorestart.js, audit «Запустить».
-> Этап 4 (мост) — ждёт 2 ночи с метриками и точку перехода от хозяина.
+> Этап 4 (мост) — **отменён хозяином 01.11.2026**: проект новый (docs/goal_path.md), FlyBot — архив.
 - **3.1 Очередь стройки** (Claude правит brain/notes.md).
   - «Постройка:» = ремонт stair_down_1 -415 54 25: planPick берёт её раньше очереди, а сейчас там шахта на дне за сломанной лестницей.
   - Дальше 6–10 пунктов из местного материала: fence_line вдоль пролётов, lamp_posts, mine_tunnel_1, light_base.
@@ -108,7 +108,7 @@
   - Ротация out.log при 20 МБ.
   - S, sonnet.
 
-### Этап 4 «Мост» — после 2 ночей подряд с метриками этапов 1–3
+### Этап 4 «Мост» — ОТМЕНЁН 01.11.2026 (хозяин: проект новый, см. docs/goal_path.md)
 - **4.1** Хозяин даёт точку и направление (F3) → citadel.md и «## План»: bridge_stone (z+8), column_down, lamp_posts.
 - **4.2** Запас cobblestone ≥200 из mine_tunnel_1 и branch_mine (днём, «Автопилот: gather_list»).
 - **4.3** Сначала fence_line на обоих берегах; мост только днём; учитель — только на провалы без кодового вердикта.
