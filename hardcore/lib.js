@@ -42,6 +42,9 @@ function worldProperties(cfg, seed) {
     'white-list': 'false',
     'max-players': Math.max(10, cfg.bots + 2),
     'enable-rcon': 'false',
+    'pvp': 'true',
+    // баттл-рояль (1в): локатор мухи видит только тех, чья позиция дошла до бота, — дальность прорисовки на всю расстановку
+    ...(cfg.battleRoyale && cfg.botMode !== '1a' ? { 'view-distance': cfg.brViewDistance || 20 } : {}),
     'motd': 'flybot hardcore stand'
   };
 }
@@ -92,7 +95,7 @@ function deathMessage(lines, nick) {
 // Короткая причина из сообщения о смерти: «Zombie», «fall», «starve»… Для сводки, полное сообщение тоже хранится.
 function causeOf(msg) {
   if (!msg) return null;
-  let m = /(?:slain|shot|killed|blown up|fireballed|stung|impaled|squashed|skewered|pummeled) by (?:an? )?([A-Za-z_ ]+?)(?: using| whilst|$)/.exec(msg);
+  let m = /(?:slain|shot|killed|blown up|fireballed|stung|impaled|squashed|skewered|pummeled) by (?:an? )?([A-Za-z0-9_ ]+?)(?: using| whilst|$)/.exec(msg);
   if (m) return m[1].trim();
   const table = [[/fell|hit the ground|fell from/, 'fall'], [/drowned/, 'drown'], [/starved/, 'starve'], [/lava/, 'lava'],
     [/burned|flames|fire/, 'fire'], [/suffocated/, 'suffocate'], [/blew up/, 'explosion'], [/froze/, 'freeze'], [/cactus|pricked/, 'cactus']];
@@ -119,7 +122,13 @@ function summarizeWorld(cards) {
     alreadyDead: by('already_dead'), firstNight: cards.filter(c => c.firstNightSurvived).length, medianLifeSec: Math.round(med),
     topStepMax: steps.length ? steps[steps.length - 1] : 0, medianTopStep: median(steps),
     stuck: cards.reduce((n, c) => n + (Array.isArray(c.stuck) ? c.stuck.length : 0), 0),
-    deathsSoonAfterExit: cards.filter(c => c.deathSoonAfterExit).length
+    deathsSoonAfterExit: cards.filter(c => c.deathSoonAfterExit).length,
+    // баттл-рояль (1в): убийства муха → муха, сколько оружием, у кого больше всех
+    ...(cards.some(c => c.br) ? (() => {
+      const kills = cards.reduce((n, c) => n + (c.killCount || 0), 0);
+      const top = cards.slice().sort((a, b) => (b.killCount || 0) - (a.killCount || 0))[0];
+      return { kills, killsArmed: cards.reduce((n, c) => n + (c.killsArmed || 0), 0), killsByNick: Object.fromEntries(cards.map(c => [c.nick, c.killCount || 0])), topKiller: top && top.killCount ? top.nick : null };
+    })() : {})
   };
 }
 
@@ -180,4 +189,4 @@ function makeLadder() {
   };
 }
 
-module.exports = { stepsNow, makeLadder, STEP_TEXT, makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };
+module.exports = { DEATH_WORDS, stepsNow, makeLadder, STEP_TEXT, makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };

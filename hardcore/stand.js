@@ -15,6 +15,7 @@ const HERE = __dirname;
 const DEFAULTS = {
   serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
   version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b', flyCtlBase: 3310, flyRunnerBase: 3410, flyJoinSec: 120,
+  battleRoyale: true, brSpawnMin: 100, brSpawnMax: 300, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга
   maxWorldMin: 120, keepArchives: 10, worldsTarget: 0, serverStartTimeoutSec: 300, serverStopTimeoutSec: 90,
   botStaggerSec: 3, pauseBetweenWorldsSec: 5, maxServerFails: 3,
   dataDir: path.join(HERE, 'data'), archiveDir: path.join(HERE, 'archive')
@@ -133,11 +134,14 @@ async function stopServer(cfg, p) {
   if (code === 'timeout') { log('сервер не остановился за срок — гашу'); try { p.kill(); } catch (e) {} await Promise.race([p.exited, sleep(10000)]); }
 }
 
+const isBr = cfg => !!cfg.battleRoyale && cfg.botMode !== '1a';   // баттл-рояль только у бота FlyBot (1б/1в)
+
 function startBot(cfg, w, nick, cardFile) {
   const fly = cfg.botMode !== '1a';   // 1б: настоящий FlyBot с автопилотом (hardcore/fly.js); 1а: простой бот life.js
   const base = cfg.botCmd || [process.execPath, path.join(HERE, fly ? 'fly.js' : 'life.js')];
   const args = [...base.slice(1), '--host', '127.0.0.1', '--port', String(cfg.port), '--name', nick, '--version', cfg.version,
-    '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60), ...(fly ? ['--ctlBase', String(cfg.flyCtlBase), '--runnerBase', String(cfg.flyRunnerBase), '--joinSec', String(cfg.flyJoinSec)] : [])];
+    '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60), ...(fly ? ['--ctlBase', String(cfg.flyCtlBase), '--runnerBase', String(cfg.flyRunnerBase), '--joinSec', String(cfg.flyJoinSec)] : []),
+    ...(isBr(cfg) ? ['--br', cfg.botPrefix] : [])];
   const out = fs.openSync(path.join(w.dir, `${nick}.out.log`), 'a');
   const p = spawn(base[0], args, { cwd: HERE, stdio: ['pipe', out, out], windowsHide: true });
   p.exited = new Promise(r => {
@@ -156,7 +160,8 @@ async function runWorld(cfg, n) {
   const propsFile = path.join(cfg.serverDir, 'server.properties');
   const old = fs.existsSync(propsFile) ? fs.readFileSync(propsFile, 'utf8') : '';
   fs.writeFileSync(propsFile, L.patchProperties(old, L.worldProperties(cfg, seed)));
-  log(`мир ${id}: сид ${seed}, ботов ${cfg.bots}, порт ${cfg.port}, бот этапа ${cfg.botMode === '1a' ? '1а' : '1б'}`);
+  const stage = cfg.botMode === '1a' ? '1а' : isBr(cfg) ? '1в (баттл-рояль)' : '1б';
+  log(`мир ${id}: сид ${seed}, ботов ${cfg.bots}, порт ${cfg.port}, бот этапа ${stage}`);
 
   const srv = startServer(cfg, path.join(dir, 'server.log'));
   srv.consoleCommands = [];
@@ -170,6 +175,25 @@ async function runWorld(cfg, n) {
   }
   const t0 = Date.now();
   const bots = [];
+  // Баттл-рояль: каждую муху сразу после входа переносим на её точку (пары в brSpawnMin..brSpawnMax блоков).
+  // spreadplayers с разбросом 0 и радиусом 1 ставит на поверхность у точки — не в воздух и не в камень. Это расстановка стенда,
+  // а не вмешательство: команды пишутся в строку мира (brSpawn), а не в consoleCommands.
+  if (isBr(cfg)) {
+    const sp = require('./br').spawnPoints(cfg.bots, { min: cfg.brSpawnMin, max: cfg.brSpawnMax });
+    w.brSpawn = { ok: sp.ok, points: {} };
+    if (!sp.ok) log(`мир ${id}: ${cfg.bots} мух не расставить так, чтобы все пары были в ${cfg.brSpawnMin}–${cfg.brSpawnMax} блоках — беру лучшую найденную расстановку`);
+    sp.points.forEach((pt, i) => { w.brSpawn.points[`${cfg.botPrefix}${i + 1}`] = pt; });
+    const onJoin = l => {
+      const m = /: ([A-Za-z0-9_]{3,16}) joined the game/.exec(l);
+      const pt = m && w.brSpawn.points[m[1]];
+      if (!pt || pt.sent) return;
+      pt.sent = true;
+      try { srv.stdin.write(`spreadplayers ${pt.x} ${pt.z} 0 1 false ${m[1]}\n`); log(`мир ${id}: ${m[1]} → ${pt.x} ${pt.z}`); }
+      catch (e) { log(`мир ${id}: ${m[1]} не расставлен: ${e.message}`); }
+    };
+    for (const l of srv.lines.slice()) onJoin(l);   // вошёл раньше, чем мы начали слушать
+    srv.on('line', onJoin);
+  }
   for (let i = 1; i <= cfg.bots; i++) {
     const nick = `${cfg.botPrefix}${i}`;
     const cardFile = path.join(dir, `${nick}.json`);
@@ -177,7 +201,23 @@ async function runWorld(cfg, n) {
     if (i < cfg.bots) await sleep(cfg.botStaggerSec * 1000);
   }
   const allDone = Promise.all(bots.map(b => b.p.exited));
-  const timedOut = await Promise.race([allDone.then(() => false), sleep(cfg.maxWorldMin * 60000).then(() => true)]);
+  // Баттл-рояль: мир кончается, когда осталась одна муха (убивать больше некого) — или по сроку.
+  let lastOne = null;
+  const oneLeft = !isBr(cfg) || bots.length < 2 ? new Promise(() => {}) : new Promise(resolve => {
+    const iv = setInterval(() => {
+      const alive = bots.filter(b => b.p.exitCode === null);
+      if (alive.length <= 1) { clearInterval(iv); lastOne = alive[0] ? alive[0].nick : null; resolve('one'); }
+    }, 2000);
+    allDone.then(() => clearInterval(iv));
+  });
+  const ended = await Promise.race([allDone.then(() => 'all'), oneLeft, sleep(cfg.maxWorldMin * 60000).then(() => 'time')]);
+  const timedOut = ended === 'time';
+  if (ended === 'one' && lastOne) {
+    log(`мир ${id}: осталась одна муха (${lastOne}) — мир окончен`);
+    for (const b of bots) if (b.p.exitCode === null) try { b.p.stdin.write('quit\n'); } catch (e) {}
+    await Promise.race([allDone, sleep(20000)]);
+    for (const b of bots) if (b.p.exitCode === null) try { b.p.kill(); } catch (e) {}
+  }
   if (timedOut) {
     log(`мир ${id}: вышел срок ${cfg.maxWorldMin} мин — боты пишут карточки и выходят`);
     for (const b of bots) try { b.p.stdin.write('quit\n'); } catch (e) {}
@@ -196,7 +236,7 @@ async function runWorld(cfg, n) {
     if (!c) c = { nick: b.nick, result: timedOut ? 'timeout' : 'crash', exitCode: b.p.exitCode, note: 'бот не написал карточку' };
     const msg = L.deathMessage(srv.lines, b.nick);
     if (msg) { c.deathMessageServer = msg; if (!c.cause) c.cause = L.causeOf(msg); }
-    return Object.assign({ world: id, seed, nick: b.nick, mode: cfg.botMode === '1a' ? 'stage1a' : 'stage1b-flybot' }, c);
+    return Object.assign({ world: id, seed, nick: b.nick, mode: cfg.botMode === '1a' ? 'stage1a' : isBr(cfg) ? 'stage1v-br' : 'stage1b-flybot' }, c);
   });
   for (const c of cards) appendJsonl(path.join(cfg.dataDir, 'lives.jsonl'), c);
 
@@ -209,7 +249,7 @@ async function runWorld(cfg, n) {
     moveDir(wdir, path.join(archived, 'world'));
     fs.cpSync(dir, path.join(archived, 'stand'), { recursive: true });
   }
-  return { _cards: cards, ...w, serverOk: true, endedAt: new Date().toISOString(), durSec, timedOut, cheats: L.countCheats(srv.lines), consoleCommands: srv.consoleCommands, archived, ...L.summarizeWorld(cards) };
+  return { _cards: cards, ...w, serverOk: true, endedAt: new Date().toISOString(), durSec, timedOut, ...(isBr(cfg) ? { br: true, lastAlive: lastOne } : {}), cheats: L.countCheats(srv.lines), consoleCommands: srv.consoleCommands, archived, ...L.summarizeWorld(cards) };
 }
 
 function prune(cfg) {
@@ -251,7 +291,7 @@ async function main(cfgFile) {
     } catch (e) { log(`лента мира не нарисована: ${e.message}`); }
     if (r.serverOk) {
       fails = 0;
-      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, высшая ступень ${r.topStepMax}, читов ${r.cheats}; лента — ${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
+      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, высшая ступень ${r.topStepMax}${r.br ? `, убийств муха→муха ${r.kills} (оружием ${r.killsArmed})` : ''}, читов ${r.cheats}; лента — ${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
       prune(cfg);
     } else if (++fails >= cfg.maxServerFails) {
       const msg = `сервер ${fails} раза подряд не поднялся — стенд остановлен. Смотри server.log в ${path.join(cfg.dataDir, 'worlds')}`;
