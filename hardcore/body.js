@@ -82,26 +82,15 @@ async function orExplore(ctx, t, fn) {
   }
 }
 
-// Уйти в новое место. Сначала разведка FlyBot (обходит обрывы и воду); она очень осторожна и у обрывов отказывает
-// («внизу обрыв … дальше не иду») — тогда просто путь pathfinder-а в случайную сторону: он сам спускается не больше чем на 3 блока.
-// Удача — ушёл хотя бы на 16 блоков.
+// Уйти в новое место — навык explore FlyBot. У обрыва он отказывает («внизу обрыв … дальше не иду»); автопилот FlyBot
+// в этом случае пробует ближе (behavior/autopilot.js: «обрыв рядом — исследую другое место», distance 8) — делаем так же.
 async function roam(ctx, t, dist) {
-  try { return await S().gather.explore(ctx, t, { distance: dist }); }
-  catch (e) { if (e.aborted) throw e; }
-  const bot = ctx.bot, { goals } = require('mineflayer-pathfinder');
-  const p0 = bot.entity.position.clone();
   let last = null;
-  for (let i = 0; i < 4; i++) {
-    t.check();
-    const a = Math.random() * 2 * Math.PI;
-    const x = Math.round(p0.x + Math.cos(a) * dist), z = Math.round(p0.z + Math.sin(a) * dist);
-    t.progress(`иду в сторону ${x} ${z}`);
-    try { await S().A.goto(ctx, t, new goals.GoalNearXZ(x, z, 4), { timeout: 25000 }); }
-    catch (e) { if (e.aborted) throw e; last = e; }
-    const moved = bot.entity.position.distanceTo(p0);
-    if (moved >= 16) return { roamed: Math.round(moved), to: [x, z] };
+  for (const d of [dist, 16, 8]) {
+    try { return await S().gather.explore(ctx, t, { distance: d }); }
+    catch (e) { if (e.aborted) throw e; last = e; if (!/обрыв|спуск|заблокирован/.test(String(e.message))) break; }
   }
-  throw new Error('не ушёл с места: ' + (last ? last.message : 'путь не найден'));
+  throw last;
 }
 
 let seq = 0;
