@@ -14,7 +14,7 @@ const timeline = require('./timeline');
 const HERE = __dirname;
 const DEFAULTS = {
   serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
-  version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null,
+  version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b',
   maxWorldMin: 120, keepArchives: 10, worldsTarget: 0, serverStartTimeoutSec: 300, serverStopTimeoutSec: 90,
   botStaggerSec: 3, pauseBetweenWorldsSec: 5, maxServerFails: 3,
   dataDir: path.join(HERE, 'data'), archiveDir: path.join(HERE, 'archive')
@@ -136,7 +136,7 @@ async function stopServer(cfg, p) {
 function startBot(cfg, w, nick, cardFile) {
   const base = cfg.botCmd || [process.execPath, path.join(HERE, 'life.js')];
   const args = [...base.slice(1), '--host', '127.0.0.1', '--port', String(cfg.port), '--name', nick, '--version', cfg.version,
-    '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60)];
+    '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60), '--mode', cfg.botMode === '1a' ? '1a' : '1b'];
   const out = fs.openSync(path.join(w.dir, `${nick}.out.log`), 'a');
   const p = spawn(base[0], args, { cwd: HERE, stdio: ['pipe', out, out], windowsHide: true });
   p.exited = new Promise(r => {
@@ -155,7 +155,7 @@ async function runWorld(cfg, n) {
   const propsFile = path.join(cfg.serverDir, 'server.properties');
   const old = fs.existsSync(propsFile) ? fs.readFileSync(propsFile, 'utf8') : '';
   fs.writeFileSync(propsFile, L.patchProperties(old, L.worldProperties(cfg, seed)));
-  log(`мир ${id}: сид ${seed}, ботов ${cfg.bots}, порт ${cfg.port}`);
+  log(`мир ${id}: сид ${seed}, ботов ${cfg.bots}, порт ${cfg.port}, бот этапа ${cfg.botMode === '1a' ? '1а' : '1б'}`);
 
   const srv = startServer(cfg, path.join(dir, 'server.log'));
   srv.consoleCommands = [];
@@ -195,7 +195,7 @@ async function runWorld(cfg, n) {
     if (!c) c = { nick: b.nick, result: timedOut ? 'timeout' : 'crash', exitCode: b.p.exitCode, note: 'бот не написал карточку' };
     const msg = L.deathMessage(srv.lines, b.nick);
     if (msg) { c.deathMessageServer = msg; if (!c.cause) c.cause = L.causeOf(msg); }
-    return Object.assign({ world: id, seed, nick: b.nick, mode: 'stage1a' }, c);
+    return Object.assign({ world: id, seed, nick: b.nick, mode: cfg.botMode === '1a' ? 'stage1a' : 'stage1b' }, c);
   });
   for (const c of cards) appendJsonl(path.join(cfg.dataDir, 'lives.jsonl'), c);
 
@@ -250,7 +250,7 @@ async function main(cfgFile) {
     } catch (e) { log(`лента мира не нарисована: ${e.message}`); }
     if (r.serverOk) {
       fails = 0;
-      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, читов ${r.cheats}; лента — ${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
+      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, высшая ступень ${r.topStepMax}, читов ${r.cheats}; лента — ${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
       prune(cfg);
     } else if (++fails >= cfg.maxServerFails) {
       const msg = `сервер ${fails} раза подряд не поднялся — стенд остановлен. Смотри server.log в ${path.join(cfg.dataDir, 'worlds')}`;

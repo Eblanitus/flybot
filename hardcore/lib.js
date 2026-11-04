@@ -111,10 +111,15 @@ function firstNightEnd(age0, tod0) {
 function summarizeWorld(cards) {
   const by = r => cards.filter(c => c.result === r).length;
   const lens = cards.map(c => c.lifeSec || 0).sort((a, b) => a - b);
-  const med = lens.length ? (lens.length % 2 ? lens[(lens.length - 1) / 2] : (lens[lens.length / 2 - 1] + lens[lens.length / 2]) / 2) : 0;
+  const median = a => a.length ? (a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2) : 0;
+  const med = median(lens);
+  const steps = cards.map(c => c.topStep || 0).sort((a, b) => a - b);
   return {
     bots: cards.length, deaths: by('death'), timeouts: by('timeout'), disconnects: by('disconnect'), crashes: by('crash'),
-    alreadyDead: by('already_dead'), firstNight: cards.filter(c => c.firstNightSurvived).length, medianLifeSec: Math.round(med)
+    alreadyDead: by('already_dead'), firstNight: cards.filter(c => c.firstNightSurvived).length, medianLifeSec: Math.round(med),
+    topStepMax: steps.length ? steps[steps.length - 1] : 0, medianTopStep: median(steps),
+    stuck: cards.reduce((n, c) => n + (Array.isArray(c.stuck) ? c.stuck.length : 0), 0),
+    deathsSoonAfterExit: cards.filter(c => c.deathSoonAfterExit).length
   };
 }
 

@@ -9,6 +9,7 @@
   "levelType": "minecraft\\:large_biomes",
   "bots": 5,
   "botPrefix": "HC_",
+  "botMode": "1b",
   "maxWorldMin": 120,
   "worldsTarget": 20,
   "keepArchives": 10

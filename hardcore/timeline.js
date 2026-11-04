@@ -11,7 +11,8 @@ const KIND = {
   start: { c: 'var(--start)', label: 'старт' }, eat: { c: 'var(--eat)', label: 'поел' }, flee: { c: 'var(--warn)', label: 'бежит' },
   lowhp: { c: 'var(--bad)', label: 'HP низкий' }, night: { c: 'var(--muted)', label: 'ночь' }, night_survived: { c: 'var(--good)', label: 'пережил ночь' },
   day: { c: 'var(--muted)', label: 'новый день' }, death: { c: 'var(--bad)', label: 'смерть' }, end: { c: 'var(--muted)', label: 'конец' },
-  stage: { c: 'var(--good)', label: 'ступень' }
+  stage: { c: 'var(--good)', label: 'ступень' }, shelter: { c: 'var(--nightband)', label: 'укрылся' }, leave: { c: 'var(--start)', label: 'вышел из укрытия' },
+  stuck: { c: 'var(--warn)', label: 'застрял' }, fight: { c: 'var(--warn)', label: 'дерётся' }
 };
 const CSS = `
 :root{--bg:#f4f6f1;--panel:#fff;--fg:#1d2419;--muted:#66705f;--line:#cdd5c4;--day:#e8efdc;--nightband:#9aa5b8;
@@ -79,7 +80,7 @@ function svgFor(cards) {
 }
 
 function legend() {
-  return '<div class="legend">' + ['start', 'eat', 'flee', 'lowhp', 'night_survived', 'death'].map(k =>
+  return '<div class="legend">' + ['start', 'stage', 'eat', 'flee', 'shelter', 'leave', 'stuck', 'lowhp', 'night_survived', 'death'].map(k =>
     `<span><i class="dot" style="background:${KIND[k].c}"></i>${KIND[k].label}</span>`).join('') +
     '<span><i class="dot" style="background:var(--nightband);border-radius:2px"></i>ночь</span></div>';
 }
