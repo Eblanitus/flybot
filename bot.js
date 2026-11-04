@@ -125,6 +125,7 @@ ctx.lastBrainContact = Date.now();
 let brainSilentWarned = false;
 setInterval(() => {
   const min = (Date.now() - ctx.lastBrainContact) / 60000;
+  if (process.env.FLYBOT_NO_BRAIN === '1') return;   // хардкор-стенд: мозга нет по замыслу, «мозг молчит» — ложная тревога в чате
   if (min >= 5 && !brainSilentWarned) { brainSilentWarned = true; statusChat(`мозг молчит уже ${Math.round(min)} мин — стою и только отбиваюсь`, true); }
   if (min < 1 && brainSilentWarned) { brainSilentWarned = false; statusChat('мозг снова на связи', true); }
 }, 30000);

@@ -33,7 +33,7 @@ const notes = path.join(life, 'notes.md');
 if (!fs.existsSync(notes)) fs.writeFileSync(notes, '# Заметки\n\nНовый хардкор-мир: базы нет, целей нет.\n');
 
 const env = Object.assign({}, process.env, {
-  DATA_DIR: dirs.data, FLYBOT_NOTES: notes, MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
+  DATA_DIR: dirs.data, FLYBOT_NOTES: notes, FLYBOT_NO_BRAIN: '1', FLYBOT_LEDGER_LOG: path.join(life, 'inventory.jsonl'),   // журнал сумки: изменения, удары, смерть (lib/ledger.js) MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
   ...(A.br ? { HC_BR_PREFIX: A.br } : {})
 });
@@ -74,7 +74,7 @@ let lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, everTable = false, wasCl
 const exits = [], acts = {}, lastDeath = { msg: null };
 // баттл-рояль: свои убийства, кто убил меня, охота (что видели на локаторе, наша текущая команда, счёт решений)
 const kills = [], killSeen = new Set(), seenFlies = new Map(), hunt = { ours: null, follows: 0, fights: 0, legs: 0, legPending: false, why: null, lastAt: 0 };
-let killedBy = null;
+let killedBy = null, aliveSnap = null;
 const r1 = x => Math.round(x * 10) / 10;
 const BAD_FOOD = new Set(['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'chorus_fruit', 'suspicious_stew']);
 const FOODS = (() => { try { return require('minecraft-data')(A.version).foodsByName || {}; } catch (e) { return {}; } })();
@@ -124,7 +124,7 @@ function noteKill(m) {
   killSeen.add(m);
   if (k.killer === A.name) {
     const weapon = BR.weaponOf(lastSnap && lastSnap.heldItem);
-    kills.push({ victim: k.victim, lifeSec: Math.round((Date.now() - t0) / 1000), wt: lastWt, weapon, hp: lastSnap ? r1(lastSnap.health || 0) : null });
+    kills.push({ victim: k.victim, lifeSec: Math.round((Date.now() - t0) / 1000), wt: lastWt, weapon, hp: lastSnap ? r1(lastSnap.health || 0) : null, inv: invOf(lastSnap) });
     chron.note(lastWt, 'kill', `убил ${k.victim} (${weapon === 'fist' ? 'кулаком' : weapon})`);
     console.log(`[fly] ${A.name}: убил ${k.victim}, всего ${kills.length}`);
   } else if (k.victim === A.name) killedBy = k.killer;
@@ -213,6 +213,9 @@ async function huntTick(s, f) {
   } else hunt.why = `${dcs.why} — тело не взяло: ${r && r.error ? String(r.error).slice(0, 80) : 'нет ответа'}`;
 }
 
+// сумка из снимка тела: { предмет: n } (для убийства и смерти в карточке; подробный журнал — inventory.jsonl)
+function invOf(s) { const m = {}; for (const i of (s && s.inventory) || []) m[i.name] = (m[i.name] || 0) + i.count; return m; }
+
 function situation(s) {
   const inv = {}; let food = 0;
   for (const i of s.inventory || []) { inv[i.name] = (inv[i.name] || 0) + i.count; if (FOODS[i.name] && !BAD_FOOD.has(i.name)) food += i.count; }
@@ -238,6 +241,7 @@ async function tick() {
       console.log(`[fly] ${A.name} в мире ${A.world}, тело :${CTL}, навыки :${RUN}`);
     }
     lastSnap = s;
+    if ((s.health || 0) > 0 && s.gameMode !== 'spectator') aliveSnap = s;   // сумка «до смерти» — после смерти снимок уже пустой
     const f = frameOf(s);
     frames.push(f); while (frames.length > 60) frames.shift();
     if (f.wt != null) lastWt = f.wt;
@@ -275,6 +279,7 @@ function writeCard(result, extra = {}) {
     ladder: ladder.reached, topStep: ladder.top(), exits, actions: acts, lowHpNoHealSec: lowNoHealSec,
     deathSoonAfterExit: result === 'death' && !!last && lifeSec - last.lifeSec <= 60,
     autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null,
+    invLast: invOf(aliveSnap), handLast: aliveSnap && aliveSnap.heldItem ? (aliveSnap.heldItem.name || aliveSnap.heldItem) : null,
     ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, legs: hunt.legs, lastWhy: hunt.why } } : {}),
     ...extra
   };

@@ -73,7 +73,7 @@ const isWeapon = w => w && w !== 'fist';
 
 // Пороги охотника (поведение, их потом подкручивает учитель). prepSec — сколько секунд жизни муха готовится, если
 // оружия нет (с оружием охота разрешена сразу); fightDist — с какого расстояния вместо подхода начинаем бой.
-const HUNT = { hp: 14, food: 12, prepSec: 600, fightDist: 12, memorySec: 120, maxFollowSec: 240 };
+const HUNT = { hp: 14, food: 12, prepSec: 600, fightDist: 12, fightKeep: 16, switchMargin: 16, memorySec: 120, maxFollowSec: 240 };
 
 // s — что знает муха сейчас: { hp, food, lifeSec, armed, isNight, busy (тело занято не нами: рефлекс, еда, побег),
 //   seen: [{ name, d, at, ago }] — мухи на панели локатора (ago — сколько секунд назад видели), ours: { kind, target, sec } | null }
@@ -87,10 +87,14 @@ function huntDecision(s, T = HUNT) {
     return ours ? { act: 'stop', why } : { act: 'none', why };
   }
   const fresh = (s.seen || []).filter(m => m.ago <= T.memorySec).sort((a, b) => a.d - b.d);
-  const tgt = fresh[0];
+  // цель не скачет: пока прежняя видна и не сильно дальше ближайшей — держимся её (разбор 04.11: у HC_1 HC_3 и HC_10 по очереди)
+  const cur = ours && fresh.find(m => m.name === ours.target);
+  const tgt = cur && cur.d <= fresh[0].d + T.switchMargin ? cur : fresh[0];
   if (!tgt) return ours ? { act: 'stop', why: 'муху потерял из виду' } : { act: 'none', why: 'мух на локаторе нет' };
   // ночью далеко не ходим: только если муха уже близко
   if (s.isNight && tgt.d > 32 && !ours) return { act: 'none', why: `ночь, ${tgt.name} далеко (${tgt.d} м)` };
+  // бой идёт с этой мухой и она в радиусе погони навыка fight — не дёргаем (раньше уходила за 12 м → follow → снова fight, 80 смен за мир)
+  if (ours && ours.kind === 'fight' && ours.target === tgt.name && tgt.d <= T.fightKeep) return { act: 'none', why: `дерусь с ${tgt.name} (${tgt.d} м)` };
   if (tgt.d <= T.fightDist && tgt.ago <= 3) {
     if (ours && ours.kind === 'fight' && ours.target === tgt.name) return { act: 'none', why: `дерусь с ${tgt.name}` };
     return { act: 'fight', target: tgt.name, why: `${tgt.name} в ${tgt.d} м — бой` };

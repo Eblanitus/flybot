@@ -623,13 +623,16 @@ function attach(api) {
     const hasBlocks = bot.inventory.items().filter(i => ['dirt', 'cobblestone', 'cobbled_deepslate', 'stone', 'netherrack'].includes(i.name)).reduce((a, i) => a + i.count, 0) >= 2;
     const others = hostilesNear(bot, T.playerOthersR) + Object.values(bot.entities).filter(e =>
       e && e !== bot.entity && e !== player && AG.isAggressorEntity(ctx, e) && e.position.distanceTo(p) <= T.playerOthersR).length;
-    const canFight = !lowHpAgainstPlayer && hasWeapon(bot) && bot.health >= T.playerFightHp && others === 0;
+    // баттл-рояль стенда (HC_BR_PREFIX): муха против мухи дерётся и кулаком — у обеих обычно нет оружия, а побег при HP 20
+    // от каждого удара срывал бой охотника (разбор 04.11: 56 побегов, 27 из них при HP ≥ 14). Против других игроков — как было.
+    const brFly = !!process.env.HC_BR_PREFIX && String(name).startsWith(process.env.HC_BR_PREFIX);
+    const canFight = !lowHpAgainstPlayer && (hasWeapon(bot) || brFly) && bot.health >= T.playerFightHp && others === 0;
     // Без блоков на укрытие — побег (escape). Раньше здесь был «goto к базе», но goto — команда тела, а не навык: runSkill('goto')
     // падал «fn is not a function» (хардкор-стенд 04.11, 9 раз), а точка базы без «База:» была зашита (-393 67 36) — сотни блоков от мухи.
     const opts = lowHpAgainstPlayer ? ['shelter', 'escape'] : (canFight ? ['fight', 'escape'] : ['escape', 'shelter']);
     const skill = lowHpAgainstPlayer ? (hasBlocks ? 'shelter' : 'escape') : (canFight ? 'fight' : 'escape');
     const params = lowHpAgainstPlayer && hasBlocks ? { mode: 'walls' } : {};
-    const whyText = lowHpAgainstPlayer ? `игрок ${name} бьёт, HP ${Math.round(bot.health)} — ухожу от игрока ${hasBlocks ? 'в укрытие (стены)' : 'бегом (блоков на укрытие нет)'}` : `игрок ${name} ударил${playerDist < 10 ? ' (близко, низкий HP)' : ''}`;
+    const whyText = lowHpAgainstPlayer ? `игрок ${name} бьёт, HP ${Math.round(bot.health)} — ухожу от игрока ${hasBlocks ? 'в укрытие (стены)' : 'бегом (блоков на укрытие нет)'}` : `игрок ${name} ударил — ухожу: ${bot.health < T.playerFightHp ? `HP ${Math.round(bot.health)}` : others ? `рядом ещё враги (${others})` : 'нет оружия'}`;
     const plan = canFight
       ? { skill: 'fight', params: { target: low, radius: AG.CHASE_MAX, flee_hp: T.playerFleeHp, timeout: T.playerFightTimeout }, why: `игрок ${name} ударил`, options: opts }
       : { skill: skill, params: params, why: whyText, options: opts };
