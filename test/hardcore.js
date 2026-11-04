@@ -150,6 +150,18 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     assert.strictEqual(readJsonl(path.join(s.cfg.dataDir, 'worlds.jsonl')).length, 3);
     assert(/не поднялся/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'NEED_HUMAN.txt'), 'utf8')));
   }
+  // порт занят (старый стенд ещё работает) — стенд не трогает мир и просит человека
+  {
+    const net = require('net');
+    const srv = net.createServer().listen(0, '127.0.0.1');
+    await new Promise(r => srv.on('listening', r));
+    const s = setup({ port: srv.address().port });
+    fs.mkdirSync(path.join(s.srv, 'hc_world'));
+    assert.strictEqual(await stand.main(s.file), 4);
+    assert(/порт .* занят/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'NEED_HUMAN.txt'), 'utf8')));
+    assert(fs.existsSync(path.join(s.srv, 'hc_world')), 'мир не тронут');
+    srv.close();
+  }
   // консоль хозяина: строка из окна стенда уходит в сервер и записывается как вмешательство
   {
     const s = setup({ worldsTarget: 1, bots: 1 });

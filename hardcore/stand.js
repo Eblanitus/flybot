@@ -59,8 +59,23 @@ const appendJsonl = (f, obj) => fs.appendFileSync(f, JSON.stringify(obj) + '\n')
 // Перенос папки: rename, а между дисками — копия и удаление.
 function moveDir(src, dst) {
   fs.mkdirSync(path.dirname(dst), { recursive: true });
-  try { fs.renameSync(src, dst); }
-  catch (e) { fs.cpSync(src, dst, { recursive: true }); fs.rmSync(src, { recursive: true, force: true }); }
+  try { fs.renameSync(src, dst); return; }
+  catch (e) {
+    // занят другим процессом (Windows: EBUSY/EPERM/EACCES) — не копируем наполовину, а говорим, кто мешает
+    if (['EBUSY', 'EPERM', 'EACCES'].includes(e.code)) throw Object.assign(new Error(`папку ${src} держит другой процесс — скорее всего, ещё работает старый стенд или его сервер. Останови его и запусти снова`), { code: 'BUSY' });
+    if (e.code !== 'EXDEV') throw e;
+  }
+  fs.cpSync(src, dst, { recursive: true }); fs.rmSync(src, { recursive: true, force: true });
+}
+
+// Порт сервера стенда уже занят — значит, работает старый стенд (или другой сервер на этом порту).
+function portBusy(port) {
+  return new Promise(resolve => {
+    const net = require('net');
+    const sock = net.connect({ host: '127.0.0.1', port }, () => { sock.destroy(); resolve(true); });
+    sock.on('error', () => resolve(false));
+    sock.setTimeout(1500, () => { sock.destroy(); resolve(false); });
+  });
 }
 
 function checkSetup(cfg) {
@@ -214,9 +229,14 @@ async function main(cfgFile) {
   const stopFlag = path.join(cfg.dataDir, 'STOP');
   const problem = checkSetup(cfg);
   if (problem) { fs.writeFileSync(needHuman, problem + '\n'); log(`нужен человек: ${problem}`); return 2; }
+  if (await portBusy(cfg.port)) {
+    const msg = `порт ${cfg.port} уже занят — работает старый стенд или другой сервер. Закрой старое окно стенда (или останови его процессы node/java) и запусти снова`;
+    fs.writeFileSync(needHuman, msg + '\n'); log(`нужен человек: ${msg}`); return 4;
+  }
   try { fs.unlinkSync(needHuman); } catch (e) {}
   try { fs.unlinkSync(stopFlag); } catch (e) {}
-  clearLeftover(cfg);
+  try { clearLeftover(cfg); }
+  catch (e) { if (e.code !== 'BUSY') throw e; fs.writeFileSync(needHuman, e.message + '\n'); log(`нужен человек: ${e.message}`); return 4; }
   attachConsole();
   log(`стенд запущен: ${cfg.worldsTarget ? cfg.worldsTarget + ' миров' : 'без конца'}, срок мира ${cfg.maxWorldMin} мин`);
   let fails = 0, n = 0;
