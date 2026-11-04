@@ -1,0 +1,456 @@
+{
+ "wood": [
+  {
+   "id": "v1.mineWoodLog",
+   "lib": "voyager/t1",
+   "fn": "mineWoodLog"
+  },
+  {
+   "id": "v3.mineWoodLog",
+   "lib": "voyager/t3",
+   "fn": "mineWoodLog"
+  },
+  {
+   "id": "v2.chopSpruceLogs",
+   "lib": "voyager/t2",
+   "fn": "chopSpruceLogs"
+  },
+  {
+   "id": "v1.craftOakPlanksAndSticks",
+   "lib": "voyager/t1",
+   "fn": "craftOakPlanksAndSticks"
+  },
+  {
+   "id": "v2.craftWoodenPickaxe",
+   "lib": "voyager/t2",
+   "fn": "craftWoodenPickaxe"
+  },
+  {
+   "id": "v3.craftWoodenPickaxe",
+   "lib": "voyager/t3",
+   "fn": "craftWoodenPickaxe"
+  },
+  {
+   "id": "v3.craftWoodenSword",
+   "lib": "voyager/t3",
+   "fn": "craftWoodenSword"
+  },
+  {
+   "id": "o.craftWoodenAxe",
+   "lib": "odyssey",
+   "fn": "craftWoodenAxe"
+  },
+  {
+   "id": "o.equipPickaxeOrCraftOne",
+   "lib": "odyssey",
+   "fn": "equipPickaxeOrCraftOne"
+  },
+  {
+   "id": "o.equipSwordOrCraftOne",
+   "lib": "odyssey",
+   "fn": "equipSwordOrCraftOne"
+  },
+  {
+   "id": "o.equipAxeOrCraftOne",
+   "lib": "odyssey",
+   "fn": "equipAxeOrCraftOne"
+  }
+ ],
+ "stone": [
+  {
+   "id": "v1.mineTenCobblestone",
+   "lib": "voyager/t1",
+   "fn": "mineTenCobblestone"
+  },
+  {
+   "id": "v3.mineEightCobblestone",
+   "lib": "voyager/t3",
+   "fn": "mineEightCobblestone"
+  },
+  {
+   "id": "v1.craftStonePickaxe",
+   "lib": "voyager/t1",
+   "fn": "craftStonePickaxe"
+  },
+  {
+   "id": "v3.craftStonePickaxe",
+   "lib": "voyager/t3",
+   "fn": "craftStonePickaxe"
+  },
+  {
+   "id": "v3.craftStoneTools",
+   "lib": "voyager/t3",
+   "fn": "craftStoneTools"
+  },
+  {
+   "id": "v3.craftStoneSword",
+   "lib": "voyager/t3",
+   "fn": "craftStoneSword"
+  },
+  {
+   "id": "v3.craftStoneAxe",
+   "lib": "voyager/t3",
+   "fn": "craftStoneAxe"
+  },
+  {
+   "id": "o.mineCobblestone",
+   "lib": "odyssey",
+   "fn": "mineCobblestone"
+  },
+  {
+   "id": "o.collectCobblestone",
+   "lib": "odyssey",
+   "fn": "collectCobblestone"
+  },
+  {
+   "id": "o.craftStonePickaxe",
+   "lib": "odyssey",
+   "fn": "craftStonePickaxe"
+  }
+ ],
+ "furnace": [
+  {
+   "id": "v1.craftFurnace",
+   "lib": "voyager/t1",
+   "fn": "craftFurnace"
+  },
+  {
+   "id": "v3.craftFurnace",
+   "lib": "voyager/t3",
+   "fn": "craftFurnace"
+  },
+  {
+   "id": "v2.mineFiveCoalOres",
+   "lib": "voyager/t2",
+   "fn": "mineFiveCoalOres"
+  },
+  {
+   "id": "v3.mineFourCoalOre",
+   "lib": "voyager/t3",
+   "fn": "mineFourCoalOre"
+  },
+  {
+   "id": "v2.craftEightTorches",
+   "lib": "voyager/t2",
+   "fn": "craftEightTorches"
+  },
+  {
+   "id": "v3.craftChest",
+   "lib": "voyager/t3",
+   "fn": "craftChest"
+  },
+  {
+   "id": "o.craftTorches",
+   "lib": "odyssey",
+   "fn": "craftTorches"
+  },
+  {
+   "id": "o.craftCampfire",
+   "lib": "odyssey",
+   "fn": "craftCampfire"
+  },
+  {
+   "id": "o.placeChest",
+   "lib": "odyssey",
+   "fn": "placeChest"
+  }
+ ],
+ "food": [
+  {
+   "id": "v3.killThreeCows",
+   "lib": "voyager/t3",
+   "fn": "killThreeCows"
+  },
+  {
+   "id": "v3.killThreeChickens",
+   "lib": "voyager/t3",
+   "fn": "killThreeChickens"
+  },
+  {
+   "id": "v3.killThreeSheep",
+   "lib": "voyager/t3",
+   "fn": "killThreeSheep"
+  },
+  {
+   "id": "v3.cookRawBeef",
+   "lib": "voyager/t3",
+   "fn": "cookRawBeef"
+  },
+  {
+   "id": "v3.cookChicken",
+   "lib": "voyager/t3",
+   "fn": "cookChicken"
+  },
+  {
+   "id": "v3.cookRawMutton",
+   "lib": "voyager/t3",
+   "fn": "cookRawMutton"
+  },
+  {
+   "id": "v3.eatCookedMuttonIfHungry",
+   "lib": "voyager/t3",
+   "fn": "eatCookedMuttonIfHungry"
+  },
+  {
+   "id": "v1.killTwoPigs",
+   "lib": "voyager/t1",
+   "fn": "killTwoPigs"
+  },
+  {
+   "id": "v1.cookPorkchops",
+   "lib": "voyager/t1",
+   "fn": "cookPorkchops"
+  },
+  {
+   "id": "o.cookBeef",
+   "lib": "odyssey",
+   "fn": "cookBeef"
+  },
+  {
+   "id": "o.cookPorkchop",
+   "lib": "odyssey",
+   "fn": "cookPorkchop"
+  }
+ ],
+ "farm": [
+  {
+   "id": "v2.catchThreeFish",
+   "lib": "voyager/t2",
+   "fn": "catchThreeFish"
+  },
+  {
+   "id": "v2.fishInNearbyWaterSafely",
+   "lib": "voyager/t2",
+   "fn": "fishInNearbyWaterSafely"
+  },
+  {
+   "id": "o.craftFishingRod",
+   "lib": "odyssey",
+   "fn": "craftFishingRod"
+  },
+  {
+   "id": "o.collectWheatSeeds",
+   "lib": "odyssey",
+   "fn": "collectWheatSeeds"
+  },
+  {
+   "id": "o.hoeFarmland",
+   "lib": "odyssey",
+   "fn": "hoeFarmland"
+  },
+  {
+   "id": "o.plantWheatSeeds",
+   "lib": "odyssey",
+   "fn": "plantWheatSeeds"
+  },
+  {
+   "id": "o.collectWheat",
+   "lib": "odyssey",
+   "fn": "collectWheat"
+  },
+  {
+   "id": "o.makeBread",
+   "lib": "odyssey",
+   "fn": "makeBread"
+  },
+  {
+   "id": "o.collectCarrots",
+   "lib": "odyssey",
+   "fn": "collectCarrots"
+  },
+  {
+   "id": "o.collectPotatoes",
+   "lib": "odyssey",
+   "fn": "collectPotatoes"
+  },
+  {
+   "id": "o.breedCow",
+   "lib": "odyssey",
+   "fn": "breedCow"
+  },
+  {
+   "id": "o.breedSheep",
+   "lib": "odyssey",
+   "fn": "breedSheep"
+  },
+  {
+   "id": "o.breedChicken",
+   "lib": "odyssey",
+   "fn": "breedChicken"
+  },
+  {
+   "id": "o.collectMilkWithBucket",
+   "lib": "odyssey",
+   "fn": "collectMilkWithBucket"
+  }
+ ],
+ "night": [
+  {
+   "id": "v2.exploreCave",
+   "lib": "voyager/t2",
+   "fn": "exploreCave"
+  },
+  {
+   "id": "v2.exploreCaveAndGatherResourcesV2",
+   "lib": "voyager/t2",
+   "fn": "exploreCaveAndGatherResources",
+   "file": "exploreCaveAndGatherResourcesV2.js"
+  },
+  {
+   "id": "v3.mineDeepslateOres",
+   "lib": "voyager/t3",
+   "fn": "mineDeepslateOres"
+  },
+  {
+   "id": "v3.mineTenCobbledDeepslateBelowY0",
+   "lib": "voyager/t3",
+   "fn": "mineTenCobbledDeepslateBelowY0"
+  },
+  {
+   "id": "v3.mineThreeIronOre",
+   "lib": "voyager/t3",
+   "fn": "mineThreeIronOre"
+  },
+  {
+   "id": "v1.mineFiveIronOres",
+   "lib": "voyager/t1",
+   "fn": "mineFiveIronOres"
+  },
+  {
+   "id": "o.mineIronOre",
+   "lib": "odyssey",
+   "fn": "mineIronOre"
+  },
+  {
+   "id": "o.mineFlint",
+   "lib": "odyssey",
+   "fn": "mineFlint"
+  },
+  {
+   "id": "o.mineDiamond",
+   "lib": "odyssey",
+   "fn": "mineDiamond"
+  }
+ ],
+ "iron": [
+  {
+   "id": "v3.smeltRawIron",
+   "lib": "voyager/t3",
+   "fn": "smeltRawIron"
+  },
+  {
+   "id": "v3.craftIronPickaxe",
+   "lib": "voyager/t3",
+   "fn": "craftIronPickaxe"
+  },
+  {
+   "id": "v3.craftIronSword",
+   "lib": "voyager/t3",
+   "fn": "craftIronSword"
+  },
+  {
+   "id": "v3.craftIronChestplate",
+   "lib": "voyager/t3",
+   "fn": "craftIronChestplate"
+  },
+  {
+   "id": "v3.craftIronHelmet",
+   "lib": "voyager/t3",
+   "fn": "craftIronHelmet"
+  },
+  {
+   "id": "v3.craftIronLeggingsAndBoots",
+   "lib": "voyager/t3",
+   "fn": "craftIronLeggingsAndBoots"
+  },
+  {
+   "id": "v3.craftShield",
+   "lib": "voyager/t3",
+   "fn": "craftShield"
+  },
+  {
+   "id": "v3.equipShield",
+   "lib": "voyager/t3",
+   "fn": "equipShield"
+  },
+  {
+   "id": "v1.smeltFiveRawIron",
+   "lib": "voyager/t1",
+   "fn": "smeltFiveRawIron"
+  },
+  {
+   "id": "v2.equipIronArmor",
+   "lib": "voyager/t2",
+   "fn": "equipIronArmor"
+  },
+  {
+   "id": "o.craftBucket",
+   "lib": "odyssey",
+   "fn": "craftBucket"
+  },
+  {
+   "id": "o.collectWaterWithBucket",
+   "lib": "odyssey",
+   "fn": "collectWaterWithBucket"
+  }
+ ],
+ "combat": [
+  {
+   "id": "o.killOneZombie",
+   "lib": "odyssey",
+   "fn": "killOneZombie"
+  },
+  {
+   "id": "o.killOneSkeleton",
+   "lib": "odyssey",
+   "fn": "killOneSkeleton"
+  },
+  {
+   "id": "o.killOneSpider",
+   "lib": "odyssey",
+   "fn": "killOneSpider"
+  },
+  {
+   "id": "o.killOneCreeper",
+   "lib": "odyssey",
+   "fn": "killOneCreeper"
+  },
+  {
+   "id": "o.craftBow",
+   "lib": "odyssey",
+   "fn": "craftBow"
+  },
+  {
+   "id": "o.craftArrow",
+   "lib": "odyssey",
+   "fn": "craftArrow"
+  },
+  {
+   "id": "o.equipArmor",
+   "lib": "odyssey",
+   "fn": "equipArmor"
+  }
+ ],
+ "bed": [
+  {
+   "id": "v1.craftWhiteBed",
+   "lib": "voyager/t1",
+   "fn": "craftWhiteBed"
+  },
+  {
+   "id": "v2.craftWhiteBedWithExploration",
+   "lib": "voyager/t2",
+   "fn": "craftWhiteBedWithExploration"
+  },
+  {
+   "id": "o.shearOneSheep",
+   "lib": "odyssey",
+   "fn": "shearOneSheep"
+  },
+  {
+   "id": "o.craftWhiteBed",
+   "lib": "odyssey",
+   "fn": "craftWhiteBed"
+  }
+ ]
+}

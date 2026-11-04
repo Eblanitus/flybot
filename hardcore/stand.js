@@ -17,6 +17,7 @@ const DEFAULTS = {
   serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
   version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b', flyCtlBase: 3310, flyRunnerBase: 3410, flyJoinSec: 120,
   battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
+  pool: true,   // этап 2 (хозяин 04.11): мухи берут навыки из пула hardcore/pool (родные + Voyager/Odyssey), общая память <dataDir>/pool_runs.jsonl
   brStartTime: 12000,   // 1в (хозяин 04.11): мир начинается сразу вечером (12000 — закат, ночь с 13000), чтобы мухи не успевали спокойно развиться; null — как раньше
   maxWorldMin: 120, keepArchives: 10, worldsTarget: 0, serverStartTimeoutSec: 300, serverStopTimeoutSec: 90,
   botStaggerSec: 3, pauseBetweenWorldsSec: 5, maxServerFails: 3,
@@ -167,7 +168,7 @@ function startBot(cfg, w, nick, cardFile) {
   const base = cfg.botCmd || [process.execPath, path.join(HERE, fly ? 'fly.js' : 'life.js')];
   const args = [...base.slice(1), '--host', '127.0.0.1', '--port', String(cfg.port), '--name', nick, '--version', cfg.version,
     '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60), ...(fly ? ['--ctlBase', String(cfg.flyCtlBase), '--runnerBase', String(cfg.flyRunnerBase), '--joinSec', String(cfg.flyJoinSec)] : []),
-    ...(isBr(cfg) ? ['--br', cfg.botPrefix] : [])];
+    ...(isBr(cfg) ? ['--br', cfg.botPrefix] : []), ...(fly && cfg.pool ? ['--pool', path.join(cfg.dataDir, 'pool_runs.jsonl')] : [])];
   const out = fs.openSync(path.join(w.dir, `${nick}.out.log`), 'a');
   const p = spawn(base[0], args, { cwd: HERE, stdio: ['pipe', out, out], windowsHide: true });
   p.exited = new Promise(r => {

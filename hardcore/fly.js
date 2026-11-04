@@ -21,7 +21,8 @@ const A = {
   host: arg('host', '127.0.0.1'), port: +arg('port', 25566), name: arg('name', 'HC_1'), version: arg('version', '26.1'),
   world: arg('world', ''), seed: arg('seed', ''), out: arg('out', `card-${Date.now()}.json`), maxSec: +arg('maxSec', 7260),
   ctlBase: +arg('ctlBase', 3310), runnerBase: +arg('runnerBase', 3410), joinSec: +arg('joinSec', 120),
-  br: arg('br', '')   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
+  br: arg('br', ''),   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
+  pool: arg('pool', '')   // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
 };
 const ROOT = path.join(__dirname, '..');
 const num = Number((/(\d+)$/.exec(A.name) || [0, 0])[1]);
@@ -36,7 +37,8 @@ const env = Object.assign({}, process.env, {
   DATA_DIR: dirs.data, FLYBOT_NOTES: notes, FLYBOT_NO_BRAIN: '1', FLYBOT_LEDGER_LOG: path.join(life, 'inventory.jsonl'),   // журнал сумки: изменения, удары, смерть (lib/ledger.js)
   MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
-  ...(A.br ? { HC_BR_PREFIX: A.br } : {})
+  ...(A.br ? { HC_BR_PREFIX: A.br } : {}),
+  ...(A.pool ? { HC_POOL_RUNS: path.resolve(A.pool) } : {})   // по нему day_routine_v7 и night_mine_v7 берут навык из пула
 });
 const kids = [];
 function run(name, file, args) {
