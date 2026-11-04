@@ -1,7 +1,8 @@
 // Хардкор-стенд, этап 1а (docs/goal_path.md): мир за миром без человека.
 //   новый сид → server.properties (hardcore) → сервер → боты → умер последний или вышел срок мира → stop →
 //   папка мира в hardcore/archive/<мир>/ (хранятся последние keepArchives) → заново.
-// Запуск: hardcore.cmd (или node hardcore/stand.js [путь к конфигу]). Стоп: файл hardcore/data/STOP (стенд доиграет мир и выйдет)
+// Запуск: hardcore.cmd (или node hardcore/stand.js [путь к конфигу]). Стоп: файл hardcore/data/STOP (стенд доиграет мир и выйдет),
+// hardcore/data/STOP_NOW или закрытие окна — сразу (мухи пишут карточки, серверу — stop)
 // или закрыть окно. Сервер трижды подряд не поднялся → hardcore/data/NEED_HUMAN.txt и выход.
 // FlyBot (bot.js, night.cmd) стенд не трогает: своя папка, свой порт.
 'use strict';
@@ -35,7 +36,31 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 let logFile = null;
 // Консоль хозяина: строки, набранные в окне стенда, уходят в консоль текущего сервера (например `kill HC_1`).
 // Каждая такая команда — вмешательство: пишется в stand.log и в строку мира (consoleCommands).
-let current = null;
+let current = null, currentBots = [];
+
+// Стоп без человека (04.11: окно стенда закрыли, а java сервера осталась и держала порт).
+//   - закрытие окна / Ctrl+C / завершение процесса (SIGHUP, SIGINT, SIGBREAK, SIGTERM) — мухи пишут карточки, серверу уходит stop;
+//   - файл data/STOP_NOW — то же самое сразу, без ожидания конца мира (data/STOP — как раньше: доиграть мир и выйти).
+// Сервер гасится своей командой stop (мир сохраняется), силой — только если за срок не вышел.
+let shuttingDown = false;
+async function shutdownNow(cfg, why) {
+  if (shuttingDown) return; shuttingDown = true;
+  log(`останавливаю стенд сейчас: ${why}`);
+  for (const b of currentBots) try { b.p.stdin.write('quit\n'); } catch (e) {}
+  await Promise.race([Promise.all(currentBots.map(b => b.p.exited)), sleep(8000)]);
+  for (const b of currentBots) if (b.p.exitCode === null) try { b.p.kill(); } catch (e) {}
+  if (current && current.exitCode === null) await stopServer({ ...cfg, serverStopTimeoutSec: Math.min(cfg.serverStopTimeoutSec, 30) }, current);
+  log('стенд остановлен');
+  process.exit(0);
+}
+function attachStop(cfg) {
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+    try { process.on(sig, () => { shutdownNow(cfg, sig === 'SIGHUP' ? 'окно стенда закрыто' : sig); }); } catch (e) {}
+  }
+  const now = path.join(cfg.dataDir, 'STOP_NOW');
+  try { fs.unlinkSync(now); } catch (e) {}
+  setInterval(() => { if (fs.existsSync(now)) { try { fs.unlinkSync(now); } catch (e) {} shutdownNow(cfg, 'найден STOP_NOW'); } }, 2000).unref();
+}
 function attachConsole() {
   if (!process.stdin.isTTY && process.env.HC_CONSOLE !== '1') return;   // в тестах stdin не трогаем
   process.stdin.setEncoding('utf8');
@@ -181,6 +206,7 @@ async function runWorld(cfg, n) {
   }
   const t0 = Date.now();
   const bots = [];
+  currentBots = bots;
   // Баттл-рояль: каждую муху сразу после входа переносим на её точку (пары в brSpawnMin..brSpawnMax блоков).
   // spreadplayers с разбросом 0 и радиусом 1 ставит на поверхность у точки — не в воздух и не в камень. Это расстановка стенда,
   // а не вмешательство: команды пишутся в строку мира (brSpawn), а не в consoleCommands.
@@ -285,6 +311,7 @@ async function main(cfgFile) {
   try { clearLeftover(cfg); }
   catch (e) { if (e.code !== 'BUSY') throw e; fs.writeFileSync(needHuman, e.message + '\n'); log(`нужен человек: ${e.message}`); return 4; }
   attachConsole();
+  if (require.main === module) attachStop(cfg);
   log(`стенд запущен: ${cfg.worldsTarget ? cfg.worldsTarget + ' миров' : 'без конца'}, срок мира ${cfg.maxWorldMin} мин`);
   let fails = 0, n = 0;
   while (!cfg.worldsTarget || n < cfg.worldsTarget) {
