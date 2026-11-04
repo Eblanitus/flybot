@@ -111,10 +111,15 @@ function firstNightEnd(age0, tod0) {
 function summarizeWorld(cards) {
   const by = r => cards.filter(c => c.result === r).length;
   const lens = cards.map(c => c.lifeSec || 0).sort((a, b) => a - b);
-  const med = lens.length ? (lens.length % 2 ? lens[(lens.length - 1) / 2] : (lens[lens.length / 2 - 1] + lens[lens.length / 2]) / 2) : 0;
+  const median = a => a.length ? (a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2) : 0;
+  const med = median(lens);
+  const steps = cards.map(c => c.topStep || 0).sort((a, b) => a - b);
   return {
     bots: cards.length, deaths: by('death'), timeouts: by('timeout'), disconnects: by('disconnect'), crashes: by('crash'),
-    alreadyDead: by('already_dead'), firstNight: cards.filter(c => c.firstNightSurvived).length, medianLifeSec: Math.round(med)
+    alreadyDead: by('already_dead'), firstNight: cards.filter(c => c.firstNightSurvived).length, medianLifeSec: Math.round(med),
+    topStepMax: steps.length ? steps[steps.length - 1] : 0, medianTopStep: median(steps),
+    stuck: cards.reduce((n, c) => n + (Array.isArray(c.stuck) ? c.stuck.length : 0), 0),
+    deathsSoonAfterExit: cards.filter(c => c.deathSoonAfterExit).length
   };
 }
 
@@ -145,4 +150,34 @@ function makeChronicle(max = 300) {
   };
 }
 
-module.exports = { makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };
+// Ступени 1–6 лестницы (docs/goal_path.md, раздел 1) по инвентарю: s.inv — {имя: штук}; s.food — штук годной еды;
+// s.tablePlaced — верстак был (ставил или держал); s.nightSurvived — пережил ночь. Взятая ступень не теряется — это помнит makeLadder.
+const PICKS = ['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'golden_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'];
+const SWORDS_STONE_UP = ['stone_sword', 'iron_sword', 'diamond_sword', 'netherite_sword'];
+function stepsNow(s) {
+  const inv = s.inv || {}, has = n => (inv[n] || 0) > 0;
+  const logs = Object.keys(inv).filter(n => /_(log|stem)$/.test(n) && !n.startsWith('stripped_')).reduce((a, n) => a + inv[n], 0);
+  const r = [];
+  if (logs >= 4) r.push(1);
+  if (has('crafting_table') || s.tablePlaced) r.push(2);
+  if (PICKS.some(has)) r.push(3);
+  if (PICKS.slice(1).some(has) && SWORDS_STONE_UP.some(has)) r.push(4);
+  if ((s.food || 0) >= 5) r.push(5);
+  if (s.nightSurvived) r.push(6);
+  return r;
+}
+const STEP_TEXT = { 1: '4 бревна', 2: 'верстак', 3: 'деревянная кирка', 4: 'каменные кирка и меч', 5: 'запас еды 5', 6: 'пережил первую ночь' };
+function makeLadder() {
+  const reached = {};   // ступень → { lifeSec, wt }
+  return {
+    reached,
+    update(s, lifeSec, wt) {   // новые ступени (их пишут в ленту)
+      const fresh = [];
+      for (const n of stepsNow(s)) if (!reached[n]) { reached[n] = { lifeSec, wt: wt == null ? null : Math.round(wt) }; fresh.push(n); }
+      return fresh;
+    },
+    top() { const k = Object.keys(reached).map(Number); return k.length ? Math.max(...k) : 0; }
+  };
+}
+
+module.exports = { stepsNow, makeLadder, STEP_TEXT, makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };

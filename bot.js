@@ -65,7 +65,8 @@ const ctx = {
   dataDir: DATA_DIR, processStart: Date.now(), aliveSince: null, lastPos: null,
   lastDamage: null, combatUntil: 0, manualControl: false,
   visited: new Set(),
-  movements: null, sprintMovements: null
+  movements: null, sprintMovements: null,
+  expFile: path.join(DATA_DIR, 'experience.json') // таблица опыта — в папке данных (у FlyBot та же data/experience.json; у хардкор-стенда — своя на жизнь)
 };
 ctx.tasks = new TaskManager(ctx);
 ctx.blackbox = new BlackBox(ctx);
