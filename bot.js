@@ -162,6 +162,7 @@ const link = new Link(ctx, {
   attach(session) {
     const bot = session.bot;
     bot.loadPlugin(pathfinder);
+    try { require('./lib/locator').attachWaypoints(bot); } catch (e) {} // метки панели локатора от сервера (дальние игроки)
     bodyEvents.attach(ctx, session); // один раз на экземпляр бота: урон, смерть, сигналы, чат (ядро)
     behavior.attachSession(session); // рефлексы и автопилот (behavior/) — через хост
     critic.attach(ctx, session); // критик: затупы мозга/тела -> событие advice

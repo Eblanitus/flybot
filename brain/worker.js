@@ -185,7 +185,7 @@ async function main(msg) {
       let res = await mod.run(makeApi(ctx, 0, name), msg.params && typeof msg.params === 'object' ? msg.params : {});
       if (res === undefined || res === null) res = { ok: true };
       if (typeof res !== 'object' || Array.isArray(res)) res = { ok: true, result: res };
-      if (res.ok === false) return send({ type: 'result', ok: false, error: String(res.error || 'навык вернул ok:false без error'), value: res });
+      if (res.ok === false) return send({ type: 'result', ok: false, error: String(res.error || (res.reason ? res.reason : 'навык вернул ok:false без error')), value: res });
       if (res.ok === undefined) res = { ok: true, ...res };
       send({ type: 'result', ok: true, value: res });
     } catch (e) {

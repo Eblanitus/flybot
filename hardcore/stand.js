@@ -15,7 +15,8 @@ const HERE = __dirname;
 const DEFAULTS = {
   serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
   version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b', flyCtlBase: 3310, flyRunnerBase: 3410, flyJoinSec: 120,
-  battleRoyale: true, brSpawnMin: 100, brSpawnMax: 300, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга
+  battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
+  brStartTime: 12000,   // 1в (хозяин 04.11): мир начинается сразу вечером (12000 — закат, ночь с 13000), чтобы мухи не успевали спокойно развиться; null — как раньше
   maxWorldMin: 120, keepArchives: 10, worldsTarget: 0, serverStartTimeoutSec: 300, serverStopTimeoutSec: 90,
   botStaggerSec: 3, pauseBetweenWorldsSec: 5, maxServerFails: 3,
   dataDir: path.join(HERE, 'data'), archiveDir: path.join(HERE, 'archive')
@@ -172,6 +173,11 @@ async function runWorld(cfg, n) {
     try { srv.kill(); } catch (e) {}
     await Promise.race([srv.exited, sleep(10000)]);
     return { ...w, serverOk: false };
+  }
+  // Баттл-рояль: мир стартует вечером (time set — команда стенда до входа мух, пишется в строку мира, не в consoleCommands)
+  if (isBr(cfg) && cfg.brStartTime != null) {
+    try { srv.stdin.write(`time set ${cfg.brStartTime}\n`); w.startTime = cfg.brStartTime; log(`мир ${id}: время ${cfg.brStartTime} (вечер)`); }
+    catch (e) { log(`мир ${id}: время не выставлено: ${e.message}`); }
   }
   const t0 = Date.now();
   const bots = [];

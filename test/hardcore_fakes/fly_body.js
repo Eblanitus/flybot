@@ -33,7 +33,8 @@ http.createServer((req, res) => {
       inventory: (inv[Math.min(step - 1, 3)] || []).concat(BR ? [{ name: 'stone_sword', count: 1 }] : []), sheltered: { closed: step === 2 }, eyes: { time: { day: 0, tod: 1000 + sec * 20 }, enemies: [] }, autopilot: { on: true, observerOnly, cmds },
       ...(BR ? { heldItem: { name: 'stone_sword' }, locator: [{ name: 'HC_9', d: 8, at: [9, 64, 2], onBar: true, hidden: null, gamemode: 0 }, { name: 'HC_5', d: 50, at: [50, 64, 2], onBar: false, hidden: null, gamemode: 0 }] } : {}) });
   }
-  if (req.url.startsWith('/events')) { const since = +(/since=(\d+)/.exec(req.url) || [0, 0])[1]; return send({ events: events.filter(e => e.id > since), lastId: 3 }); }
+  // убийство HC_9 — не раньше 3-й секунды: сначала охотник должен её увидеть и начать бой (мёртвую он уже не преследует)
+  if (req.url.startsWith('/events')) { const since = +(/since=(\d+)/.exec(req.url) || [0, 0])[1]; return send({ events: events.filter(e => e.id > since && (sec >= 3 || !/HC_9 was slain/.test(e.text || ''))), lastId: 3 }); }
   send({});
 }).listen(port, '127.0.0.1');
 setTimeout(() => process.exit(0), 20000);

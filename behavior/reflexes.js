@@ -624,12 +624,12 @@ function attach(api) {
     const others = hostilesNear(bot, T.playerOthersR) + Object.values(bot.entities).filter(e =>
       e && e !== bot.entity && e !== player && AG.isAggressorEntity(ctx, e) && e.position.distanceTo(p) <= T.playerOthersR).length;
     const canFight = !lowHpAgainstPlayer && hasWeapon(bot) && bot.health >= T.playerFightHp && others === 0;
-    const opts = lowHpAgainstPlayer ? ['shelter', 'goto', 'escape'] : (canFight ? ['fight', 'escape'] : ['escape', 'shelter']);
-    const skill = lowHpAgainstPlayer ? (hasBlocks ? 'shelter' : 'goto') : (canFight ? 'fight' : 'escape');
-    // behavior_escape_owner_priority: база — из «База:» в notes.md (автопилот её знает), без неё — прежняя точка
-    const hb = (ctx.autopilot && ctx.autopilot.base) || { x: -393, y: 67, z: 36 };
-    const params = lowHpAgainstPlayer && !hasBlocks ? { x: hb.x, y: hb.y, z: hb.z, r: 2, label: 'на базу от игрока', priority: true } : (lowHpAgainstPlayer ? { mode: 'walls' } : {});
-    const whyText = lowHpAgainstPlayer ? `игрок ${name} бьёт, HP ${Math.round(bot.health)} — ухожу от игрока ${hasBlocks ? 'в укрытие (стены)' : `к базе ${hb.x} ${hb.y} ${hb.z}`}` : `игрок ${name} ударил${playerDist < 10 ? ' (близко, низкий HP)' : ''}`;
+    // Без блоков на укрытие — побег (escape). Раньше здесь был «goto к базе», но goto — команда тела, а не навык: runSkill('goto')
+    // падал «fn is not a function» (хардкор-стенд 04.11, 9 раз), а точка базы без «База:» была зашита (-393 67 36) — сотни блоков от мухи.
+    const opts = lowHpAgainstPlayer ? ['shelter', 'escape'] : (canFight ? ['fight', 'escape'] : ['escape', 'shelter']);
+    const skill = lowHpAgainstPlayer ? (hasBlocks ? 'shelter' : 'escape') : (canFight ? 'fight' : 'escape');
+    const params = lowHpAgainstPlayer && hasBlocks ? { mode: 'walls' } : {};
+    const whyText = lowHpAgainstPlayer ? `игрок ${name} бьёт, HP ${Math.round(bot.health)} — ухожу от игрока ${hasBlocks ? 'в укрытие (стены)' : 'бегом (блоков на укрытие нет)'}` : `игрок ${name} ударил${playerDist < 10 ? ' (близко, низкий HP)' : ''}`;
     const plan = canFight
       ? { skill: 'fight', params: { target: low, radius: AG.CHASE_MAX, flee_hp: T.playerFleeHp, timeout: T.playerFightTimeout }, why: `игрок ${name} ударил`, options: opts }
       : { skill: skill, params: params, why: whyText, options: opts };

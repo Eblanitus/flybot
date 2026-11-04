@@ -55,9 +55,9 @@ const get = p => new Promise(resolve => {
 });
 
 // Команда телу от охотника (как мозг: с User-Agent, иначе тело примет её за исполнителя автопилота)
-const post = cmd => new Promise(resolve => {
+const post = (cmd, timeoutMs = 5000) => new Promise(resolve => {
   const body = JSON.stringify(cmd);
-  const req = http.request({ host: '127.0.0.1', port: CTL, path: '/cmd', method: 'POST', timeout: 5000,
+  const req = http.request({ host: '127.0.0.1', port: CTL, path: '/cmd', method: 'POST', timeout: timeoutMs,
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'hc-hunter', 'Content-Length': Buffer.byteLength(body) } }, res => {
     let b = ''; res.on('data', d => b += d); res.on('end', () => { try { resolve(JSON.parse(b)); } catch (e) { resolve(null); } });
   });
@@ -73,7 +73,7 @@ let spawned = false, written = false, age0 = null, tod0 = null, wtStart = null, 
 let lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, everTable = false, wasClosed = false;
 const exits = [], acts = {}, lastDeath = { msg: null };
 // баттл-рояль: свои убийства, кто убил меня, охота (что видели на локаторе, наша текущая команда, счёт решений)
-const kills = [], killSeen = new Set(), seenFlies = new Map(), hunt = { ours: null, follows: 0, fights: 0, why: null, lastAt: 0 };
+const kills = [], killSeen = new Set(), seenFlies = new Map(), hunt = { ours: null, follows: 0, fights: 0, legs: 0, legPending: false, why: null, lastAt: 0 };
 let killedBy = null;
 const r1 = x => Math.round(x * 10) / 10;
 const BAD_FOOD = new Set(['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'chorus_fruit', 'suspicious_stew']);
@@ -99,17 +99,19 @@ async function readEvents() {
     const d = e.data || e;
     if (e.type === 'task_started' && NOTE[d.name]) {
       const [k, w] = NOTE[d.name];
-      if (k === 'eat') eats++; if (k === 'flee') flees++;
+      if (k === 'flee') flees++;   // еда — по итогу (task_done eat) и по автоеде («съел …»), а не по началу дела
       chron.note(lastWt, k, `${w}${d.by && d.by !== 'autopilot' ? ' (' + d.by + ')' : ''}`);
     }
     if (e.type === 'task_done' || e.type === 'task_failed') {
       const a = acts[d.name] || (acts[d.name] = { n: 0, ok: 0 }); a.n++; if (e.type === 'task_done' && !d.error) a.ok++;
+      if (e.type === 'task_done' && d.name === 'eat') eats++;
     }
+    if (e.type === 'info' && typeof d.msg === 'string' && /^съел /.test(d.msg)) eats++;   // автоеда тела (behavior/reflexes.js)
     if (e.type === 'death') lastDeath.msg = d.message || d.cause || null;
     if (e.type === 'chat' || e.type === 'system') {
       const m = String(d.msg || d.text || d.message || '');
       if (m.includes(A.name)) { chat.push(m.slice(0, 200)); while (chat.length > 20) chat.shift(); }
-      if (A.br) noteKill(m);
+      if (A.br) { noteKill(m); noteGone(m); }
     }
   }
 }
@@ -128,22 +130,51 @@ function noteKill(m) {
   } else if (k.victim === A.name) killedBy = k.killer;
 }
 
+// Муха умерла (любая смерть — от мухи, моба, падения) или ушла из игры — из памяти охотника вон и больше не цель.
+// Раньше память держала мёртвую 120 с, она оставалась «ближайшей», и охотник 1189 раз шёл follow за трупом.
+const gone = new Set();
+function noteGone(m) {
+  if (!m || m.startsWith('<')) return;
+  const s = m.replace(/^.*?\]: /, '').trim(), who = s.split(/\s+/)[0].replace(/[.,!:;'"]+$/, '');
+  if (!who || !who.startsWith(A.br) || who === A.name) return;
+  if (L.DEATH_WORDS.test(s) || / left the game$/.test(s)) { gone.add(who); seenFlies.delete(who); }
+  else if (/ joined the game$/.test(s)) gone.delete(who);
+}
+
 // Охотник баттл-рояля: раз в 2 с смотрит панель локатора из снимка и решает (br.huntDecision). Команды — только свои follow/fight/stop;
 // чужое дело тела (рефлекс, автопилот бежит или ест) не перебивает.
+// Дальняя метка: расстояние неизвестно — считаем FAR_D (дальше любой видимой); идём отрезками до LEG блоков (goto тела, LEG_SEC),
+// после каждого — снова смотрим метку. Ближе NEAR_FOLLOW и муха загружена — follow.
+const FAR_D = 999, LEG = 96, LEG_SEC = 60, NEAR_FOLLOW = 48;
+function farLeg(pos, m) {
+  if (!pos) return null;
+  let dx, dz;
+  if (m.at) { dx = m.at[0] - pos.x; dz = m.at[2] - pos.z; }
+  else if (m.heading) { dx = m.heading[0]; dz = m.heading[1]; }
+  else return null;
+  const h = Math.hypot(dx, dz);
+  if (h < 1) return null;
+  const k = Math.min(LEG, m.at ? h : LEG) / h;
+  return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
+}
 const BUSY_SKILLS = new Set(['escape', 'eat', 'shelter', 'wait_night', 'defend', 'recover', 'swim_to', 'pillar_up']);
 async function huntTick(s, f) {
   if (!A.br || Date.now() - hunt.lastAt < 2000) return;
   hunt.lastAt = Date.now();
   const now = Date.now();
   for (const m of s.locator || []) {
-    if (!m || !m.name || !m.name.startsWith(A.br) || m.name === A.name || m.gamemode === 3 || m.gamemode === 'spectator') continue;
+    if (!m || !m.name || !m.name.startsWith(A.br) || m.name === A.name || gone.has(m.name)) continue;
+    if (m.gamemode === 3 || m.gamemode === 'spectator') { gone.add(m.name); seenFlies.delete(m.name); continue; }
     if (!m.onBar || m.hidden) continue;   // как у игрока: метка видна только в конусе 120° и если муха не прячется
-    seenFlies.set(m.name, { name: m.name, d: m.d, at: m.at, t: now });
+    // дальняя метка (tracked_waypoint): позиция примерная (чанк) или только направление (heading) — расстояние неизвестно
+    seenFlies.set(m.name, { name: m.name, d: m.d == null ? FAR_D : m.d, at: m.at, heading: m.heading || null, far: !!m.far, t: now });
   }
-  for (const [n, m] of seenFlies) if (s.locator && s.locator.some(x => x.name === n && (x.gamemode === 3 || x.gamemode === 'spectator'))) seenFlies.delete(n);
   const ti = s.eyes && s.eyes.task && s.eyes.task.status !== 'done' ? s.eyes.task : null;
   const task = ti ? String(ti.name || ti) : null, taskBy = ti ? String(ti.by || ti.source || 'brain') : null;
-  if (hunt.ours && task !== hunt.ours.kind) hunt.ours = null;   // наша команда кончилась или её вытеснили
+  // наша команда кончилась или её вытеснили. goto — простая команда тела (не навык, в снимке задачи нет): жива, пока ждём её ответ
+  if (hunt.ours && (hunt.ours.task === 'goto' ? !hunt.legPending : task !== hunt.ours.task)) hunt.ours = null;
+  // шли к дальней метке, а муха уже загружена рядом — дальше follow (идём не к точке, а за ней)
+  if (hunt.ours && hunt.ours.task === 'goto') { const m = seenFlies.get(hunt.ours.target); if (m && !m.far && m.d <= NEAR_FOLLOW) hunt.ours = null; }
   const armed = (s.inventory || []).some(i => /_(sword|axe)$/.test(i.name));
   const sit = {
     hp: f.hp, food: f.food == null ? 20 : f.food, lifeSec: f.t, armed, isNight: s.timeOfDay === 'night',
@@ -155,11 +186,28 @@ async function huntTick(s, f) {
   hunt.why = dcs.why;
   if (dcs.act === 'none') return;
   if (dcs.act === 'stop') { await post({ action: 'stop' }); hunt.ours = null; chron.note(f.wt, 'hunt', `бросил охоту: ${dcs.why}`); return; }
+  // идём к дальней метке, а решение другое (бой, follow) — сначала снять goto (stop тела обрывает путь), иначе новая команда ждёт его конца
+  if (hunt.legPending && dcs.act !== 'stop') { await post({ action: 'stop' }); for (let i = 0; i < 20 && hunt.legPending; i++) await new Promise(r => setTimeout(r, 100)); }
+  // follow — только к мухе, чья позиция у тела есть (иначе «игрок не найден рядом»); к дальней метке — goto ногами в её сторону
+  const tm = seenFlies.get(dcs.target);
+  const leg = dcs.act === 'follow' && tm && tm.far ? farLeg(s.position, tm) : null;
+  if (dcs.act === 'follow' && tm && tm.far && !leg) { hunt.why = `${dcs.why} — метка без направления`; return; }
+  if (leg) {   // goto тела отвечает, только когда дошла (или LEG_SEC) — не ждём, охотник смотрит дальше; ответ снимает hunt.legPending
+    hunt.legPending = true;
+    post({ action: 'goto', params: { x: leg.x, z: leg.z, timeout: LEG_SEC } }, (LEG_SEC + 20) * 1000).then(r => {
+      hunt.legPending = false;
+      if (r && r.ok === false) hunt.why = `к ${dcs.target}: ${String(r.error || '').slice(0, 80)}`;
+    });
+    hunt.ours = { kind: 'follow', task: 'goto', target: dcs.target, at: Date.now() };
+    hunt.follows++; hunt.legs = (hunt.legs || 0) + 1;
+    chron.note(f.wt, 'hunt', `${dcs.why} (метка далеко — иду в её сторону)`);
+    return;
+  }
   const r = dcs.act === 'fight'
     ? await post({ action: 'fight', params: { target: dcs.target, radius: 16, flee_hp: 6, timeout: 40 }, force: true })
     : await post({ action: 'follow', params: { name: dcs.target, range: 2 }, force: true });
   if (r && r.ok !== false) {
-    hunt.ours = { kind: dcs.act, target: dcs.target, at: Date.now() };
+    hunt.ours = { kind: dcs.act, task: dcs.act === 'fight' ? 'fight' : 'follow', target: dcs.target, at: Date.now() };
     if (dcs.act === 'fight') hunt.fights++; else hunt.follows++;
     chron.note(f.wt, dcs.act === 'fight' ? 'fight' : 'hunt', dcs.why);
   } else hunt.why = `${dcs.why} — тело не взяло: ${r && r.error ? String(r.error).slice(0, 80) : 'нет ответа'}`;
@@ -227,7 +275,7 @@ function writeCard(result, extra = {}) {
     ladder: ladder.reached, topStep: ladder.top(), exits, actions: acts, lowHpNoHealSec: lowNoHealSec,
     deathSoonAfterExit: result === 'death' && !!last && lifeSec - last.lifeSec <= 60,
     autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null,
-    ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, lastWhy: hunt.why } } : {}),
+    ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, legs: hunt.legs, lastWhy: hunt.why } } : {}),
     ...extra
   };
   try { fs.writeFileSync(A.out, JSON.stringify(card, null, 1)); } catch (e) { console.error('карточка не записана:', e.message); }
