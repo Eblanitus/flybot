@@ -159,6 +159,7 @@ function step1b(f) {
     const wt = wtNow();
     if (r.ok) {
       stuck.ok(d.do);
+      if (d.do !== 'wait') console.log(`[life] ${A.name}: ${d.do} готово за ${Math.round(r.ms / 1000)} с, ступень ${ladder.top()}`);
       if (d.do === 'eat') { eats++; const ate = r.result && r.result.ate; chron.note(wt, 'eat', `поел: ${ate && ate.length ? ate.join(', ') : '?'}`); }
       if (d.do === 'table') tablePlaced = true;
       if (d.do === 'leave') {
