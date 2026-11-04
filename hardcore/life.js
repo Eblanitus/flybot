@@ -25,7 +25,9 @@ const t0 = Date.now();
 const frames = [];
 const chat = [];
 let spawned = false, age0 = null, tod0 = null, nightEnd = null, written = false, eating = false, fleeing = null, timer = null;
-let lastAge = null, lowest = { hp: 20, food: 20 }, eats = 0, flees = 0;
+let lastAge = null, lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, wtStart = null;
+const chron = L.makeChronicle();
+const wtNow = () => (bot.time && bot.time.time != null ? Number(bot.time.time) : null);
 
 const r1 = x => Math.round(x * 10) / 10;
 function frame() {
@@ -39,12 +41,16 @@ function frame() {
   frames.push(f); while (frames.length > T.KEEP_FRAMES) frames.shift();
   if (bot.time && bot.time.age != null) lastAge = Number(bot.time.age);
   lowest.hp = Math.min(lowest.hp, f.hp); if (f.food != null) lowest.food = Math.min(lowest.food, f.food);
+  f.wt = wtNow();
+  if (spawned && !written) chron.observe(f);
   return f;
 }
 
 function writeCard(result, extra = {}) {
   if (written) return; written = true;
   try { if (spawned) frame(); } catch (e) {}
+  const endText = { death: extra.cause ? `смерть: ${extra.cause}` : 'смерть', timeout: 'срок мира вышел, жив', disconnect: 'отключился', crash: 'бот упал', already_dead: 'уже мёртв' }[result] || result;
+  chron.note(wtNow(), result === 'death' ? 'death' : 'end', endText);
   const lifeSec = Math.round((Date.now() - t0) / 1000);
   const ageNow = lastAge;
   const card = {
@@ -53,7 +59,7 @@ function writeCard(result, extra = {}) {
     gameDays: age0 != null && ageNow != null ? r1((ageNow - age0) / 24000) : null,
     spawnTimeOfDay: tod0, firstNightSurvived: nightEnd != null && ageNow != null ? ageNow >= nightEnd : false,
     hpLast: frames.length ? frames[frames.length - 1].hp : null, foodLast: frames.length ? frames[frames.length - 1].food : null,
-    lowest, eats, flees, chat: chat.slice(-10), last60s: frames.slice(), interventions: 0, ...extra
+    lowest, eats, flees, wtStart, wtEnd: wtNow(), events: chron.events, chat: chat.slice(-10), last60s: frames.slice(), interventions: 0, ...extra
   };
   try { fs.writeFileSync(A.out, JSON.stringify(card, null, 1)); } catch (e) { console.error('карточка не записана:', e.message); }
   console.log(`[life] ${A.name}: ${result}, ${lifeSec} с`);
@@ -73,7 +79,7 @@ async function eat() {
   const item = items.find(i => !bad.has(i.name)) || (bot.health <= 6 ? items[0] : null);
   if (!item) return;
   eating = true;
-  try { await bot.equip(item, 'hand'); await bot.consume(); eats++; } catch (e) {} finally { eating = false; }
+  try { await bot.equip(item, 'hand'); await bot.consume(); eats++; chron.note(wtNow(), 'eat', `поел: ${item.name}`); } catch (e) {} finally { eating = false; }
 }
 
 function step() {
@@ -86,6 +92,7 @@ function step() {
   const d = enemy ? enemy.position.distanceTo(bot.entity.position) : Infinity;
   if (enemy && d < T.FLEE_DIST && fleeing !== enemy.id) {
     fleeing = enemy.id; flees++;
+    chron.note(wtNow(), 'flee', `бежит от ${enemy.name}`);
     try { bot.pathfinder.setGoal(new pf.goals.GoalInvert(new pf.goals.GoalFollow(enemy, T.SAFE_DIST)), true); } catch (e) {}
   } else if (fleeing != null && (!enemy || d > T.SAFE_DIST)) {
     fleeing = null;
@@ -98,6 +105,7 @@ bot.once('spawn', () => {
   if (bot.game && bot.game.gameMode === 'spectator') return finish('already_dead', { note: 'вошёл зрителем — в этом мире уже умирал' });
   age0 = bot.time ? Number(bot.time.age) : null; tod0 = bot.time ? bot.time.timeOfDay : null;
   if (age0 != null && tod0 != null) nightEnd = L.firstNightEnd(age0, tod0);
+  wtStart = wtNow(); chron.note(wtStart, 'start', 'старт');
   if (pf) try { const m = new pf.Movements(bot); m.canDig = false; m.allow1by1towers = false; bot.pathfinder.setMovements(m); } catch (e) {}
   timer = setInterval(step, T.TICK_MS);
   console.log(`[life] ${A.name} в мире ${A.world}, время суток ${tod0}`);

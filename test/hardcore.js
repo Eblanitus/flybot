@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const L = require('../hardcore/lib');
 const stand = require('../hardcore/stand');
+const TL = require('../hardcore/timeline');
 
 // --- чистые функции ---
 for (let i = 0; i < 200; i++) { const s = L.makeSeed(); assert(/^-?\d+$/.test(s), s); assert(Math.abs(Number(s)) < 2 ** 48); }
@@ -54,6 +55,31 @@ assert.strictEqual(L.firstNightEnd(1000, 6000), 18000);    // полдень
 assert.strictEqual(L.firstNightEnd(0, 15000), 32000);      // появился ночью — считается следующая ночь
 const sum = L.summarizeWorld([{ result: 'death', lifeSec: 10 }, { result: 'death', lifeSec: 30, firstNightSurvived: true }, { result: 'crash', lifeSec: 0 }]);
 assert.deepStrictEqual([sum.bots, sum.deaths, sum.crashes, sum.firstNight, sum.medianLifeSec], [3, 2, 1, 1, 10]);
+
+// хроника: ночь, пережитая ночь, новый день, HP низкий (повтор — только после HP > 8)
+{
+  const ch = L.makeChronicle();
+  ch.note(0, 'start', 'старт');
+  for (let wt = 0; wt <= 26000; wt += 1000) ch.observe({ wt, hp: wt === 14000 ? 3 : wt === 15000 ? 2 : wt === 20000 ? 10 : wt === 21000 ? 4 : 15 });
+  const kinds = ch.events.map(e => e.kind);
+  assert.deepStrictEqual(kinds, ['start', 'night', 'lowhp', 'lowhp', 'night_survived', 'day'], kinds.join(','));
+  assert.strictEqual(ch.events.find(e => e.kind === 'night_survived').text, 'пережил первую ночь');
+  const big = L.makeChronicle(3); for (let i = 0; i < 10; i++) big.note(i, 'eat', 'x'); assert.strictEqual(big.events.length, 3);
+}
+// лента: SVG с ботами, смертью и днями; бот без событий не ломает картинку
+{
+  const cards = [
+    { nick: 'HC_1', result: 'death', wtStart: 0, wtEnd: 30000, events: [{ wt: 0, kind: 'start', text: 'старт' }, { wt: 9000, kind: 'flee', text: 'бежит от zombie' }, { wt: 30000, kind: 'death', text: 'смерть: Zombie' }] },
+    { nick: 'HC_2', result: 'crash', note: 'бот не написал карточку' }
+  ];
+  const svg = TL.svgFor(cards);
+  assert(svg.startsWith('<svg') && svg.includes('HC_1') && svg.includes('HC_2') && svg.includes('✕ смерть: Zombie, день 2'));
+  assert(svg.includes('день 1') && svg.includes('день 2') && svg.includes('нет событий: crash'));
+  assert.strictEqual(TL.dayLabel(14000), 'день 1, ночь'); assert.strictEqual(TL.dayLabel(24000), 'день 2');
+  assert(TL.svgFor([{ nick: '<b>', events: [{ wt: 1, kind: 'start', text: '<script>' }] }]).includes('&lt;script&gt;'));
+  const html = TL.worldHtml({ id: 'w1', seed: '5', durSec: 120, cheats: 0 }, cards);
+  assert(html.includes('<title>Мир w1</title>') && html.includes('index.html'));
+}
 
 // --- стенд на поддельном сервере ---
 function setup(extra) {
@@ -106,6 +132,13 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     const hc1 = lives.find(c => c.nick === 'HC_1');
     assert.strictEqual(hc1.cause, 'Zombie'); assert.strictEqual(hc1.deathMessageServer, 'HC_1 was slain by Zombie');
     assert.strictEqual(lives.find(c => c.nick === 'HC_2').result, 'crash');
+    const tl = path.join(s.cfg.dataDir, 'timeline');
+    for (const w of worlds) assert(fs.existsSync(path.join(tl, w.id + '.html')), 'лента мира ' + w.id);
+    const idx = fs.readFileSync(path.join(tl, 'index.html'), 'utf8');
+    assert(worlds.every(w => idx.includes(w.id + '.html')));
+    assert(fs.readFileSync(path.join(tl, last.id + '.html'), 'utf8').includes('пережил первую ночь'));
+    fs.rmSync(tl, { recursive: true }); TL.rebuild(s.cfg.dataDir);
+    assert(fs.existsSync(path.join(tl, last.id + '.html')), 'rebuild перерисовал ленты');
   }
   // сервер не поднимается: 3 провала подряд → NEED_HUMAN.txt, код 3
   {

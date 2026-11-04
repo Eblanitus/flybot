@@ -117,4 +117,31 @@ function summarizeWorld(cards) {
   };
 }
 
-module.exports = { makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };
+// Хроника жизни для ленты мира: события со временем мира (wt — полное время суток мира в тиках, у всех ботов одного мира общее).
+// observe() раз в секунду сам замечает: HP упал до 4 и ниже (снова — только после HP > 8), началась ночь, ночь пережита, новый день.
+// note() — события, которые знает бот: поел, бежит от врага, смерть. Не больше MAX событий, чтобы карточка не распухала.
+function makeChronicle(max = 300) {
+  const events = [];
+  let lowArmed = true, lastTod = null, lastDay = null, inNight = false, nights = 0;
+  const push = (wt, kind, text) => { if (events.length < max) events.push({ wt: wt == null ? null : Math.round(wt), kind, text }); };
+  return {
+    events,
+    note: push,
+    observe(f) {
+      if (f.wt == null) return;
+      const tod = ((f.wt % 24000) + 24000) % 24000, day = Math.floor(f.wt / 24000) + 1;
+      if (lastDay != null && day > lastDay) push(f.wt, 'day', `день ${day}`);
+      if (lastTod != null) {
+        if (!inNight && tod >= 13000 && tod < 23000) { inNight = true; push(f.wt, 'night', 'ночь'); }
+        if (inNight && (tod >= 23000 || tod < 13000)) { inNight = false; nights++; push(f.wt, 'night_survived', nights === 1 ? 'пережил первую ночь' : `пережил ночь ${nights}`); }
+      } else inNight = tod >= 13000 && tod < 23000;
+      if (f.hp != null) {
+        if (lowArmed && f.hp <= 4 && f.hp > 0) { lowArmed = false; push(f.wt, 'lowhp', `HP ${f.hp}`); }
+        else if (f.hp > 8) lowArmed = true;
+      }
+      lastTod = tod; lastDay = day;
+    }
+  };
+}
+
+module.exports = { makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };

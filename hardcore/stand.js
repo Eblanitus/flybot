@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const L = require('./lib');
+const timeline = require('./timeline');
 
 const HERE = __dirname;
 const DEFAULTS = {
@@ -171,7 +172,7 @@ async function runWorld(cfg, n) {
     moveDir(wdir, path.join(archived, 'world'));
     fs.cpSync(dir, path.join(archived, 'stand'), { recursive: true });
   }
-  return { ...w, serverOk: true, endedAt: new Date().toISOString(), durSec, timedOut, cheats: L.countCheats(srv.lines), archived, ...L.summarizeWorld(cards) };
+  return { _cards: cards, ...w, serverOk: true, endedAt: new Date().toISOString(), durSec, timedOut, cheats: L.countCheats(srv.lines), archived, ...L.summarizeWorld(cards) };
 }
 
 function prune(cfg) {
@@ -199,11 +200,15 @@ async function main(cfgFile) {
   let fails = 0, n = 0;
   while (!cfg.worldsTarget || n < cfg.worldsTarget) {
     n++;
-    const r = await runWorld(cfg, n);
+    const { _cards, ...r } = await runWorld(cfg, n);
     appendJsonl(path.join(cfg.dataDir, 'worlds.jsonl'), r);
+    try {
+      const worlds = fs.readFileSync(path.join(cfg.dataDir, 'worlds.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+      timeline.write(cfg.dataDir, r.serverOk ? r : null, r.serverOk ? _cards : null, worlds);
+    } catch (e) { log(`лента мира не нарисована: ${e.message}`); }
     if (r.serverOk) {
       fails = 0;
-      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, читов ${r.cheats}`);
+      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, читов ${r.cheats}; лента — ${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
       prune(cfg);
     } else if (++fails >= cfg.maxServerFails) {
       const msg = `сервер ${fails} раза подряд не поднялся — стенд остановлен. Смотри server.log в ${path.join(cfg.dataDir, 'worlds')}`;
