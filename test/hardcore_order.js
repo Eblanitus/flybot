@@ -67,6 +67,13 @@ assert.strictEqual(sh({ tod: 1000, enemy: { name: 'zombie', d: 3 } }), 'leave');
   assert.strictEqual(O.decide(S({ tod: 15000 }), all, 1).do, 'wait');
 }
 
+// камень «застрял» и булыжника нет — не крафтить каменное впустую (на ПК 04.11 крутилось stone → stone_tools)
+{
+  const st = O.makeStuck(); for (let i = 0; i < 3; i++) st.fail('stone', 0);
+  const d = O.decide(S({ inv: { oak_planks: 4, wooden_pickaxe: 1 }, tableNear: true }), st, 1).do;
+  assert.notStrictEqual(d, 'stone_tools'); assert.strictEqual(d, 'hunt');
+}
+
 // --- ступени ---
 {
   assert.deepStrictEqual(O.stepsNow({ inv: { oak_log: 4 } }), [1]);
@@ -116,5 +123,19 @@ for (const m of ['gather', 'craft', 'survival', 'combat', 'basic']) require('../
   assert(!r.ok && r.aborted && halted > 0, JSON.stringify(r));
   r = await B.start(ctx, { do: 'fly' }).done;
   assert(!r.ok && /нет такого дела/.test(r.error));
+  // не нашёл рядом — разведка и вторая попытка (через orExplore), чужие ошибки — сразу неудача
+  {
+    const gather = require('../lib/skills/gather'), combat = require('../lib/skills/combat');
+    const real = { explore: gather.explore, hunt: combat.hunt };
+    let explored = 0, tries = 0;
+    gather.explore = async () => { explored++; return {}; };
+    combat.hunt = async () => { if (++tries === 1) throw new Error('животных рядом нет'); return { kills: 1 }; };
+    r = await B.start(ctx, { do: 'hunt', count: 1 }).done;
+    assert(r.ok && explored === 1 && tries === 2, JSON.stringify(r));
+    combat.hunt = async () => { throw new Error('отступил: мало HP'); };
+    r = await B.start(ctx, { do: 'hunt' }).done;
+    assert(!r.ok && explored === 1);
+    Object.assign(gather, { explore: real.explore }); combat.hunt = real.hunt;
+  }
   console.log('hardcore_order: ok');
 })().catch(e => { console.error(e); process.exit(1); });

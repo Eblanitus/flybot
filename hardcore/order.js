@@ -128,8 +128,9 @@ function decide(s, stuck = null, now = Date.now()) {
   if (!pickOk && tableOk && havePlanks + (inv.stick || 0) / 2 >= W.pick && free('pickaxe')) return { do: 'pickaxe', why: 'нет кирки' };
   if (pickOk && !(stonePick && stoneSword)) {
     const need = (stonePick ? 0 : 3) + (stoneSword ? 0 : 2);
-    if ((inv.cobblestone || 0) + (inv.cobbled_deepslate || 0) < need && free('stone')) return { do: 'stone', why: 'нужен булыжник', count: T.STONE_NEED };
-    if (free('stone_tools')) return { do: 'stone_tools', why: 'булыжник есть', items: [stonePick ? null : 'stone_pickaxe', stoneSword ? null : 'stone_sword'].filter(Boolean) };
+    const cobble = (inv.cobblestone || 0) + (inv.cobbled_deepslate || 0) + (inv.blackstone || 0);
+    if (cobble < need && free('stone')) return { do: 'stone', why: 'нужен булыжник', count: T.STONE_NEED };
+    if (cobble >= need && free('stone_tools')) return { do: 'stone_tools', why: 'булыжник есть', items: [stonePick ? null : 'stone_pickaxe', stoneSword ? null : 'stone_sword'].filter(Boolean) };
   }
   if (fi < T.FOOD_STOCK && free('hunt')) return { do: 'hunt', why: `еды ${fi} из ${T.FOOD_STOCK}`, count: 2 };
   if (fi < T.FOOD_MORE && tod < 9000 && free('hunt')) return { do: 'hunt', why: `еды ${fi}, добираю до ${T.FOOD_MORE}`, count: 2 };

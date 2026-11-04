@@ -41,7 +41,7 @@ function attach(ctx, session) {
 }
 
 // Сколько секунд даём делу. Вышло — дело прерывается и считается неудачей.
-const LIMIT_SEC = { flee: 20, fight: 15, eat: 15, wait: 2, leave: 20, shelter: 60, hunt: 100, logs: 180, table: 60, pickaxe: 60, stone: 180, stone_tools: 60, explore: 90 };
+const LIMIT_SEC = { flee: 20, fight: 15, eat: 15, wait: 2, leave: 20, shelter: 60, hunt: 200, logs: 300, table: 60, pickaxe: 60, stone: 300, stone_tools: 60, explore: 90 };
 
 // Дело → вызов навыка FlyBot. Возвращает то, что вернул навык; неудача — исключение.
 const RUN = {
@@ -51,14 +51,36 @@ const RUN = {
   wait: (ctx, t) => t.sleep(1000).then(() => ({ waited: 1 })),
   async leave(ctx, t) { if (!(await S().survival.leaveShelter(ctx, t))) throw new Error('выйти некуда: вокруг лава или вода'); return { left: true }; },
   shelter: (ctx, t) => S().survival.shelter(ctx, t, {}),
-  hunt: (ctx, t, d) => S().combat.hunt(ctx, t, { count: d.count || 1 }),
-  logs: (ctx, t, d) => S().gather.collect(ctx, t, { block: 'log', count: d.count || 4 }),
+  hunt: (ctx, t, d) => orExplore(ctx, t, () => S().combat.hunt(ctx, t, { count: d.count || 1 })),
+  logs: (ctx, t, d) => orExplore(ctx, t, () => S().gather.collect(ctx, t, { block: 'log', count: d.count || 4 })),
   table: (ctx, t) => S().craft.ensureStation(ctx, t, 'crafting_table').then(b => ({ table: b && b.position ? [b.position.x, b.position.y, b.position.z] : true })),
   pickaxe: (ctx, t) => S().craft.craftItem(ctx, t, 'wooden_pickaxe', 1).then(() => ({ item: 'wooden_pickaxe' })),
-  stone: (ctx, t, d) => S().gather.collect(ctx, t, { block: 'stone', count: d.count || 8 }),
+  // камень с поверхности обычно не виден: не нашёл — спуск лесенкой на 6 блоков (навык descend) и снова
+  async stone(ctx, t, d) {
+    const get = () => S().gather.collect(ctx, t, { block: 'stone', count: d.count || 8 });
+    try { return await get(); }
+    catch (e) {
+      if (e.aborted || !NOT_FOUND.test(String(e.message))) throw e;
+      t.progress('камня не видно — спускаюсь');
+      await require('../lib/skills/move').descend(ctx, t, { depth: 6 });
+      return get();
+    }
+  },
   async stone_tools(ctx, t, d) { for (const it of d.items || []) await S().craft.craftItem(ctx, t, it, 1); return { items: d.items }; },
   explore: (ctx, t) => S().gather.explore(ctx, t, { distance: 48 })
 };
+
+// Не нашёл рядом (нет деревьев, нет животных) — разведка в новую сторону и ещё одна попытка, а не стоять на месте.
+const NOT_FOUND = /не вижу|не нашёл|рядом нет|нет рядом|никого/i;
+async function orExplore(ctx, t, fn) {
+  try { return await fn(); }
+  catch (e) {
+    if (e.aborted || !NOT_FOUND.test(String(e.message))) throw e;
+    t.progress('рядом нет — разведка');
+    await S().gather.explore(ctx, t, { distance: 64 });
+    return fn();
+  }
+}
 
 let seq = 0;
 // Начать дело. Возвращает { task, done: Promise<{ok, result?, error?, ms}> }. task.abort(причина) — прервать (враг, закат).
