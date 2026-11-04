@@ -103,9 +103,10 @@ const WORK_KEYS = new Set(['collect_stone', 'collect_log', 'night_dirt', 'build'
 // провал добора не потому, что материала нет, а потому что муху отвлекли (рефлекс, мозг, связь) — добор продолжаем
 const GATHER_INTERRUPT = /вытеснен|прерван|POST \/abort|отключ|уступка мозгу|занят навыком|смерть/i;
 const CORE_DIR = process.env.FLYBOT_CORE || path.join(__dirname, '..');
-const NOTES = path.join(CORE_DIR, 'brain', 'notes.md');
+// FLYBOT_NOTES / DATA_DIR — для хардкор-стенда (hardcore/fly.js): у каждой жизни свои заметки и память пунктов; FlyBot их не задаёт — пути как были
+const NOTES = process.env.FLYBOT_NOTES || path.join(CORE_DIR, 'brain', 'notes.md');
 const BLUEPRINTS = path.join(CORE_DIR, 'brain', 'blueprints');
-const PLAN_FILE = path.join(CORE_DIR, 'data', 'autopilot_plan.json'); // память пунктов очереди (вне git)
+const PLAN_FILE = path.join(process.env.DATA_DIR || path.join(CORE_DIR, 'data'), 'autopilot_plan.json'); // память пунктов очереди (вне git)
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const MOD = {}; // метка этой версии модуля: после перезагрузки поведения автопилот создаётся заново
 
@@ -1148,7 +1149,7 @@ const BUILD_KEYS = new Set(['build', 'build_partial', 'build_go', 'build_gather'
 const newBuildSt = sig => ({ sig, need: null, have: null, gathers: 0, pauseUntil: 0, reason: null, done: false, doneAt: 0, stuck: false, partialEmpty: 0, pauses: 0 });
 // behavior_autopilot_build_gather (дыра 1): известная нехватка переживает рестарт тела — data/autopilot_build.json
 // {sig, need, at}; после рестарта первым делом добор по памяти, а не build_blueprint с пустой сумкой (data/ — вне git)
-const BUILD_MEM = path.join(process.env.FLYBOT_CORE || path.join(__dirname, '..'), 'data', 'autopilot_build.json');
+const BUILD_MEM = path.join(process.env.DATA_DIR || path.join(process.env.FLYBOT_CORE || path.join(__dirname, '..'), 'data'), 'autopilot_build.json');
 const BUILD_MEM_TTL = 6 * 3600 * 1000;
 function saveBuildNeed(st) {
   try { fs.writeFileSync(BUILD_MEM, JSON.stringify({ sig: st.sig, need: st.need && Object.keys(st.need).length ? st.need : null, at: Date.now() })); } catch (e) {}
