@@ -13,4 +13,4 @@ setTimeout(() => {
   console.log('[00:00:02] [Server thread/INFO]: Done (1.000s)! For help, type "help"');
   console.log('[00:00:03] [Server thread/INFO]: HC_1 was slain by Zombie');
 }, 200);
-process.stdin.on('data', d => { if (/stop/.test(String(d))) { console.log('[00:00:09] [Server thread/INFO]: Stopping server'); process.exit(0); } });
+process.stdin.on('data', d => { if (!/stop/.test(String(d))) console.log('[00:00:05] [Server thread/INFO]: got: ' + String(d).trim()); if (/stop/.test(String(d))) { console.log('[00:00:09] [Server thread/INFO]: Stopping server'); process.exit(0); } });

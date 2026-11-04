@@ -31,6 +31,24 @@ function loadConfig(file) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let logFile = null;
+// Консоль хозяина: строки, набранные в окне стенда, уходят в консоль текущего сервера (например `kill HC_1`).
+// Каждая такая команда — вмешательство: пишется в stand.log и в строку мира (consoleCommands).
+let current = null;
+function attachConsole() {
+  if (!process.stdin.isTTY && process.env.HC_CONSOLE !== '1') return;   // в тестах stdin не трогаем
+  process.stdin.setEncoding('utf8');
+  let buf = '';
+  process.stdin.on('data', d => {
+    buf += d; let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const cmd = buf.slice(0, i).replace(/\r$/, '').trim().replace(/^\//, ''); buf = buf.slice(i + 1);
+      if (!cmd) continue;
+      if (!current || current.exitCode !== null) { log(`консоль: «${cmd}» — сервер сейчас не запущен`); continue; }
+      try { current.stdin.write(cmd + '\n'); current.consoleCommands.push(cmd); log(`консоль хозяина → сервер: ${cmd}`); }
+      catch (e) { log(`консоль: не отправлено: ${e.message}`); }
+    }
+  });
+}
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
@@ -125,6 +143,8 @@ async function runWorld(cfg, n) {
   log(`мир ${id}: сид ${seed}, ботов ${cfg.bots}, порт ${cfg.port}`);
 
   const srv = startServer(cfg, path.join(dir, 'server.log'));
+  srv.consoleCommands = [];
+  current = srv;
   const ready = await waitReady(srv, cfg.serverStartTimeoutSec * 1000);
   if (!ready) {
     log(`мир ${id}: сервер не поднялся (подробности — ${path.join(dir, 'server.log')})`);
@@ -150,6 +170,7 @@ async function runWorld(cfg, n) {
     await Promise.race([allDone, sleep(5000)]);
   }
   await stopServer(cfg, srv);
+  current = null;
   const durSec = Math.round((Date.now() - t0) / 1000);
 
   // Карточки: что написал бот + сообщение о смерти из журнала сервера. Нет карточки — бот упал.
@@ -172,7 +193,7 @@ async function runWorld(cfg, n) {
     moveDir(wdir, path.join(archived, 'world'));
     fs.cpSync(dir, path.join(archived, 'stand'), { recursive: true });
   }
-  return { _cards: cards, ...w, serverOk: true, endedAt: new Date().toISOString(), durSec, timedOut, cheats: L.countCheats(srv.lines), archived, ...L.summarizeWorld(cards) };
+  return { _cards: cards, ...w, serverOk: true, endedAt: new Date().toISOString(), durSec, timedOut, cheats: L.countCheats(srv.lines), consoleCommands: srv.consoleCommands, archived, ...L.summarizeWorld(cards) };
 }
 
 function prune(cfg) {
@@ -196,6 +217,7 @@ async function main(cfgFile) {
   try { fs.unlinkSync(needHuman); } catch (e) {}
   try { fs.unlinkSync(stopFlag); } catch (e) {}
   clearLeftover(cfg);
+  attachConsole();
   log(`стенд запущен: ${cfg.worldsTarget ? cfg.worldsTarget + ' миров' : 'без конца'}, срок мира ${cfg.maxWorldMin} мин`);
   let fails = 0, n = 0;
   while (!cfg.worldsTarget || n < cfg.worldsTarget) {
@@ -222,4 +244,4 @@ async function main(cfgFile) {
 }
 
 module.exports = { main, loadConfig, checkSetup, DEFAULTS };
-if (require.main === module) main().then(c => { process.exitCode = c; }, e => { log(`стенд упал: ${e.stack || e}`); process.exitCode = 1; });
+if (require.main === module) main().then(c => process.exit(c), e => { log(`стенд упал: ${e.stack || e}`); process.exit(1); });   // exit: консоль держит stdin открытым

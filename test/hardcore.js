@@ -150,5 +150,19 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     assert.strictEqual(readJsonl(path.join(s.cfg.dataDir, 'worlds.jsonl')).length, 3);
     assert(/не поднялся/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'NEED_HUMAN.txt'), 'utf8')));
   }
+  // консоль хозяина: строка из окна стенда уходит в сервер и записывается как вмешательство
+  {
+    const s = setup({ worldsTarget: 1, bots: 1 });
+    const { spawn } = require('child_process');
+    const p = spawn(process.execPath, [path.join(__dirname, '..', 'hardcore', 'stand.js'), s.file],
+      { env: Object.assign({}, process.env, { HC_CONSOLE: '1', FAKE_BOT_WAIT_MS: '1500' }), stdio: ['pipe', 'ignore', 'inherit'] });
+    setTimeout(() => p.stdin.write('/kill HC_1\n'), 700);
+    const code = await new Promise(r => p.on('exit', r));
+    assert.strictEqual(code, 0);
+    const w = readJsonl(path.join(s.cfg.dataDir, 'worlds.jsonl'))[0];
+    assert.deepStrictEqual(w.consoleCommands, ['kill HC_1']);
+    assert(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', w.id, 'server.log'), 'utf8').includes('got: kill HC_1'));
+    assert(fs.readFileSync(path.join(s.cfg.dataDir, 'stand.log'), 'utf8').includes('консоль хозяина → сервер: kill HC_1'));
+  }
   console.log('hardcore: ok');
 })().catch(e => { console.error(e); process.exit(1); });

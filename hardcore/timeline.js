@@ -91,7 +91,7 @@ function worldHtml(w, cards) {
 <title>Мир ${esc(w.id)}</title><style>${CSS}</style></head><body><div class="wrap">
 <p class="muted"><a href="index.html">← все миры</a></p>
 <h1>Мир ${esc(w.id)}</h1>
-<p class="muted">сид ${esc(w.seed)} · ботов ${cards.length} · умерло ${cards.filter(c => c.result === 'death').length} · пережили первую ночь ${cards.filter(c => c.firstNightSurvived).length} · мир шёл ${w.durSec != null ? Math.round(w.durSec / 60) + ' мин' : '—'} · читов ${w.cheats != null ? w.cheats : '—'}</p>
+<p class="muted">сид ${esc(w.seed)} · ботов ${cards.length} · умерло ${cards.filter(c => c.result === 'death').length} · пережили первую ночь ${cards.filter(c => c.firstNightSurvived).length} · мир шёл ${w.durSec != null ? Math.round(w.durSec / 60) + ' мин' : '—'} · читов ${w.cheats != null ? w.cheats : '—'}${w.consoleCommands && w.consoleCommands.length ? ` · команды хозяина: ${esc(w.consoleCommands.join('; '))}` : ''}</p>
 <div class="box">${legend()}${svgFor(cards)}</div>
 <div class="box"><table><tr><th>Бот</th><th>Итог</th><th>Прожил</th><th>Игровых дней</th><th>Первая ночь</th><th>Причина</th></tr>${rows}</table></div>
 </div></body></html>`;
