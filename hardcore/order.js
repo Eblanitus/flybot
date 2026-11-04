@@ -134,7 +134,8 @@ function decide(s, stuck = null, now = Date.now()) {
   }
   if (fi < T.FOOD_STOCK && free('hunt')) return { do: 'hunt', why: `еды ${fi} из ${T.FOOD_STOCK}`, count: 2 };
   if (fi < T.FOOD_MORE && tod < 9000 && free('hunt')) return { do: 'hunt', why: `еды ${fi}, добираю до ${T.FOOD_MORE}`, count: 2 };
-  return { do: 'explore', why: 'ступени 1–5 взяты — разведка' };
+  const lack = [havePlanks < needPlanks && 'дерево', fi < T.FOOD_STOCK && 'еду', pickOk && !(stonePick && stoneSword) && 'камень'].filter(Boolean);
+  return { do: 'explore', why: lack.length ? `ищу ${lack.join(', ')} — разведка` : 'ступени 1–5 взяты — разведка' };
 }
 
 module.exports = { T, decide, stepsNow, makeLadder, makeStuck, STEP_TEXT, isDay, isNight, logs, planks, RANGED };

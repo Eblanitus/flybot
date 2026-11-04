@@ -135,6 +135,16 @@ for (const m of ['gather', 'craft', 'survival', 'combat', 'basic']) require('../
     combat.hunt = async () => { throw new Error('отступил: мало HP'); };
     r = await B.start(ctx, { do: 'hunt' }).done;
     assert(!r.ok && explored === 1);
+    // разведка FlyBot отказала у обрыва — идём pathfinder-ом в случайную сторону
+    const A = require('../lib/actions'), realGoto = A.goto;
+    const { Vec3 } = require('../lib/util');
+    bot.entity = { position: new Vec3(0, 64, 0) };
+    gather.explore = async () => { throw new Error('не удалось уйти исследовать: внизу обрыв'); };
+    let gotos = 0;
+    A.goto = async (c, tk, goal) => { gotos++; if (gotos === 1) throw new Error('нет пути'); bot.entity.position = new Vec3(goal.x, 64, goal.z); return true; };
+    r = await B.start(ctx, { do: 'explore' }).done;
+    assert(r.ok && gotos === 2 && r.result.roamed >= 16, JSON.stringify(r));
+    A.goto = realGoto;
     Object.assign(gather, { explore: real.explore }); combat.hunt = real.hunt;
   }
   console.log('hardcore_order: ok');

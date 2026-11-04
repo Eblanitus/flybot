@@ -41,7 +41,7 @@ function attach(ctx, session) {
 }
 
 // Сколько секунд даём делу. Вышло — дело прерывается и считается неудачей.
-const LIMIT_SEC = { flee: 20, fight: 15, eat: 15, wait: 2, leave: 20, shelter: 60, hunt: 200, logs: 300, table: 60, pickaxe: 60, stone: 300, stone_tools: 60, explore: 90 };
+const LIMIT_SEC = { flee: 20, fight: 15, eat: 15, wait: 2, leave: 20, shelter: 60, hunt: 200, logs: 300, table: 60, pickaxe: 60, stone: 300, stone_tools: 60, explore: 150 };
 
 // Дело → вызов навыка FlyBot. Возвращает то, что вернул навык; неудача — исключение.
 const RUN = {
@@ -67,7 +67,7 @@ const RUN = {
     }
   },
   async stone_tools(ctx, t, d) { for (const it of d.items || []) await S().craft.craftItem(ctx, t, it, 1); return { items: d.items }; },
-  explore: (ctx, t) => S().gather.explore(ctx, t, { distance: 48 })
+  explore: (ctx, t) => roam(ctx, t, 48)
 };
 
 // Не нашёл рядом (нет деревьев, нет животных) — разведка в новую сторону и ещё одна попытка, а не стоять на месте.
@@ -77,9 +77,31 @@ async function orExplore(ctx, t, fn) {
   catch (e) {
     if (e.aborted || !NOT_FOUND.test(String(e.message))) throw e;
     t.progress('рядом нет — разведка');
-    await S().gather.explore(ctx, t, { distance: 64 });
+    await roam(ctx, t, 64);
     return fn();
   }
+}
+
+// Уйти в новое место. Сначала разведка FlyBot (обходит обрывы и воду); она очень осторожна и у обрывов отказывает
+// («внизу обрыв … дальше не иду») — тогда просто путь pathfinder-а в случайную сторону: он сам спускается не больше чем на 3 блока.
+// Удача — ушёл хотя бы на 16 блоков.
+async function roam(ctx, t, dist) {
+  try { return await S().gather.explore(ctx, t, { distance: dist }); }
+  catch (e) { if (e.aborted) throw e; }
+  const bot = ctx.bot, { goals } = require('mineflayer-pathfinder');
+  const p0 = bot.entity.position.clone();
+  let last = null;
+  for (let i = 0; i < 4; i++) {
+    t.check();
+    const a = Math.random() * 2 * Math.PI;
+    const x = Math.round(p0.x + Math.cos(a) * dist), z = Math.round(p0.z + Math.sin(a) * dist);
+    t.progress(`иду в сторону ${x} ${z}`);
+    try { await S().A.goto(ctx, t, new goals.GoalNearXZ(x, z, 4), { timeout: 25000 }); }
+    catch (e) { if (e.aborted) throw e; last = e; }
+    const moved = bot.entity.position.distanceTo(p0);
+    if (moved >= 16) return { roamed: Math.round(moved), to: [x, z] };
+  }
+  throw new Error('не ушёл с места: ' + (last ? last.message : 'путь не найден'));
 }
 
 let seq = 0;
