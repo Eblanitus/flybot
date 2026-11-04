@@ -93,7 +93,8 @@ function setup(extra) {
   const cfg = Object.assign({
     serverDir: srv, serverCmd: [process.execPath, path.join(fakes, 'server.js')], botCmd: [process.execPath, path.join(fakes, 'bot.js')],
     bots: 2, worldsTarget: 3, keepArchives: 2, botStaggerSec: 0, pauseBetweenWorldsSec: 0, serverStartTimeoutSec: 10, serverStopTimeoutSec: 5,
-    maxWorldMin: 1, dataDir: path.join(tmp, 'data'), archiveDir: path.join(tmp, 'archive')
+    maxWorldMin: 1, dataDir: path.join(tmp, 'data'), archiveDir: path.join(tmp, 'archive'),
+    port: 40000 + Math.floor(Math.random() * 20000)   // не 25566: тест не должен падать, пока на ПК работает настоящий стенд
   }, extra);
   const file = path.join(tmp, 'config.json');
   fs.writeFileSync(file, JSON.stringify(cfg));
