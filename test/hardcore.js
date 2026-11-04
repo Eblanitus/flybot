@@ -19,6 +19,7 @@ assert(out.includes('hardcore=true\n') && out.includes('level-seed=123\n') && ou
 assert(out.includes('#Minecraft server properties') && out.endsWith('server-port=25566\n'));
 assert.strictEqual(out.match(/hardcore=/g).length, 1);
 const wp = L.worldProperties({ levelName: 'hc_world', port: 25566, bots: 3 }, '-5');
+assert.strictEqual(wp['level-type'], 'minecraft\\:large_biomes');
 assert.strictEqual(wp.hardcore, 'true'); assert.strictEqual(wp.difficulty, 'hard'); assert.strictEqual(wp['server-ip'], '127.0.0.1');
 
 assert(L.WORLD_ID_RE.test(L.worldId(new Date(2026, 10, 1, 9, 5, 7), 3)));
@@ -120,7 +121,7 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     }
     assert.strictEqual(new Set(worlds.map(w => w.seed)).size, 3, 'каждый мир — свой сид');
     const props2 = fs.readFileSync(path.join(s.srv, 'server.properties'), 'utf8');
-    assert(props2.includes('hardcore=true') && props2.includes('difficulty=hard') && props2.includes('view-distance=10'));
+    assert(props2.includes('level-type=minecraft\\:large_biomes') && props2.includes('hardcore=true') && props2.includes('difficulty=hard') && props2.includes('view-distance=10'));
     assert(!fs.existsSync(path.join(s.srv, 'hc_world')), 'мир ушёл в архив');
     const arch = fs.readdirSync(s.cfg.archiveDir).sort();
     assert.strictEqual(arch.filter(n => L.WORLD_ID_RE.test(n)).length, 2, arch.join(','));

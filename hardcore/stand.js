@@ -14,7 +14,7 @@ const timeline = require('./timeline');
 const HERE = __dirname;
 const DEFAULTS = {
   serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
-  version: '26.1', port: 25566, levelName: 'hc_world', bots: 5, botPrefix: 'HC_', botCmd: null,
+  version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null,
   maxWorldMin: 120, keepArchives: 10, worldsTarget: 0, serverStartTimeoutSec: 300, serverStopTimeoutSec: 90,
   botStaggerSec: 3, pauseBetweenWorldsSec: 5, maxServerFails: 3,
   dataDir: path.join(HERE, 'data'), archiveDir: path.join(HERE, 'archive')

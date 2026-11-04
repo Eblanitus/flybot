@@ -33,6 +33,7 @@ function worldProperties(cfg, seed) {
     'force-gamemode': 'true',
     'level-seed': seed,
     'level-name': cfg.levelName,
+    'level-type': cfg.levelType || 'minecraft\\:large_biomes',   // большие биомы (хозяин 04.11); в .properties двоеточие экранируется
     'server-port': cfg.port,
     'server-ip': '127.0.0.1',     // только этот ПК, наружу не открыт
     'online-mode': 'false',       // боты входят без аккаунта — потому и server-ip только локальный
