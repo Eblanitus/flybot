@@ -12,7 +12,8 @@ const KIND = {
   lowhp: { c: 'var(--bad)', label: 'HP низкий' }, night: { c: 'var(--muted)', label: 'ночь' }, night_survived: { c: 'var(--good)', label: 'пережил ночь' },
   day: { c: 'var(--muted)', label: 'новый день' }, death: { c: 'var(--bad)', label: 'смерть' }, end: { c: 'var(--muted)', label: 'конец' },
   stage: { c: 'var(--good)', label: 'ступень' }, shelter: { c: 'var(--nightband)', label: 'укрылся' }, leave: { c: 'var(--start)', label: 'вышел из укрытия' },
-  stuck: { c: 'var(--warn)', label: 'застрял' }, fight: { c: 'var(--warn)', label: 'дерётся' }
+  stuck: { c: 'var(--warn)', label: 'застрял' }, fight: { c: 'var(--warn)', label: 'дерётся' },
+  hunt: { c: 'var(--eat)', label: 'охота' }, kill: { c: 'var(--bad)', label: 'убил муху' }
 };
 const CSS = `
 :root{--bg:#f4f6f1;--panel:#fff;--fg:#1d2419;--muted:#66705f;--line:#cdd5c4;--day:#e8efdc;--nightband:#9aa5b8;
@@ -80,7 +81,7 @@ function svgFor(cards) {
 }
 
 function legend() {
-  return '<div class="legend">' + ['start', 'stage', 'eat', 'flee', 'shelter', 'leave', 'stuck', 'lowhp', 'night_survived', 'death'].map(k =>
+  return '<div class="legend">' + ['start', 'stage', 'eat', 'flee', 'shelter', 'leave', 'stuck', 'lowhp', 'night_survived', 'hunt', 'kill', 'death'].map(k =>
     `<span><i class="dot" style="background:${KIND[k].c}"></i>${KIND[k].label}</span>`).join('') +
     '<span><i class="dot" style="background:var(--nightband);border-radius:2px"></i>ночь</span></div>';
 }
@@ -92,7 +93,7 @@ function worldHtml(w, cards) {
 <title>Мир ${esc(w.id)}</title><style>${CSS}</style></head><body><div class="wrap">
 <p class="muted"><a href="index.html">← все миры</a></p>
 <h1>Мир ${esc(w.id)}</h1>
-<p class="muted">сид ${esc(w.seed)} · ботов ${cards.length} · умерло ${cards.filter(c => c.result === 'death').length} · пережили первую ночь ${cards.filter(c => c.firstNightSurvived).length} · мир шёл ${w.durSec != null ? Math.round(w.durSec / 60) + ' мин' : '—'} · читов ${w.cheats != null ? w.cheats : '—'}${w.consoleCommands && w.consoleCommands.length ? ` · команды хозяина: ${esc(w.consoleCommands.join('; '))}` : ''}</p>
+<p class="muted">сид ${esc(w.seed)} · ботов ${cards.length} · умерло ${cards.filter(c => c.result === 'death').length} · пережили первую ночь ${cards.filter(c => c.firstNightSurvived).length} · мир шёл ${w.durSec != null ? Math.round(w.durSec / 60) + ' мин' : '—'} · читов ${w.cheats != null ? w.cheats : '—'}${w.br ? ` · убийств муха→муха ${w.kills != null ? w.kills : cards.reduce((n, c) => n + (c.killCount || 0), 0)}${cards.some(c => c.killCount) ? ' (' + cards.filter(c => c.killCount).map(c => `${esc(c.nick)} ${c.killCount}`).join(', ') + ')' : ''}` : ''}${w.consoleCommands && w.consoleCommands.length ? ` · команды хозяина: ${esc(w.consoleCommands.join('; '))}` : ''}</p>
 <div class="box">${legend()}${svgFor(cards)}</div>
 <div class="box"><table><tr><th>Бот</th><th>Итог</th><th>Прожил</th><th>Игровых дней</th><th>Первая ночь</th><th>Причина</th></tr>${rows}</table></div>
 </div></body></html>`;

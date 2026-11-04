@@ -4,19 +4,24 @@
 // и пишет карточку жизни в том же виде, что life.js: длина, первая ночь, ступени 1–6, события для ленты, последние 60 с.
 // Память жизни — своя папка <ник>.fly\ рядом с карточкой: заметки (пустые — ни базы, ни целей старого мира), данные тела
 // (variants.json, experience.json, свои блоки), статистика навыков. Выученные навыки brain\learned — общие, только чтение.
-//   node hardcore/fly.js --host 127.0.0.1 --port 25566 --name HC_1 --version 26.1 --world <id> --seed <сид> --out <card.json> --maxSec 7260
+// Этап 1в (баттл-рояль, --br HC_): награда — убийства других мух. Тело получает HC_BR_PREFIX: мухи с этим префиксом законные цели
+// для fight, в снимке есть панель локатора (lib/locator.js). Охотник здесь же (hardcore/br.js huntDecision): когда муха готова
+// (HP, сытость, оружие или срок подготовки) и на локаторе есть другая муха — follow к ней, вблизи — fight. Остальное время — автопилот.
+//   node hardcore/fly.js --host 127.0.0.1 --port 25566 --name HC_1 --version 26.1 --world <id> --seed <сид> --out <card.json> --maxSec 7260 [--br HC_]
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
 const L = require('./lib');
+const BR = require('./br');
 
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : d; };
 const A = {
   host: arg('host', '127.0.0.1'), port: +arg('port', 25566), name: arg('name', 'HC_1'), version: arg('version', '26.1'),
   world: arg('world', ''), seed: arg('seed', ''), out: arg('out', `card-${Date.now()}.json`), maxSec: +arg('maxSec', 7260),
-  ctlBase: +arg('ctlBase', 3310), runnerBase: +arg('runnerBase', 3410), joinSec: +arg('joinSec', 120)
+  ctlBase: +arg('ctlBase', 3310), runnerBase: +arg('runnerBase', 3410), joinSec: +arg('joinSec', 120),
+  br: arg('br', '')   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
 };
 const ROOT = path.join(__dirname, '..');
 const num = Number((/(\d+)$/.exec(A.name) || [0, 0])[1]);
@@ -29,7 +34,8 @@ if (!fs.existsSync(notes)) fs.writeFileSync(notes, '# Заметки\n\nНовы
 
 const env = Object.assign({}, process.env, {
   DATA_DIR: dirs.data, FLYBOT_NOTES: notes, MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
-  RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned')
+  RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
+  ...(A.br ? { HC_BR_PREFIX: A.br } : {})
 });
 const kids = [];
 function run(name, file, args) {
@@ -48,6 +54,17 @@ const get = p => new Promise(resolve => {
   req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); });
 });
 
+// Команда телу от охотника (как мозг: с User-Agent, иначе тело примет её за исполнителя автопилота)
+const post = cmd => new Promise(resolve => {
+  const body = JSON.stringify(cmd);
+  const req = http.request({ host: '127.0.0.1', port: CTL, path: '/cmd', method: 'POST', timeout: 5000,
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'hc-hunter', 'Content-Length': Buffer.byteLength(body) } }, res => {
+    let b = ''; res.on('data', d => b += d); res.on('end', () => { try { resolve(JSON.parse(b)); } catch (e) { resolve(null); } });
+  });
+  req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); });
+  req.end(body);
+});
+
 const t0 = Date.now();
 const frames = [], chat = [];
 const chron = L.makeChronicle();
@@ -55,6 +72,9 @@ const ladder = L.makeLadder();
 let spawned = false, written = false, age0 = null, tod0 = null, wtStart = null, lastWt = null, lastSnap = null, evSince = 0, lowNoHealSec = 0;
 let lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, everTable = false, wasClosed = false;
 const exits = [], acts = {}, lastDeath = { msg: null };
+// баттл-рояль: свои убийства, кто убил меня, охота (что видели на локаторе, наша текущая команда, счёт решений)
+const kills = [], killSeen = new Set(), seenFlies = new Map(), hunt = { ours: null, follows: 0, fights: 0, why: null, lastAt: 0 };
+let killedBy = null;
 const r1 = x => Math.round(x * 10) / 10;
 const BAD_FOOD = new Set(['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'chorus_fruit', 'suspicious_stew']);
 const FOODS = (() => { try { return require('minecraft-data')(A.version).foodsByName || {}; } catch (e) { return {}; } })();
@@ -86,8 +106,63 @@ async function readEvents() {
       const a = acts[d.name] || (acts[d.name] = { n: 0, ok: 0 }); a.n++; if (e.type === 'task_done' && !d.error) a.ok++;
     }
     if (e.type === 'death') lastDeath.msg = d.message || d.cause || null;
-    if (e.type === 'chat' || e.type === 'system') { const m = String(d.msg || d.text || d.message || ''); if (m.includes(A.name)) { chat.push(m.slice(0, 200)); while (chat.length > 20) chat.shift(); } }
+    if (e.type === 'chat' || e.type === 'system') {
+      const m = String(d.msg || d.text || d.message || '');
+      if (m.includes(A.name)) { chat.push(m.slice(0, 200)); while (chat.length > 20) chat.shift(); }
+      if (A.br) noteKill(m);
+    }
   }
+}
+
+// Убийство муха → муха: из системного сообщения о смерти. Своё — в счёт (с оружием в руке в этот момент), меня — killedBy.
+function noteKill(m) {
+  if (!m || m.startsWith('<') || !L.DEATH_WORDS.test(m) || killSeen.has(m)) return;
+  const k = BR.parseKill(m, A.br);
+  if (!k) return;
+  killSeen.add(m);
+  if (k.killer === A.name) {
+    const weapon = BR.weaponOf(lastSnap && lastSnap.heldItem);
+    kills.push({ victim: k.victim, lifeSec: Math.round((Date.now() - t0) / 1000), wt: lastWt, weapon, hp: lastSnap ? r1(lastSnap.health || 0) : null });
+    chron.note(lastWt, 'kill', `убил ${k.victim} (${weapon === 'fist' ? 'кулаком' : weapon})`);
+    console.log(`[fly] ${A.name}: убил ${k.victim}, всего ${kills.length}`);
+  } else if (k.victim === A.name) killedBy = k.killer;
+}
+
+// Охотник баттл-рояля: раз в 2 с смотрит панель локатора из снимка и решает (br.huntDecision). Команды — только свои follow/fight/stop;
+// чужое дело тела (рефлекс, автопилот бежит или ест) не перебивает.
+const BUSY_SKILLS = new Set(['escape', 'eat', 'shelter', 'wait_night', 'defend', 'recover', 'swim_to', 'pillar_up']);
+async function huntTick(s, f) {
+  if (!A.br || Date.now() - hunt.lastAt < 2000) return;
+  hunt.lastAt = Date.now();
+  const now = Date.now();
+  for (const m of s.locator || []) {
+    if (!m || !m.name || !m.name.startsWith(A.br) || m.name === A.name || m.gamemode === 3 || m.gamemode === 'spectator') continue;
+    if (!m.onBar || m.hidden) continue;   // как у игрока: метка видна только в конусе 120° и если муха не прячется
+    seenFlies.set(m.name, { name: m.name, d: m.d, at: m.at, t: now });
+  }
+  for (const [n, m] of seenFlies) if (s.locator && s.locator.some(x => x.name === n && (x.gamemode === 3 || x.gamemode === 'spectator'))) seenFlies.delete(n);
+  const ti = s.eyes && s.eyes.task && s.eyes.task.status !== 'done' ? s.eyes.task : null;
+  const task = ti ? String(ti.name || ti) : null, taskBy = ti ? String(ti.by || ti.source || 'brain') : null;
+  if (hunt.ours && task !== hunt.ours.kind) hunt.ours = null;   // наша команда кончилась или её вытеснили
+  const armed = (s.inventory || []).some(i => /_(sword|axe)$/.test(i.name));
+  const sit = {
+    hp: f.hp, food: f.food == null ? 20 : f.food, lifeSec: f.t, armed, isNight: s.timeOfDay === 'night',
+    busy: !hunt.ours && !!task && (BUSY_SKILLS.has(task) || task === 'fight' || /reflex/.test(taskBy)),
+    seen: [...seenFlies.values()].map(m => ({ name: m.name, d: m.d, at: m.at, ago: Math.round((now - m.t) / 1000) })),
+    ours: hunt.ours ? { ...hunt.ours, sec: Math.round((now - hunt.ours.at) / 1000) } : null
+  };
+  const dcs = BR.huntDecision(sit);
+  hunt.why = dcs.why;
+  if (dcs.act === 'none') return;
+  if (dcs.act === 'stop') { await post({ action: 'stop' }); hunt.ours = null; chron.note(f.wt, 'hunt', `бросил охоту: ${dcs.why}`); return; }
+  const r = dcs.act === 'fight'
+    ? await post({ action: 'fight', params: { target: dcs.target, radius: 16, flee_hp: 6, timeout: 40 }, force: true })
+    : await post({ action: 'follow', params: { name: dcs.target, range: 2 }, force: true });
+  if (r && r.ok !== false) {
+    hunt.ours = { kind: dcs.act, target: dcs.target, at: Date.now() };
+    if (dcs.act === 'fight') hunt.fights++; else hunt.follows++;
+    chron.note(f.wt, dcs.act === 'fight' ? 'fight' : 'hunt', dcs.why);
+  } else hunt.why = `${dcs.why} — тело не взяло: ${r && r.error ? String(r.error).slice(0, 80) : 'нет ответа'}`;
 }
 
 function situation(s) {
@@ -127,6 +202,7 @@ async function tick() {
     wasClosed = closed;
     for (const n of ladder.update(situation(s), f.t, f.wt)) { chron.note(f.wt, 'stage', `ступень ${n}: ${L.STEP_TEXT[n]}`); console.log(`[fly] ${A.name}: ступень ${n} — ${L.STEP_TEXT[n]}`); }
     await readEvents();
+    if (A.br && f.hp > 0 && s.gameMode !== 'spectator') await huntTick(s, f).catch(e => console.error('[fly] охотник:', e.message));
     if (s.gameMode === 'spectator' || f.hp <= 0) {
       await new Promise(r => setTimeout(r, 800)); await readEvents();
       const msg = L.deathMessage(chat, A.name) || lastDeath.msg;
@@ -142,7 +218,7 @@ function writeCard(result, extra = {}) {
   const lifeSec = Math.round((Date.now() - t0) / 1000);
   const last = exits[exits.length - 1];
   const card = {
-    nick: A.name, world: A.world, seed: A.seed, result, mode: 'stage1b-flybot',
+    nick: A.name, world: A.world, seed: A.seed, result, mode: A.br ? 'stage1v-br' : 'stage1b-flybot',
     startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), lifeSec,
     gameDays: age0 != null && lastWt != null ? r1((lastWt - age0) / 24000) : null,
     spawnTimeOfDay: tod0, firstNightSurvived: chron.events.some(e => e.kind === 'night_survived'),
@@ -150,10 +226,12 @@ function writeCard(result, extra = {}) {
     lowest, eats, flees, wtStart, wtEnd: lastWt, events: chron.events, chat: chat.slice(-10), last60s: frames.slice(), interventions: 0,
     ladder: ladder.reached, topStep: ladder.top(), exits, actions: acts, lowHpNoHealSec: lowNoHealSec,
     deathSoonAfterExit: result === 'death' && !!last && lifeSec - last.lifeSec <= 60,
-    autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null, ...extra
+    autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null,
+    ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, lastWhy: hunt.why } } : {}),
+    ...extra
   };
   try { fs.writeFileSync(A.out, JSON.stringify(card, null, 1)); } catch (e) { console.error('карточка не записана:', e.message); }
-  console.log(`[fly] ${A.name}: ${result}, ${lifeSec} с, высшая ступень ${ladder.top()}`);
+  console.log(`[fly] ${A.name}: ${result}, ${lifeSec} с, высшая ступень ${ladder.top()}${A.br ? `, убийств ${kills.length}` : ''}`);
 }
 function finish(result, extra) {
   writeCard(result, extra);

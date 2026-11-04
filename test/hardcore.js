@@ -122,7 +122,11 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     }
     assert.strictEqual(new Set(worlds.map(w => w.seed)).size, 3, 'каждый мир — свой сид');
     const props2 = fs.readFileSync(path.join(s.srv, 'server.properties'), 'utf8');
-    assert(props2.includes('level-type=minecraft\\:large_biomes') && props2.includes('hardcore=true') && props2.includes('difficulty=hard') && props2.includes('view-distance=10'));
+    assert(props2.includes('level-type=minecraft\\:large_biomes') && props2.includes('hardcore=true') && props2.includes('difficulty=hard') && props2.includes('pvp=true'));
+    // баттл-рояль (1в, по умолчанию): дальность прорисовки 20 — локатор видит всю расстановку; мух переносят на точки после входа
+    assert(props2.includes('view-distance=20'), 'view-distance=20 в баттл-рояле');
+    for (const w of worlds) assert(w.br && w.brSpawn && w.brSpawn.points.HC_1 && w.brSpawn.points.HC_1.sent, JSON.stringify(w.brSpawn));
+    assert(/got: spreadplayers -?\d+ -?\d+ 0 1 false HC_1/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', worlds[0].id, 'server.log'), 'utf8')), 'расстановка ушла в сервер');
     assert(!fs.existsSync(path.join(s.srv, 'hc_world')), 'мир ушёл в архив');
     const arch = fs.readdirSync(s.cfg.archiveDir).sort();
     assert.strictEqual(arch.filter(n => L.WORLD_ID_RE.test(n)).length, 2, arch.join(','));
@@ -141,6 +145,15 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     assert(fs.readFileSync(path.join(tl, last.id + '.html'), 'utf8').includes('пережил первую ночь'));
     fs.rmSync(tl, { recursive: true }); TL.rebuild(s.cfg.dataDir);
     assert(fs.existsSync(path.join(tl, last.id + '.html')), 'rebuild перерисовал ленты');
+  }
+  // бот 1а: баттл-рояля нет — дальность прорисовки не трогаем, мух не переносим
+  {
+    const s = setup({ worldsTarget: 1, botMode: '1a' });
+    assert.strictEqual(await stand.main(s.file), 0);
+    const props2 = fs.readFileSync(path.join(s.srv, 'server.properties'), 'utf8');
+    assert(props2.includes('view-distance=10'), 'в 1а view-distance как был');
+    const w = readJsonl(path.join(s.cfg.dataDir, 'worlds.jsonl'))[0];
+    assert(!w.br && !w.brSpawn, JSON.stringify(w));
   }
   // сервер не поднимается: 3 провала подряд → NEED_HUMAN.txt, код 3
   {
