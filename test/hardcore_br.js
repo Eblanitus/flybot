@@ -135,6 +135,9 @@ assert.strictEqual(BR.weaponOf(null), 'fist');
   assert.strictEqual(c.killedBy, 'HC_8');
   assert.strictEqual(c.cause, 'HC_8');
   assert(c.events.some(e => e.kind === 'kill' && /HC_9/.test(e.text)), 'убийство в ленте');
+  // тело получает адрес своего исполнителя навыков (04.11: комментарий съел RUNNER_URL — выученные навыки шли на :3200)
+  assert.strictEqual(c.autopilot.runnerUrl, `http://127.0.0.1:${ctlBase + 1000 + 7}`);
+  assert.strictEqual(c.autopilot.mcVersion, '26.1');
   const cmds = c.autopilot.cmds;
   const fight = cmds.find(x => x.action === 'fight');
   assert(fight && fight.params.target === 'HC_9' && fight.ua === 'hc-hunter', JSON.stringify(cmds));
