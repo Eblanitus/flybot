@@ -1,15 +1,15 @@
 // Этап 1в — баттл-рояль мух (docs/goal_path.md, утверждено хозяином 04.11). Чистые функции без игры и без файлов —
 // их проверяет test/hardcore_br.js. Награда мухи — только убийства других мух; выжила ли сама и кто последний — неважно.
-//   spawnPoints  — где поставить мух: каждая пара не ближе min и не дальше max блоков (хозяин: 100–300);
+//   spawnPoints  — где поставить мух: каждая пара не ближе min и не дальше max блоков (хозяин: 100–300, с 04.11 ×3: 300–900);
 //   parseKill    — кто кого убил, из сообщения о смерти («HC_2 was slain by HC_4»);
 //   huntDecision — что делать охотнику сейчас: ничего (работает автопилот), идти к мухе, драться, бросить охоту.
 'use strict';
 
 // Точки расстановки вокруг (cx, cz): каждая пара не ближе min, у каждой мухи ближайшая соседка не дальше max
-// (хозяин: 100–300). 5 мух помещаются так, что и все пары ≤ max; 10 — уже нет (10 точек через 100 блоков не влезают
+// (хозяин: 100–300, с 04.11 ×3: 300–900). 5 мух помещаются так, что и все пары ≤ max; 10 — уже нет (10 точек через 100 блоков не влезают
 // в круг 300), поэтому правило — про ближайшую соседку. Круг подбора растёт, пока расстановка не выйдет; не вышло за tries —
 // лучший найденный набор и ok: false.
-function spawnPoints(n, { min = 100, max = 300, cx = 0, cz = 0, rand = Math.random, tries = 3000 } = {}) {
+function spawnPoints(n, { min = 300, max = 900, cx = 0, cz = 0, rand = Math.random, tries = 3000 } = {}) {
   let best = null, bestErr = Infinity;
   let R = max / 2;
   for (let k = 0; k < tries; k++) {
@@ -73,7 +73,7 @@ const isWeapon = w => w && w !== 'fist';
 
 // Пороги охотника (поведение, их потом подкручивает учитель). prepSec — сколько секунд жизни муха готовится, если
 // оружия нет (с оружием охота разрешена сразу); fightDist — с какого расстояния вместо подхода начинаем бой.
-const HUNT = { hp: 14, food: 12, prepSec: 600, fightDist: 12, memorySec: 120, maxFollowSec: 240 };
+const HUNT = { hp: 14, food: 12, prepSec: 600, fightDist: 12, fightKeep: 16, switchMargin: 16, memorySec: 120, maxFollowSec: 240 };
 
 // s — что знает муха сейчас: { hp, food, lifeSec, armed, isNight, busy (тело занято не нами: рефлекс, еда, побег),
 //   seen: [{ name, d, at, ago }] — мухи на панели локатора (ago — сколько секунд назад видели), ours: { kind, target, sec } | null }
@@ -87,10 +87,14 @@ function huntDecision(s, T = HUNT) {
     return ours ? { act: 'stop', why } : { act: 'none', why };
   }
   const fresh = (s.seen || []).filter(m => m.ago <= T.memorySec).sort((a, b) => a.d - b.d);
-  const tgt = fresh[0];
+  // цель не скачет: пока прежняя видна и не сильно дальше ближайшей — держимся её (разбор 04.11: у HC_1 HC_3 и HC_10 по очереди)
+  const cur = ours && fresh.find(m => m.name === ours.target);
+  const tgt = cur && cur.d <= fresh[0].d + T.switchMargin ? cur : fresh[0];
   if (!tgt) return ours ? { act: 'stop', why: 'муху потерял из виду' } : { act: 'none', why: 'мух на локаторе нет' };
   // ночью далеко не ходим: только если муха уже близко
   if (s.isNight && tgt.d > 32 && !ours) return { act: 'none', why: `ночь, ${tgt.name} далеко (${tgt.d} м)` };
+  // бой идёт с этой мухой и она в радиусе погони навыка fight — не дёргаем (раньше уходила за 12 м → follow → снова fight, 80 смен за мир)
+  if (ours && ours.kind === 'fight' && ours.target === tgt.name && tgt.d <= T.fightKeep) return { act: 'none', why: `дерусь с ${tgt.name} (${tgt.d} м)` };
   if (tgt.d <= T.fightDist && tgt.ago <= 3) {
     if (ours && ours.kind === 'fight' && ours.target === tgt.name) return { act: 'none', why: `дерусь с ${tgt.name}` };
     return { act: 'fight', target: tgt.name, why: `${tgt.name} в ${tgt.d} м — бой` };

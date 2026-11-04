@@ -206,9 +206,9 @@ function reflexFeed(events, limit) {
       who = 'свой блок'; text = `сломан ${e.block || '?'}${e.at ? ' в ' + e.at.join(' ') : ''} — ${OWN_BY_RU(e.by)}${e.now && e.now !== 'air' ? ', теперь там ' + e.now : ''}`; level = e.sync ? '' : 'warn';
     } else if (e.type === 'behavior_trouble') {
       const sc = e.score || {};
-      who = 'поведение'; text = `беда с версией ${e.id || '?'}: ${e.kind || ''} — ${String(e.why || '').slice(0, 160)} (сбоев ${sc.faults || 0}, падений ${sc.crashes || 0}, зависаний ${sc.hangs || 0}). Решает мозг: оставить, поправить или откатить${e.lastGood ? ' на ' + e.lastGood : ''}`; level = 'bad';
+      who = 'поведение'; text = `беда с версией ${e.ref || e.id || '?'}: ${e.kind || ''} — ${String(e.why || '').slice(0, 160)} (сбоев ${sc.faults || 0}, падений ${sc.crashes || 0}, зависаний ${sc.hangs || 0}). Решает мозг: оставить, поправить или откатить${e.lastGood ? ' на ' + e.lastGood : ''}`; level = 'bad';
     } else if (e.type === 'behavior') {
-      who = 'поведение'; text = `${e.what || ''}${e.why ? ': ' + e.why : ''}${e.id ? ' (' + e.id + ')' : ''}`;
+      who = 'поведение'; text = `${e.what || ''}${e.why ? ': ' + e.why : ''}${(e.ref || e.id) ? ' (' + (e.ref || e.id) + ')' : ''}`;
     }
     if (text) out.push({ ts: e.ts, id: e.id, who, text, level });
   }

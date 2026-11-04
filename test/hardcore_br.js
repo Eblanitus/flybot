@@ -71,6 +71,52 @@ assert.strictEqual(BR.weaponOf(null), 'fist');
   delete require.cache[require.resolve(AG)];
 }
 
+// 04.11 разбор миров 1в: чат кладёт своё поле id в событие — номер журнала не затирается (иначе /events?since= терял «slain»)
+{
+  const { EventHub } = require('../lib/events');
+  const h = new EventHub(50);
+  for (let i = 0; i < 30; i++) h.push('info', { msg: 'x' + i });
+  const ev = h.push('chat', { kind: 'system', from: null, text: 'HC_2 was slain by HC_4', id: 3 });
+  assert.strictEqual(ev.id, 31); assert.strictEqual(ev.ref, 3);
+  assert(h.since(30).some(e => e.text === 'HC_2 was slain by HC_4'), 'slain доходит до /events?since=');
+}
+
+// 04.11: расстановка ×3 — 10 мух, не ближе 300, ближайшая соседка не дальше 900 (по умолчанию)
+{
+  let seed = 11; const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const r = BR.spawnPoints(10, { rand });
+  assert(r.ok, 'расстановка 300–900 для 10 мух');
+  for (let i = 0; i < 10; i++) {
+    let near = Infinity;
+    for (let j = 0; j < 10; j++) if (i !== j) { const d = Math.hypot(r.points[i].x - r.points[j].x, r.points[i].z - r.points[j].z); assert(d >= 300, `пара ${i}-${j}: ${d}`); near = Math.min(near, d); }
+    assert(near <= 900, `у ${i} соседка в ${near}`);
+  }
+}
+
+// 04.11: дальняя муха — метка сервера tracked_waypoint (позиции сущности нет). Блок, чанк, азимут (yaw: 0 — юг +Z, π/2 — запад −X)
+{
+  const LOC = require('../lib/locator');
+  const { EventEmitter } = require('events');
+  const client = new EventEmitter();
+  const bot = { _client: client, username: 'HC_1', entity: { position: { x: 0, y: 64, z: 0 }, yaw: 0, pitch: 0 },
+    players: { HC_2: { username: 'HC_2', uuid: 'aaaa-bb', gamemode: 0 }, HC_3: { username: 'HC_3', uuid: 'cccc-dd', gamemode: 0 }, HC_4: { username: 'HC_4', uuid: 'eeee-ff', gamemode: 0 } } };
+  LOC.attachWaypoints(bot);
+  client.emit('tracked_waypoint', { operation: 'track', waypoint: { hasUUID: true, uuid: 'AAAA-BB', type: 'azimuth', data: 0 } });
+  client.emit('tracked_waypoint', { operation: 'track', waypoint: { hasUUID: true, uuid: 'cccc-dd', type: 'chunk', data: { chunkX: 0, chunkZ: 20 } } });
+  client.emit('tracked_waypoint', { operation: 'track', waypoint: { hasUUID: true, uuid: 'eeee-ff', type: 'vec3i', data: { x: 0, y: 64, z: -400 } } });
+  let bar = LOC.playersOnBar({ bot });
+  const by = n => bar.find(x => x.name === n);
+  assert(by('HC_2') && by('HC_2').d === null && by('HC_2').far && by('HC_2').onBar && by('HC_2').heading[1] === 1, JSON.stringify(by('HC_2')));
+  assert(by('HC_3') && Math.round(by('HC_3').d) === 328 && by('HC_3').onBar, JSON.stringify(by('HC_3')));
+  assert(by('HC_4') && Math.round(by('HC_4').d) === 400 && !by('HC_4').onBar, 'сзади — не на панели');
+  assert.deepStrictEqual(bar.map(x => x.name), ['HC_3', 'HC_4', 'HC_2'], 'без расстояния — последней');
+  client.emit('tracked_waypoint', { operation: 'untrack', waypoint: { hasUUID: true, uuid: 'aaaa-bb', type: 'empty' } });
+  bar = LOC.playersOnBar({ bot });
+  assert(!bar.some(x => x.name === 'HC_2'), 'untrack — метки нет');
+  const w = LOC.waypointGeo({ azimuth: Math.PI / 2 }, { x: 0, y: 0, z: 0 });
+  assert(Math.abs(w.dx + 1) < 1e-9 && Math.abs(w.dz) < 1e-9, 'азимут π/2 — запад');
+}
+
 // fly.js --br с поддельным телом: охотник видит HC_9 в 8 м на локаторе → fight; убийство засчитано один раз, с мечом
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hcbr-'));
@@ -89,6 +135,9 @@ assert.strictEqual(BR.weaponOf(null), 'fist');
   assert.strictEqual(c.killedBy, 'HC_8');
   assert.strictEqual(c.cause, 'HC_8');
   assert(c.events.some(e => e.kind === 'kill' && /HC_9/.test(e.text)), 'убийство в ленте');
+  // тело получает адрес своего исполнителя навыков (04.11: комментарий съел RUNNER_URL — выученные навыки шли на :3200)
+  assert.strictEqual(c.autopilot.runnerUrl, `http://127.0.0.1:${ctlBase + 1000 + 7}`);
+  assert.strictEqual(c.autopilot.mcVersion, '26.1');
   const cmds = c.autopilot.cmds;
   const fight = cmds.find(x => x.action === 'fight');
   assert(fight && fight.params.target === 'HC_9' && fight.ua === 'hc-hunter', JSON.stringify(cmds));
