@@ -5,12 +5,15 @@
 //   huntDecision — что делать охотнику сейчас: ничего (работает автопилот), идти к мухе, драться, бросить охоту.
 'use strict';
 
-// Точки расстановки вокруг (cx, cz). Случайный подбор с проверкой всех пар; не вышло за tries — берём лучший
-// найденный набор (самая маленькая ошибка) и честно говорим, что ограничение не выполнено (ok: false).
-function spawnPoints(n, { min = 100, max = 300, cx = 0, cz = 0, rand = Math.random, tries = 4000 } = {}) {
-  const R = max / 2;   // все точки в круге диаметром max: любая пара точно не дальше max
+// Точки расстановки вокруг (cx, cz): каждая пара не ближе min, у каждой мухи ближайшая соседка не дальше max
+// (хозяин: 100–300). 5 мух помещаются так, что и все пары ≤ max; 10 — уже нет (10 точек через 100 блоков не влезают
+// в круг 300), поэтому правило — про ближайшую соседку. Круг подбора растёт, пока расстановка не выйдет; не вышло за tries —
+// лучший найденный набор и ok: false.
+function spawnPoints(n, { min = 100, max = 300, cx = 0, cz = 0, rand = Math.random, tries = 3000 } = {}) {
   let best = null, bestErr = Infinity;
+  let R = max / 2;
   for (let k = 0; k < tries; k++) {
+    if (k && k % 300 === 0) R *= 1.12;   // не влезает — круг шире
     const pts = [];
     for (let i = 0; i < n; i++) {
       let p = null;
@@ -19,7 +22,7 @@ function spawnPoints(n, { min = 100, max = 300, cx = 0, cz = 0, rand = Math.rand
         const q = { x: Math.round(cx + Math.cos(a) * r), z: Math.round(cz + Math.sin(a) * r) };
         if (pts.every(o => Math.hypot(o.x - q.x, o.z - q.z) >= min)) p = q;
       }
-      pts.push(p || { x: Math.round(cx + (rand() - 0.5) * max), z: Math.round(cz + (rand() - 0.5) * max) });
+      pts.push(p || { x: Math.round(cx + (rand() - 0.5) * 2 * R), z: Math.round(cz + (rand() - 0.5) * 2 * R) });
     }
     const err = pairError(pts, min, max);
     if (err < bestErr) { best = pts; bestErr = err; }
@@ -28,12 +31,18 @@ function spawnPoints(n, { min = 100, max = 300, cx = 0, cz = 0, rand = Math.rand
   return { points: best, ok: bestErr === 0 };
 }
 
-// Сумма нарушений по всем парам (0 — все пары в [min, max])
+// Нарушения (0 — расстановка годная): пары ближе min + у кого ближайшая соседка дальше max
 function pairError(pts, min, max) {
   let e = 0;
-  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
-    const d = Math.hypot(pts[i].x - pts[j].x, pts[i].z - pts[j].z);
-    if (d < min) e += min - d; else if (d > max) e += d - max;
+  for (let i = 0; i < pts.length; i++) {
+    let near = Infinity;
+    for (let j = 0; j < pts.length; j++) {
+      if (i === j) continue;
+      const d = Math.hypot(pts[i].x - pts[j].x, pts[i].z - pts[j].z);
+      if (j > i && d < min) e += min - d;
+      near = Math.min(near, d);
+    }
+    if (pts.length > 1 && near > max) e += near - max;
   }
   return e;
 }

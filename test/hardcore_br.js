@@ -18,6 +18,14 @@ const L = require('../hardcore/lib');
     assert(d >= 100 && d <= 300, `пара ${i}-${j}: ${d}`);
   }
   assert.strictEqual(BR.pairError([{ x: 0, z: 0 }, { x: 50, z: 0 }], 100, 300), 50);
+  assert.strictEqual(BR.pairError([{ x: 0, z: 0 }, { x: 400, z: 0 }], 100, 300), 200, 'соседка дальше 300');
+  // 10 мух (хозяин 04.11): все пары ≥ 100, у каждой ближайшая соседка ≤ 300
+  const r10 = BR.spawnPoints(10, { min: 100, max: 300, rand });
+  assert(r10.ok && r10.points.length === 10, JSON.stringify(r10));
+  for (const a of r10.points) {
+    const ds = r10.points.filter(b => b !== a).map(b => Math.hypot(a.x - b.x, a.z - b.z));
+    assert(Math.min(...ds) >= 100 && Math.min(...ds) <= 300, JSON.stringify(ds));
+  }
 }
 // кто кого убил
 assert.deepStrictEqual(BR.parseKill('HC_2 was slain by HC_4 using Stone Sword'), { victim: 'HC_2', killer: 'HC_4' });
