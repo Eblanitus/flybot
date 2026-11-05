@@ -53,7 +53,7 @@ const env = Object.assign({}, process.env, {
   ...(A.learned ? { RUNNER_LEARNED: path.resolve(A.learned) } : {}),   // В2: навыки группы А — с правкой учителя (бегун читает их отсюда)
   ...(teachGroup === 'A' && A.offer ? { HC_TEACH_OFFER: A.offer } : {}),   // В2: новые навыки правки — в списке решателя
   ...(A.stage2 && A.group !== 'control' ? { HC_REFLEX: path.join(__dirname, 'reflexes.js') } : {}),   // рефлексы с выбором ответа по очкам и правила автопилота в общем списке (хозяин 05.11); контроль — старый код
-  ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя
+  ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0', HC_STEPS: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя
   ...(A.pool ? (A.stage2 ? { HC_POOL: '1' } : { HC_POOL_RUNS: path.resolve(A.pool) }) : {})   // без этапа 2: по HC_POOL_RUNS day_routine_v7 и night_mine_v7 берут навык из пула; на этапе 2 навыки пула — дела решателя (HC_POOL)
 });
 const kids = [];
