@@ -55,8 +55,32 @@ const card = path.join(__dirname, 'HC_x.json');   // только как арг�
   assert.strictEqual(S.groupOf(cfg, 'HC_9'), 'control');
   assert.strictEqual(S.groupOf(cfg, 'HC_10'), 'control');
   assert.strictEqual(S.groupOf(off, 'HC_9'), null);
-  assert.strictEqual(S.groupsText(cfg), 'учатся HC_1–HC_8, контроль HC_9, HC_10');
+  assert.strictEqual(S.groupsText(cfg), 'учатся Uch_Krot–Uch_Pixel, контроль Kon_Viper, Kon_Tormoz');
+  assert.strictEqual(S.groupsText({ ...cfg, groupNicks: false }), 'учатся HC_1–HC_8, контроль HC_9, HC_10');
   console.log('groupOf: HC_9–10 контроль, остальные учатся; состав групп для лога: OK');
+}
+
+// 3б) ники этапа 2 (хозяин 05.11): у каждой мухи свой ник, группа видна по приставке; слот = бывшая HC_N
+{
+  const c73 = { ...cfg, controlBots: 3 };
+  const nicks = S.nicksOf(c73);
+  assert.deepStrictEqual(nicks, ['Uch_Krot', 'Uch_Shmel', 'Uch_Kaktus', 'Uch_Turbo', 'Uch_Zubilo', 'Uch_Glitch', 'Uch_Bagor', 'Kon_Pixel', 'Kon_Viper', 'Kon_Tormoz']);
+  assert.strictEqual(new Set(nicks).size, nicks.length, 'ники разные');
+  for (const n of nicks) assert(/^[A-Za-z0-9_]{3,16}$/.test(n), 'ник Minecraft: ' + n);
+  nicks.forEach((n, i) => { assert.strictEqual(S.slotOf(c73, n), i + 1); assert.strictEqual(S.groupOf(c73, n), i < 7 ? 'learn' : 'control'); });
+  assert.strictEqual(S.slotOf(c73, 'HC_4'), 4, 'старый ник — по цифре');
+  assert.strictEqual(S.nickOf(off, 3), 'HC_3', 'без этапа 2 — старые ники');
+  assert.strictEqual(S.nickOf({ ...c73, bots: 12 }, 12), 'Kon_12', 'мух больше, чем ников в списке — номер');
+  const a = S.botArgs(c73, w, 'Kon_Pixel', card);
+  assert.strictEqual(val(a, '--slot'), '8', 'слот — порты тела и навыков');
+  assert.strictEqual(val(a, '--group'), 'control');
+  assert.strictEqual(val(a, '--br'), 'Uch_,Kon_', 'цели охоты — обе группы');
+  assert.strictEqual(val(S.botArgs(off, w, 'HC_2', card), '--br'), 'HC_');
+  const BR = require('../hardcore/br');
+  assert.deepStrictEqual(BR.parseKill('[Server thread/INFO]: Kon_Pixel was slain by Uch_Krot', 'Uch_,Kon_'), { victim: 'Kon_Pixel', killer: 'Uch_Krot' });
+  assert.strictEqual(BR.parseKill('Kon_Pixel was slain by Zombie', 'Uch_,Kon_'), null);
+  assert(BR.isFly('Uch_Shmel', 'Uch_,Kon_') && !BR.isFly('Steve', 'Uch_,Kon_') && BR.isFly('HC_1', 'HC_'));
+  console.log('ники этапа 2: Uch_/Kon_ + свой ник, слот и охота по приставкам: OK');
 }
 
 // 4) подписи групп: учится / контроль; правка учителя — с пометкой А/Б; без группы — пусто

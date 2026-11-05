@@ -165,11 +165,30 @@ async function stopServer(cfg, p) {
 
 const isBr = cfg => !!cfg.battleRoyale && cfg.botMode !== '1a';   // баттл-рояль только у бота FlyBot (1б/1в)
 
-// этап 2: группа мухи по нику — последние controlBots мух (HC_8–HC_10 при 10 мухах и 3 контрольных) контроль, остальные учатся; без stage2 — null
+// Ники мух (хозяин 05.11): на этапе 2 у каждой мухи свой игровой ник, а группа видна по приставке — Uch_ учится, Kon_ контроль.
+// Место мухи (слот 1..bots) прежнее: слот N — это бывшая HC_N (Uch_Krot — бывшая HC_1). Группа, группа учителя и порты — по слоту.
+// Без этапа 2 (или "groupNicks": false в конфиге) — старые ники botPrefix + N (HC_1…).
+const NICK_TAGS = ['Krot', 'Shmel', 'Kaktus', 'Turbo', 'Zubilo', 'Glitch', 'Bagor', 'Pixel', 'Viper', 'Tormoz'];
+const GROUP_PREFIX = { learn: 'Uch_', control: 'Kon_' };
+const groupNicks = cfg => !!cfg.stage2 && cfg.groupNicks !== false;
+const groupOfSlot = (cfg, n) => (n > cfg.bots - cfg.controlBots ? 'control' : 'learn');
+function nickOf(cfg, n) {
+  if (!groupNicks(cfg)) return `${cfg.botPrefix}${n}`;
+  const tag = [].concat(cfg.nickTags || NICK_TAGS)[n - 1] || String(n);
+  return (GROUP_PREFIX[groupOfSlot(cfg, n)] + tag).slice(0, 16);   // ник Minecraft — до 16 знаков
+}
+const nicksOf = cfg => Array.from({ length: cfg.bots }, (_, i) => nickOf(cfg, i + 1));
+// слот мухи по нику: по списку ников мира, иначе по цифрам в конце (HC_7 → 7)
+function slotOf(cfg, nick) {
+  const i = nicksOf(cfg).indexOf(nick);
+  return i >= 0 ? i + 1 : Number((/(\d+)$/.exec(nick) || [0, 0])[1]);
+}
+// приставки «наших» мух — для охоты и учёта убийств (баттл-рояль): через запятую
+const flyPrefixes = cfg => (groupNicks(cfg) ? Object.values(GROUP_PREFIX).join(',') : cfg.botPrefix);
+// этап 2: группа мухи — последние controlBots слотов (8–10 при 10 мухах и 3 контрольных) контроль, остальные учатся; без stage2 — null
 function groupOf(cfg, nick) {
   if (!cfg.stage2) return null;
-  const num = Number((/(\d+)$/.exec(nick) || [0, 0])[1]);
-  return num > cfg.bots - cfg.controlBots ? 'control' : 'learn';
+  return groupOfSlot(cfg, slotOf(cfg, nick));
 }
 // правка учителя (В2): id проверки, пока нет вердикта (result.json); группа А — учащиеся HC_1–HC_5 (с правкой), Б — остальные учащиеся
 const TEACH_A = 5;
@@ -196,11 +215,11 @@ function teachAfterWorld(cfg, worldId, cards, log = () => {}) {
 }
 function teachGroupOf(cfg, nick) {
   if (!teachId(cfg) || teachDone(cfg) || groupOf(cfg, nick) !== 'learn') return null;
-  return Number((/(\d+)$/.exec(nick) || [0, 0])[1]) <= TEACH_A ? 'A' : 'B';
+  return slotOf(cfg, nick) <= TEACH_A ? 'A' : 'B';
 }
 // состав групп для лога мира: «учатся HC_1–HC_8, контроль HC_9, HC_10»
 function groupsText(cfg) {
-  const nicks = Array.from({ length: cfg.bots }, (_, i) => cfg.botPrefix + (i + 1));
+  const nicks = nicksOf(cfg);
   const span = a => (a.length > 2 ? `${a[0]}–${a[a.length - 1]}` : a.join(', '));
   const learn = nicks.filter(n => groupOf(cfg, n) === 'learn'), ctl = nicks.filter(n => groupOf(cfg, n) === 'control');
   return [learn.length ? `учатся ${span(learn)}` : '', ctl.length ? `контроль ${span(ctl)}` : ''].filter(Boolean).join(', ');
@@ -213,7 +232,8 @@ function botArgs(cfg, w, nick, cardFile) {
   return ['--host', '127.0.0.1', '--port', String(cfg.port), '--name', nick, '--version', cfg.version,
     '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60),
     ...(fly ? ['--ctlBase', String(cfg.flyCtlBase), '--runnerBase', String(cfg.flyRunnerBase), '--joinSec', String(cfg.flyJoinSec)] : []),
-    ...(isBr(cfg) ? ['--br', cfg.botPrefix] : []), ...(fly && cfg.pool ? ['--pool', path.join(cfg.dataDir, 'pool_runs.jsonl')] : []),
+    '--slot', String(slotOf(cfg, nick)),
+    ...(isBr(cfg) ? ['--br', flyPrefixes(cfg)] : []), ...(fly && cfg.pool ? ['--pool', path.join(cfg.dataDir, 'pool_runs.jsonl')] : []),
     ...(fly && group ? ['--stage2', '1', '--group', group] : []),
     ...(fly && group === 'learn' ? ['--shared', path.join(cfg.dataDir, 'shared')] : []),
     ...(fly && tg === 'A' ? ['--learned', path.join(cfg.dataDir, 'teach', tid, 'learned')] : []),   // группа А: папка навыков с правкой
@@ -273,7 +293,7 @@ async function runWorld(cfg, n) {
     w.brSpawn = { ok: sp.ok, points: {} };
     if (!sp.ok) log(`мир ${id}: ${cfg.bots} мух не расставить так, чтобы все пары были в ${cfg.brSpawnMin}–${cfg.brSpawnMax} блоках — беру лучшую найденную расстановку`);
     const byPoint = {};   // «x z» → ник: ответ сервера на spreadplayers называет точку, а не муху
-    sp.points.forEach((pt, i) => { const nick = `${cfg.botPrefix}${i + 1}`; w.brSpawn.points[nick] = pt; byPoint[`${pt.x} ${pt.z}`] = nick; });
+    sp.points.forEach((pt, i) => { const nick = nickOf(cfg, i + 1); w.brSpawn.points[nick] = pt; byPoint[`${pt.x} ${pt.z}`] = nick; });
     const send = (nick, pt) => {
       try { srv.stdin.write(BR.spreadCmd(pt, nick, pt.tries) + '\n'); return true; }
       catch (e) { log(`мир ${id}: ${nick} не расставлен: ${e.message}`); return false; }
@@ -309,10 +329,10 @@ async function runWorld(cfg, n) {
   }
   if (teachId(cfg) && !teachDone(cfg)) { // В2: папка навыков группы А — копия brain/learned и правка учителя поверх (hardcore/teach/<id>/learned)
     const tid = teachId(cfg), over = TEACH.buildLearned(path.join(HERE, '..', 'brain', 'learned'), path.join(HERE, 'teach', tid, 'learned'), path.join(cfg.dataDir, 'teach', tid, 'learned'));
-    log(`правка учителя ${tid}: группа А (HC_1–HC_${TEACH_A}) — ${over.length ? 'правка: ' + over.join(', ') : 'файлов правки нет, группа А идёт без правки'}`);
+    log(`правка учителя ${tid}: группа А (${nicksOf(cfg).slice(0, TEACH_A).join(', ')}) — ${over.length ? 'правка: ' + over.join(', ') : 'файлов правки нет, группа А идёт без правки'}`);
   }
   for (let i = 1; i <= cfg.bots; i++) {
-    const nick = `${cfg.botPrefix}${i}`;
+    const nick = nickOf(cfg, i);
     const cardFile = path.join(dir, `${nick}.json`);
     bots.push({ nick, cardFile, p: startBot(cfg, w, nick, cardFile) });
     if (i < cfg.bots) await sleep(cfg.botStaggerSec * 1000);
@@ -441,5 +461,5 @@ async function main(cfgFile) {
   return 0;
 }
 
-module.exports = { main, loadConfig, checkSetup, DEFAULTS, botArgs, groupOf, groupsText, teachGroupOf, teachId, teachDone, teachAfterWorld, TEACH_A };
+module.exports = { main, loadConfig, checkSetup, DEFAULTS, botArgs, groupOf, groupsText, nickOf, nicksOf, slotOf, flyPrefixes, NICK_TAGS, teachGroupOf, teachId, teachDone, teachAfterWorld, TEACH_A };
 if (require.main === module) main().then(c => process.exit(c), e => { log(`стенд упал: ${e.stack || e}`); process.exit(1); });   // exit: консоль держит stdin открытым
