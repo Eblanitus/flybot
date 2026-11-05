@@ -23,7 +23,8 @@ const A = {
   world: arg('world', ''), seed: arg('seed', ''), out: arg('out', `card-${Date.now()}.json`), maxSec: +arg('maxSec', 7260),
   ctlBase: +arg('ctlBase', 3310), runnerBase: +arg('runnerBase', 3410), joinSec: +arg('joinSec', 120),
   br: arg('br', ''),   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
-  pool: arg('pool', '')   // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
+  pool: arg('pool', ''),  // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
+  stage2: arg('stage2', '') === '1'   // этап 2 (Б6+): охота и бой — дела решателя, охотник здесь только смотрит
 };
 const ROOT = path.join(__dirname, '..');
 const num = Number((/(\d+)$/.exec(A.name) || [0, 0])[1]);
@@ -153,18 +154,7 @@ function noteGone(m) {
 // чужое дело тела (рефлекс, автопилот бежит или ест) не перебивает.
 // Дальняя метка: расстояние неизвестно — считаем FAR_D (дальше любой видимой); идём отрезками до LEG блоков (goto тела, LEG_SEC),
 // после каждого — снова смотрим метку. Ближе NEAR_FOLLOW и муха загружена — follow.
-const FAR_D = 999, LEG = 96, LEG_SEC = 60, NEAR_FOLLOW = 48;
-function farLeg(pos, m) {
-  if (!pos) return null;
-  let dx, dz;
-  if (m.at) { dx = m.at[0] - pos.x; dz = m.at[2] - pos.z; }
-  else if (m.heading) { dx = m.heading[0]; dz = m.heading[1]; }
-  else return null;
-  const h = Math.hypot(dx, dz);
-  if (h < 1) return null;
-  const k = Math.min(LEG, m.at ? h : LEG) / h;
-  return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
-}
+const { FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg } = BR;   // сами функции — в hardcore/br.js (их берёт и решатель, Б6)
 const BUSY_SKILLS = new Set(['escape', 'eat', 'shelter', 'wait_night', 'defend', 'recover', 'swim_to', 'pillar_up']);
 async function huntTick(s, f) {
   if (!A.br || Date.now() - hunt.lastAt < 2000) return;
@@ -177,6 +167,7 @@ async function huntTick(s, f) {
     // дальняя метка (tracked_waypoint): позиция примерная (чанк) или только направление (heading) — расстояние неизвестно
     seenFlies.set(m.name, { name: m.name, d: m.d == null ? FAR_D : m.d, at: m.at, heading: m.heading || null, far: !!m.far, t: now });
   }
+  if (A.stage2) { hunt.why = 'этап 2: охота — дело решателя в теле (hunt_go), охотник только смотрит'; return; }
   const ti = s.eyes && s.eyes.task && s.eyes.task.status !== 'done' ? s.eyes.task : null;
   const task = ti ? String(ti.name || ti) : null, taskBy = ti ? String(ti.by || ti.source || 'brain') : null;
   // наша команда кончилась или её вытеснили. goto — простая команда тела (не навык, в снимке задачи нет): жива, пока ждём её ответ

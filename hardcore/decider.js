@@ -77,12 +77,37 @@ function choose(ctx, s, act, out) {
   const tag = a => (a ? { ...a, sit: sit.key, coarse: sit.coarse } : a);
   if (!out || !out.cands) return tag(act);
   const opts = out.cands.map(c => ({ key: c.act.key, prior: c.score / 100, act: c.act }));
+  const h = huntOption(ctx, s); // Б6: охота — дело в общем списке (не при блокировке hunt_go)
+  if (h && !(s.blocked && s.blocked.hunt_go)) opts.push(h);
   if (!opts.length) return tag(act);
   const st = statsFor(memory(), sit);
   const rate = process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st)); // пробы везде: муху никак не ограничиваем (хозяин 05.11)
   const ch = pickOption(opts, st, { rate });
   return tag({ ...ch.act, score: Math.round(ch.prior * 100), explore: ch.explore, why: `${ch.act.why} — решатель: ${ch.why}` });
 }
-const _reset = () => { MEM = null; }; // для тестов
+// --- охота как дело (Б6): мухи на локаторе → кандидат hunt_go в общем списке решателя ---
+const SEEN = new Map(); // мухи на локаторе: имя → { name, d, at, heading, far, t }; помним HUNT.memorySec (120 с)
+function huntOption(ctx, s, bar) { // bar — панель локатора; в тесте подаётся готовой
+  const prefix = process.env.HC_BR_PREFIX; if (!prefix) return null;
+  const BR = require('./br'), now = Date.now();
+  if (!bar) { bar = []; try { bar = require('../lib/locator').playersOnBar(ctx, { limit: 12 }); } catch (e) {} }
+  for (const m of bar) {
+    if (!m || !m.name || !m.name.startsWith(prefix) || m.name === ctx.bot.username) continue;
+    if (m.gamemode === 3 || m.gamemode === 'spectator') { SEEN.delete(m.name); continue; }
+    if (!m.onBar || m.hidden) continue; // как у игрока: метка видна в конусе 120° и если муха не прячется
+    SEEN.set(m.name, { name: m.name, d: m.d == null ? BR.FAR_D : m.d, at: m.at, heading: m.heading || null, far: !!m.far, t: now });
+  }
+  for (const [n, m] of SEEN) if (now - m.t > BR.HUNT.memorySec * 1000) SEEN.delete(n);
+  const tgt = [...SEEN.values()].sort((a, b) => a.d - b.d)[0];
+  if (!tgt) return null;
+  const far = s.isNight && tgt.d > 32; // ночью далеко: раньше запрет (huntDecision), теперь только низкая подсказка — муху не ограничиваем (хозяин 05.11)
+  const leg = BR.farLeg(ctx.bot.entity.position, tgt);
+  if (!leg) return null;
+  const ready = s.hp >= BR.HUNT.hp && s.food >= BR.HUNT.food && (s.hasWeapon || process.uptime() >= BR.HUNT.prepSec);
+  return { key: 'hunt_go', prior: ready && !far ? 0.40 : 0.05, act: { key: 'hunt_go', kind: 'body', name: 'goto',
+    params: { x: leg.x, z: leg.z, r: 4, timeout: 60, label: `к мухе ${tgt.name}`, fail: `не дошла до ${tgt.name}` },
+    why: `иду к ${tgt.name} (${tgt.d === BR.FAR_D ? 'далеко' : tgt.d + ' м'})` } };
+}
+const _reset = () => { MEM = null; SEEN.clear(); }; // для тестов
 
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, memory, biomeOf, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, memory, biomeOf, huntOption, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };

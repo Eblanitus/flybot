@@ -106,4 +106,19 @@ function huntDecision(s, T = HUNT) {
   return { act: 'follow', target: tgt.name, why: `${tgt.name} в ${tgt.d} м — иду` };
 }
 
-module.exports = { spawnPoints, pairError, parseKill, weaponOf, isWeapon, huntDecision, HUNT };
+// Дальняя метка: расстояние неизвестно — считаем FAR_D (дальше любой видимой); идём отрезками до LEG блоков (goto тела, LEG_SEC),
+// после каждого — снова смотрим метку. Ближе NEAR_FOLLOW и муха загружена — follow. Берут fly.js (охотник) и decider.js (охота как дело).
+const FAR_D = 999, LEG = 96, LEG_SEC = 60, NEAR_FOLLOW = 48;
+function farLeg(pos, m) {
+  if (!pos) return null;
+  let dx, dz;
+  if (m.at) { dx = m.at[0] - pos.x; dz = m.at[2] - pos.z; }
+  else if (m.heading) { dx = m.heading[0]; dz = m.heading[1]; }
+  else return null;
+  const h = Math.hypot(dx, dz);
+  if (h < 1) return null;
+  const k = Math.min(LEG, m.at ? h : LEG) / h;
+  return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
+}
+
+module.exports = { spawnPoints, pairError, parseKill, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };
