@@ -37,7 +37,7 @@ async function spinChild() {
   const bare = await G.viewOfApi(T.fakeBody(T.RICH, true).api);
   const full = await G.viewOfApi(T.fakeBody(T.RICH, false).api);
   for (const id of Object.keys(G.NEED)) {
-    const usesBag = G.NEED[id].some(g => g.some(a => a.i));
+    const usesBag = G.NEED[id].some(g => g.some(a => a.i || a.f));
     if (STONE_IDS.includes(id)) assert(G.present(bare, id), 'в пустом мире камень рядом: ' + id);
     else if (!usesBag) assert.strictEqual(G.present(bare, id), false, 'в пустом мире без цели рядом: ' + id);
   }
@@ -47,6 +47,17 @@ async function spinChild() {
     'o.shearOneSheep', 'o.plantWheatSeeds']) assert(G.present(full, id), 'рядом должна быть цель: ' + id);
   // а этих рядом нет: алмаз на 12 блоков ниже (вне окна 4 по высоте), булыжного глубинного сланца и ели в поддельном мире нет
   for (const id of ['o.mineDiamond', 'v3.mineTenCobbledDeepslateBelowY0', 'v2.chopSpruceLogs']) assert.strictEqual(G.present(full, id), false, 'целей рядом нет: ' + id);
+
+  // 2а) крафт с добычей: материала в сумке хватает — доступен всегда; не хватает — нужен блок рядом
+  const V = (grid, inv) => G.makeView(new Map(grid), [], inv);
+  assert(G.present(V([], { oak_log: 4 }), 'v3.craftWoodenPickaxe'), '4 бревна в сумке — крафт доступен');
+  assert(!G.present(V([], { oak_log: 3 }), 'v3.craftWoodenPickaxe'), '3 бревна и ни одного рядом — не предлагаю');
+  assert(G.present(V([['0,64,0', 'oak_log']], { oak_log: 3 }), 'v3.craftWoodenPickaxe'), '3 бревна в сумке и бревно рядом — доступен');
+  assert(!G.present(V([], { iron_ingot: 7 }), 'v3.craftIronChestplate'), '7 слитков, руды рядом нет — не предлагаю');
+  assert(G.present(V([['1,64,1', 'iron_ore']], { iron_ingot: 7 }), 'v3.craftIronChestplate'), '7 слитков и руда рядом — доступен');
+  assert(G.present(V([], { iron_ingot: 11 }), 'v3.craftIronLeggingsAndBoots'), '11 слитков — сапоги и поножи без руды и угля рядом');
+  assert(G.present(V([['1,64,1', 'iron_ore'], ['2,64,2', 'coal_ore']], { iron_ingot: 5 }), 'v3.craftIronLeggingsAndBoots'), '5 слитков, руда и уголь рядом — доступны');
+  assert(!G.present(V([['1,64,1', 'iron_ore']], { iron_ingot: 5 }), 'v3.craftIronLeggingsAndBoots'), 'угля мало и рядом нет — не предлагаю');
 
   // 3) кандидаты: в пустом мире животных нет — охота и разведение не предлагаются; натив и готовка остаются
   const kept = G.withTarget(bare, RUN.candidates('food', 'day_routine_v6')).map(c => c.id);
@@ -67,7 +78,8 @@ async function spinChild() {
     inventory: { items: () => [{ name: 'wooden_pickaxe', count: 1 }], slots: [] } } };
   const offered = DECIDER.poolOptions(ctx, { isNight: false, blocked: {} }).map(o => o.act.params.id);
   assert(offered.length > 0 && offered.every(id => G.present({ blocks: new Set(), ents: [], inv: { wooden_pickaxe: 1 } }, id)), 'решатель предлагает только навыки с целью рядом: ' + offered.join(' '));
-  assert(offered.includes('v1.craftStonePickaxe') && !offered.includes('v1.mineTenCobblestone'), 'крафт из сумки предлагается, камень без камня рядом — нет');
+  assert(offered.includes('v3.craftStonePickaxe') && !offered.includes('v1.mineTenCobblestone'), 'крафт из сумки предлагается, камень без камня рядом — нет');
+  assert(!offered.includes('v1.craftStonePickaxe'), 'крафт с добычей камня без камня в сумке и рядом — не предлагаю');
   delete process.env.HC_POOL;
 
   console.log('hardcore_pool_gate: ok');

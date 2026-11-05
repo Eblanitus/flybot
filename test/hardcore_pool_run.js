@@ -11,7 +11,7 @@ const G = require('../hardcore/pool/gate');
 const SURVEY = require('../lib/survey');   // подменяем на время проверки: бревно рядом (вид мухи для решателя)
 const { fakeBody, RICH } = require('./hardcore_pool.js');
 const POOL_RUN = require('../brain/learned/pool_run.js');
-const LOG_IDS = ['v1.mineWoodLog', 'v3.mineWoodLog', 'v2.chopSpruceLogs'];   // навыки с поиском брёвен: без брёвна рядом не предлагаем (05.11)
+const LOG_IDS = ['v1.mineWoodLog', 'v3.mineWoodLog', 'v2.chopSpruceLogs', 'v3.craftWoodenPickaxe'];   // навыки дела wood с нуждой в бревне: без бревна рядом и в сумке не предлагаем (05.11)
 
 delete process.env.HC_BR_PREFIX; // охоты в этом тесте нет
 const fakeCtx = (inv = []) => ({ bot: { food: 20, entity: { position: {} }, blockAt: () => ({ biome: { name: 'plains' } }),

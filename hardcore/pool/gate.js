@@ -2,7 +2,8 @@
 // «Честно» — тот же вид, что у мухи: блоки из survey (видно или помнится, остальное в снимок не попадает), существа из scan, сумка из снимка.
 // Рядом: блоки — окно 10 по ширине и 4 по высоте (объём 3969 ≤ 4096), существа — не дальше 16 блоков.
 // У навыка — список групп: выполниться должны все группы, внутри группы хватает одного варианта:
-//   b — блок с таким именем рядом; e — существо рядом; i — уже есть в сумке (тогда искать не нужно).
+//   b — блок с таким именем рядом; e — существо рядом; i — в сумке хватает (штук по именам не меньше n: тогда искать не нужно);
+//   f — свой признак по виду сумки (например, угля хватает на всё).
 // Навыков вне таблицы это не касается: крафт из сумки, пещера (своя проверка в run.js), натив.
 'use strict';
 const { parseSurvey } = require('./shim');
@@ -10,7 +11,9 @@ const { parseSurvey } = require('./shim');
 const BLOCK_R = 10, BLOCK_DY = 4, ENT_R = 16;
 const LOG = /^(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry)_log$/;
 const GRASS = ['short_grass', 'tall_grass', 'grass'];   // 'grass' — старое имя короткой травы (как в shim)
-const b = names => ({ b: [].concat(names) }), e = names => ({ e: [].concat(names) }), i = names => ({ i: [].concat(names) });   // всегда список (и для одной регулярки тоже)
+const b = names => ({ b: [].concat(names) }), e = names => ({ e: [].concat(names) });   // всегда список (и для одной регулярки тоже)
+const i = (names, n = 1) => ({ i: [].concat(names), n });   // в сумке хватает: сумма штук по именам не меньше n
+const f = fn => ({ f: fn });   // свой признак по виду сумки
 
 // id каталога → группы. Собрано по коду навыков: все, кто в поиске зовёт exploreUntil, и те, кто сам идёт за блоком или существом.
 const NEED = {
@@ -60,8 +63,19 @@ const NEED = {
   'o.killOneSpider': [[e(['spider'])]],
   'o.killOneCreeper': [[e(['creeper'])]],
   // шерсть и овцы
-  'v2.craftWhiteBedWithExploration': [[i(['white_wool']), e(['sheep'])]],
+  'v2.craftWhiteBedWithExploration': [[i('white_wool', 3), e(['sheep'])]],
   'o.shearOneSheep': [[e(['sheep'])]],
+  // крафт, который сам идёт за добычей, если в сумке мало (решение хозяина 05.11: «все такие навыки так же»):
+  // материала хватает — крафт доступен всегда; не хватает — нужен блок рядом. Пороги — из кода навыка.
+  'v3.craftWoodenPickaxe': [[i('oak_log', 4), b(['oak_log'])]],
+  'v1.craftStonePickaxe': [[i('cobblestone', 3), b(['stone'])]],
+  'v3.craftStoneTools': [[i('cobblestone', 6), b(['stone'])]],
+  'v1.craftFurnace': [[i('cobblestone', 8), b(['stone'])]],
+  'v3.craftChest': [[i('oak_planks', 8), b(['oak_log'])]],
+  'v3.craftIronChestplate': [[i('iron_ingot', 8), b(['iron_ore'])]],
+  'v3.craftIronHelmet': [[i('iron_ingot', 5), b(['iron_ore'])]],
+  'v3.craftIronLeggingsAndBoots': [[i('iron_ingot', 11), b(['iron_ore'])],
+    [f(v => (v.inv.coal || 0) >= 11 - (v.inv.iron_ingot || 0)), b(['coal_ore'])]],
 };
 
 const matches = (want, name) => (want instanceof RegExp ? want.test(name) : want === name);
@@ -72,7 +86,8 @@ function makeView(grid, ents, inv) { return { blocks: new Set(grid.values()), en
 function hasAlt(a, view) {
   if (a.b) return [...view.blocks].some(n => a.b.some(w => matches(w, n)));
   if (a.e) return view.ents.some(x => x.d <= ENT_R && a.e.includes(x.name));
-  if (a.i) return a.i.some(n => (view.inv[n] || 0) > 0);
+  if (a.i) return a.i.reduce((s, n) => s + (view.inv[n] || 0), 0) >= (a.n || 1);
+  if (a.f) return !!a.f(view);
   return false;
 }
 
