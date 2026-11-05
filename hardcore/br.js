@@ -63,12 +63,15 @@ function parseSpread(line) {
 // Сообщение о смерти → { victim, killer } если смерть засчитана мухе (ник с префиксом), иначе null.
 // Ванильные формы: «A was slain by B», «A was shot by B using …», «A didn't want to live in the same world as B»,
 // «A drowned whilst trying to escape B», «A was doomed to fall by B»… Жертва — первое слово, убийца — последняя другая муха в тексте.
+// Наша ли муха: ник начинается с одной из приставок (через запятую: «Uch_,Kon_» на этапе 2, «HC_» раньше)
+const prefixList = p => String(p || '').split(',').map(x => x.trim()).filter(Boolean);
+const isFly = (name, prefixes) => { const n = String(name || ''); return prefixList(prefixes).some(p => n.startsWith(p)); };
 function parseKill(msg, prefix = 'HC_') {
   const s = String(msg || '').trim().replace(/^.*?\]: /, '');
   const words = s.split(/\s+/).map(w => w.replace(/[.,!:;'"]+$/, ''));
   const victim = words[0];
-  if (!victim || !victim.startsWith(prefix) || words.length < 3) return null;
-  const others = words.slice(1).filter(w => w.startsWith(prefix) && w !== victim && /^[A-Za-z0-9_]{3,16}$/.test(w));
+  if (!victim || !isFly(victim, prefix) || words.length < 3) return null;
+  const others = words.slice(1).filter(w => isFly(w, prefix) && w !== victim && /^[A-Za-z0-9_]{3,16}$/.test(w));
   if (!others.length) return null;
   return { victim, killer: others[others.length - 1] };
 }
@@ -134,4 +137,4 @@ function farLeg(pos, m) {
   return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
 }
 
-module.exports = { spawnPoints, pairError, SPREAD_RADII, spreadCmd, parseSpread, parseKill, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };
+module.exports = { spawnPoints, pairError, SPREAD_RADII, spreadCmd, parseSpread, parseKill, isFly, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };
