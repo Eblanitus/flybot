@@ -272,6 +272,13 @@ async function runWorld(cfg, n) {
     return Object.assign({ world: id, seed, nick: b.nick, mode: cfg.botMode === '1a' ? 'stage1a' : isBr(cfg) ? 'stage1v-br' : 'stage1b-flybot' }, c);
   });
   for (const c of cards) appendJsonl(path.join(cfg.dataDir, 'lives.jsonl'), c);
+  // этап 2 (Б10): общая память — только учащиеся мухи (группа learn), только законченные жизни (смерть или срок); мухи мира друг у друга не учатся
+  if (cfg.stage2) for (const b of bots) {
+    const c = cards.find(x => x.nick === b.nick);
+    if (!c || c.group !== 'learn' || !(c.result === 'death' || c.result === 'timeout')) continue;
+    try { const n = require('./memory').mergeLife(path.join(cfg.dataDir, 'shared'), path.join(path.dirname(b.cardFile), b.nick + '.fly')); log(`общая память: ${b.nick} +${n} дел`); }
+    catch (e) { log(`общая память: ${b.nick} не слита — ${e.message}`); }
+  }
 
   // Мир в архив: только папку мира внутри папки сервера.
   const wdir = path.join(cfg.serverDir, cfg.levelName);
