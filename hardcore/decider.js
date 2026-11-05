@@ -127,11 +127,14 @@ function poolOptions(ctx, s) {
   const bot = ctx.bot;
   if (!bot || !bot.inventory) return [];
   const POOL = require('./pool/run.js');
+  const POOL_GATE = require('./pool/gate.js');
   const snap = { inventory: bot.inventory.items().map(i => ({ name: i.name, count: i.count })), food: bot.food,
     armor: [5, 6, 7, 8].map(i => bot.inventory.slots[i]).filter(Boolean).map(i => i.name), eyes: { blocks: {} } };
   const delo = POOL.deloOf(snap, s.isNight ? 'night' : 'day');
-  return POOL.candidates(delo, null).filter(c => !c.native && !(s.blocked && s.blocked['pool:' + c.id]))
-    .map(c => ({ key: 'pool:' + c.id, prior: 0, act: { key: 'pool:' + c.id, kind: 'learned', name: 'pool_run',
+  let list = POOL.candidates(delo, null).filter(c => !c.native && !(s.blocked && s.blocked['pool:' + c.id]));
+  // навык, который ходит в поиске цели, — только при цели рядом (решение хозяина 05.11; тот же вид, что у мухи)
+  if (list.some(c => POOL_GATE.NEED[c.id])) list = POOL_GATE.withTarget(POOL_GATE.viewOfCtx(ctx), list);
+  return list.map(c => ({ key: 'pool:' + c.id, prior: 0, act: { key: 'pool:' + c.id, kind: 'learned', name: 'pool_run',
       params: { id: c.id, delo, max_sec: 300 }, why: `пул: ${c.id} (дело ${delo})` } }));
 }
 // --- правка учителя (В2): новые навыки из offer — кандидаты решателя с подсказкой 0; только группе А (env HC_TEACH_OFFER от fly.js) ---

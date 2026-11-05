@@ -7,8 +7,11 @@ const path = require('path');
 const shim = require('../hardcore/pool/shim');
 const CATALOG = require('../hardcore/pool/catalog.json');
 const D = require('../hardcore/decider');
+const G = require('../hardcore/pool/gate');
+const SURVEY = require('../lib/survey');   // подменяем на время проверки: бревно рядом (вид мухи для решателя)
 const { fakeBody, RICH } = require('./hardcore_pool.js');
 const POOL_RUN = require('../brain/learned/pool_run.js');
+const LOG_IDS = ['v1.mineWoodLog', 'v3.mineWoodLog', 'v2.chopSpruceLogs'];   // навыки с поиском брёвен: без брёвна рядом не предлагаем (05.11)
 
 delete process.env.HC_BR_PREFIX; // охоты в этом тесте нет
 const fakeCtx = (inv = []) => ({ bot: { food: 20, entity: { position: {} }, blockAt: () => ({ biome: { name: 'plains' } }),
@@ -37,13 +40,16 @@ const calm = { isNight: false, sheltered: false, underground: false, hp: 20, hos
   process.env.HC_POOL = '1';
   D._reset();
   const opts = D.poolOptions(fakeCtx(), calm);
-  assert.strictEqual(opts.length, CATALOG.wood.length, 'все навыки дела wood: ' + opts.length);
+  // без брёвна рядом навыки, которым нужно бревно, не предлагаем; остальные навыки дела — как были
+  assert(LOG_IDS.every(id => G.NEED[id]), 'навыки с брёвнами в таблице цели');
+  assert.strictEqual(opts.length, CATALOG.wood.length - LOG_IDS.length, 'навыки дела wood без брёвна рядом: ' + opts.length);
+  assert(!opts.some(o => LOG_IDS.includes(o.act.params.id)));
   assert(opts.every(o => o.prior === 0 && o.key.startsWith('pool:') && o.act.kind === 'learned' && o.act.name === 'pool_run' && o.act.params.delo === 'wood'));
 
   // 4) заблокированный навык не предлагаем
-  const blk = D.poolOptions(fakeCtx(), { ...calm, blocked: { 'pool:v1.mineWoodLog': true } });
-  assert.strictEqual(blk.length, CATALOG.wood.length - 1);
-  assert(!blk.some(o => o.key === 'pool:v1.mineWoodLog'));
+  const blk = D.poolOptions(fakeCtx(), { ...calm, blocked: { 'pool:v1.craftOakPlanksAndSticks': true } });
+  assert.strictEqual(blk.length, opts.length - 1);
+  assert(!blk.some(o => o.key === 'pool:v1.craftOakPlanksAndSticks'));
   console.log('poolOptions: дело wood, подсказка 0, заблокированный — не предлагаем: OK');
 
   // 5) без HC_POOL пула в списке нет вовсе
@@ -61,7 +67,10 @@ const calm = { isNight: false, sheltered: false, underground: false, hp: 20, hos
   const cand = { key: 'day_routine', kind: 'learned', name: 'day_routine', params: {}, why: 'днём без мозга' };
   const out = { cands: [{ score: 25, act: cand }] };
   const s = { ...calm, tools: {}, hasWeapon: false };
+  const realSurvey = SURVEY.survey;
+  SURVEY.survey = () => ({ origin: { x: 0, y: 64, z: 0 }, legend: { '.': 'air', L: 'oak_log' }, layers: { 'y=64': ['L'] } });   // бревно рядом
   const ch = D.choose(fakeCtx(), s, cand, out);
+  SURVEY.survey = realSurvey;
   assert.strictEqual(ch.key, 'pool:v1.mineWoodLog', ch.key);
   assert.strictEqual(ch.name, 'pool_run');
   assert.strictEqual(ch.params.id, 'v1.mineWoodLog');

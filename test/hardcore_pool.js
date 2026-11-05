@@ -17,12 +17,13 @@ const DROP = { stone: 'cobblestone', grass_block: 'dirt', coal_ore: 'coal', iron
 const SMELT = { raw_iron: 'iron_ingot', beef: 'cooked_beef', porkchop: 'cooked_porkchop', chicken: 'cooked_chicken', mutton: 'cooked_mutton', cobblestone: 'stone', sand: 'glass' };
 const MEAT = { cow: 'beef', pig: 'porkchop', chicken: 'chicken', sheep: 'mutton' };
 
-function world() {
+function world(bare = false) {
   const m = new Map();
   for (let x = -12; x <= 12; x++) for (let z = -12; z <= 12; z++) {
     for (let y = 50; y <= 62; y++) m.set(`${x},${y},${z}`, 'stone');
     m.set(`${x},63,${z}`, 'grass_block');
   }
+  if (bare) return m;   // пустой мир: камень и трава, без руды, растений, воды и животных (проверка «навык ходит впустую без цели»)
   for (let y = 64; y <= 67; y++) m.set(`3,${y},0`, 'oak_log');
   m.set('3,68,0', 'oak_leaves');
   m.set('-4,63,-4', 'water'); m.set('-5,63,-4', 'water');
@@ -32,11 +33,11 @@ function world() {
   return m;
 }
 
-function fakeBody(startInv) {
-  const items = { ...startInv }; const calls = []; const armor = []; const grid = world();
+function fakeBody(startInv, bare = false) {
+  const items = { ...startInv }; const calls = []; const armor = []; const grid = world(bare);
   let food = 14; const pos = { x: 0.5, y: 64, z: 0.5 };
   const add = (n, k = 1) => { items[n] = (items[n] || 0) + k; };
-  const ents = [['cow', 'animal', 4, 0], ['pig', 'animal', -4, 1], ['sheep', 'animal', 0, 5], ['chicken', 'animal', 5, 5], ['zombie', 'hostile', 8, -8], ['skeleton', 'hostile', -8, 8], ['spider', 'hostile', 9, 2], ['creeper', 'hostile', -9, -2]];
+  const ents = bare ? [] : [['cow', 'animal', 4, 0], ['pig', 'animal', -4, 1], ['sheep', 'animal', 0, 5], ['chicken', 'animal', 5, 5], ['zombie', 'hostile', 8, -8], ['skeleton', 'hostile', -8, 8], ['spider', 'hostile', 9, 2], ['creeper', 'hostile', -9, -2]];
   const api = {
     log() {},
     async snapshot() {

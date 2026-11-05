@@ -15,6 +15,9 @@ module.exports = {
   async run(api, params = {}) {
     const entry = (require(path.join(HCP, 'catalog.json'))[params.delo] || []).find(e => e.id === params.id);
     if (!entry) return { ok: false, error: `pool_run: в пуле нет ${params.id} для дела ${params.delo}` };
+    // навык, который ходит в поиске цели, без цели рядом не запускаем (решение хозяина 05.11; решатель такие уже не предлагает)
+    const gate = require(path.join(HCP, 'gate.js'));
+    if (gate.NEED[entry.id] && !gate.present(await gate.viewOfApi(api), entry.id)) return { ok: false, error: `pool_run: ${entry.id} — цели рядом нет` };
     const r = await require(path.join(HCP, 'shim.js')).runForeign(api, entry, { maxSec: Math.min(Number(params.max_sec) || 300, 300) });
     api.log(`пул: ${entry.id} ${r.ok ? 'удался' : 'не удался'} за ${r.sec} с${r.err ? ' — ' + r.err : ''}`);
     return r.ok ? { ok: true, gained: r.gained } : { ok: false, error: `pool_run ${entry.id}: ${r.err}`, gained: r.gained };

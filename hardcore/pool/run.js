@@ -4,6 +4,7 @@
 // Вне стенда (нет HC_POOL_RUNS — его ставит hardcore/fly.js) пул выключен: база просто зовёт родной навык, как раньше.
 'use strict';
 const pick = require('./pick');
+const G = require('./gate');
 const { runForeign, parseSurvey } = require('./shim');
 const CATALOG = require('./catalog.json');
 
@@ -73,6 +74,11 @@ async function dispatch(api, params = {}, opts = {}) {
   if (cands.some(c => CAVE.has(c.id)) && !(await caveInView(api))) {
     cands = cands.filter(c => !CAVE.has(c.id));
     api.log('пул: пещеры в виду нет — поиск пещеры не предлагаю');
+  }
+  if (cands.some(c => G.NEED[c.id])) {   // навык, который ходит в поиске, — только при цели рядом (решение хозяина 05.11)
+    const before = cands.length;
+    cands = G.withTarget(await G.viewOfApi(api, snap), cands);
+    if (cands.length < before) api.log(`пул: цели рядом нет — ${before - cands.length} навыков не предлагаю`);
   }
   const ch = pick.choose(delo, cands);
   api.log(`пул: дело ${delo}, беру ${ch.id} (${ch.why}, счёт ${ch.score}, запусков ${ch.runs}) из ${cands.length}`);
