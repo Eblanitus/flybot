@@ -56,4 +56,33 @@ function pickOption(opts, st, { calm = true, rate = EXPLORE_HI, rnd = Math.rando
 function rewards(deeds, total) {
   return deeds.map(d => ({ ...d, r: total }));
 }
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
+// --- часть с живой мухой (Б5): решатель в автопилоте ---
+let MEM = null;
+function memory() { // общая память решателя: читается раз за жизнь (пишет её стенд между мирами, Б10); нет файла — пусто
+  if (MEM) return MEM;
+  MEM = { exact: {}, coarse: {} };
+  if (process.env.HC_DECIDER_MEM) try { MEM = JSON.parse(require('fs').readFileSync(process.env.HC_DECIDER_MEM, 'utf8')); } catch (e) {}
+  return MEM;
+}
+function biomeOf(bot) { // как biomeName в lib/perception.js (там не экспортирован — старый файл не трогаем)
+  try {
+    const b = bot.blockAt(bot.entity.position);
+    if (b && b.biome) { if (b.biome.name) return b.biome.name; const r = bot.registry && bot.registry.biomes && bot.registry.biomes[b.biome.id]; if (r && r.name) return r.name; }
+  } catch (e) {}
+  return 'unknown';
+}
+// выбор дела: out.cands — все кандидаты автопилота (score = подсказка); без out.cands — дело автопилота как было
+function choose(ctx, s, act, out) {
+  const sit = sitOf(s, biomeOf(ctx.bot));
+  const tag = a => (a ? { ...a, sit: sit.key, coarse: sit.coarse } : a);
+  if (!out || !out.cands) return tag(act);
+  const opts = out.cands.map(c => ({ key: c.act.key, prior: c.score / 100, act: c.act }));
+  if (!opts.length) return tag(act);
+  const st = statsFor(memory(), sit);
+  const rate = process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st)); // пробы везде: муху никак не ограничиваем (хозяин 05.11)
+  const ch = pickOption(opts, st, { rate });
+  return tag({ ...ch.act, score: Math.round(ch.prior * 100), explore: ch.explore, why: `${ch.act.why} — решатель: ${ch.why}` });
+}
+const _reset = () => { MEM = null; }; // для тестов
+
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, memory, biomeOf, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };

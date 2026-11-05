@@ -287,7 +287,7 @@ function lowHpOf(s) {
 //     tools (v0.3 инструменты: набор для toolNext — ранги кирки/меча/лопаты/топора, доски, палки, брёвна, булыжник, верстак; нет поля — не крафтим),
 //     skillOff {навык:причина} и skillKnown [имена] (выученные навыки: выключенный/не найденный decide не предлагает; нет полей — как раньше)}
 // -> null | {key, kind:'body'|'learned', name, params, why, preempt?, score?, others?} (score/others — В: счёт выбранного дела и следующих)
-function decide(s) {
+function decide(s, out) {
   if (!s.on) return null;
   if (s.task && s.task.source !== 'autopilot') return null; // мозг или рефлекс заняли тело — не лезем
   if (s.runnerOther) return null;                            // мозг запустил выученный навык
@@ -746,6 +746,7 @@ function decide(s) {
   const add = (score, act) => { act = withTool(act); if (act && ok(act.key)) cands.push({ score: score - T.apFailPenalty * tried(act.key), act }); };
   const wider = (k, r0) => Math.min(96, r0 + 24 * tried(k)); // повтор сбора — шире радиус
   const pick = () => {
+    if (out) out.cands = cands.slice(); // этап 2: весь список кандидатов — решателю (hardcore/decider.js); без out ничего не меняется
     if (!cands.length) return null;
     cands.sort((a, b) => b.score - a.score);
     return { ...cands[0].act, score: Math.round(cands[0].score), ...(cands.length > 1 ? { others: cands.slice(1, 4).map(c => `${c.act.key} ${Math.round(c.score)}`) } : {}) };
@@ -1998,6 +1999,7 @@ function create(ctx) {
     ap.running = run;
     if (act.key === 'recover' && ctx.lastDeath) ap.recoverFor = ctx.lastDeath.ts;
     note(act.why, true);
+    if (process.env.HC_STAGE2) ctx.events.push('deed_start', { key: act.key, name: act.name, sit: act.sit || null, coarse: act.coarse || null, explore: !!act.explore });
     const p = act.kind === 'learned'
       ? runnerGo(act.name, act.params, (act.base || act.name) === 'day_routine' ? 720 : (act.base || act.name) === 'go_safe' ? T.goSafeMaxSec + 60 : 900)
       : act.name === 'goto' // не навык из SKILLS: переход на базу — свой Task (source autopilot)
@@ -2044,7 +2046,9 @@ function create(ctx) {
       }
       await refreshGoal();
       const st = gather(ctx, ap);
-      const act = decide(st);
+      const out = process.env.HC_STAGE2 ? {} : null;
+      let act = decide(st, out);
+      if (out) act = require('../hardcore/decider').choose(ctx, st, act, out); // этап 2: один решатель
       // простой страшнее смерти: сколько автопилот уже «ждёт» при свободном теле (s.waitSec в decide — потолок apWaitMaxSec)
       ap.waitSince = !act && st.idle && !st.task && !st.runnerOther && !ap.running ? (ap.waitSince || now) : 0;
       if (!act) {
