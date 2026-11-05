@@ -57,6 +57,8 @@ const D = L('danger');
 
 const RUNNER = (process.env.RUNNER_URL || 'http://127.0.0.1:3200').replace(/\/+$/, '');
 const IDLE_MS = T.idleMs;  // столько мозг должен молчать (и тело стоять), чтобы автопилот взялся за дело
+const HC_IDLE_MS = 3000; // этап 2: на стенде мозга нет — после рефлекса (еда, побег) следующее дело через 3 с, а не через 30
+const idleMsNow = () => (process.env.HC_STAGE2 ? HC_IDLE_MS : IDLE_MS);
 const TICK_MS = T.tickMs;
 const ENEMY_R = T.enemyR;  // враг-игрок ближе — реагировать сразу
 const FAIL_MAX = T.failMax; // провалов подряд до паузы
@@ -269,7 +271,7 @@ function lowHpOf(s) {
   return !o.win && o.passiveTtdSec < T.apReactSec;
 }
 // s: {on, idle, task:{name,source}|null, running:{key,name,kind}|null, runnerOther, hp, food, hasFood, hasWeapon, hasPickaxe,
-//     blocks, logs, cobble, phase, isNight, nightIn, sheltered, inLava, suffocating, stuck, underWater,
+//     blocks, logs, cobble, phase, isNight, nightIn, sheltered, inLava, inWater, suffocating, stuck, underWater,
 //     hostilesNear, hostile:{name,id,d}|null (ближайший враждебный моб в hostileR),
 //     hitRecent (по муху недавно били — урон в тике), enemies:[{name,d,why,aggressor}], alone, freeBed, animals,
 //     recoverable, blocked:{key:true},
@@ -285,7 +287,7 @@ function lowHpOf(s) {
 //     tools (v0.3 инструменты: набор для toolNext — ранги кирки/меча/лопаты/топора, доски, палки, брёвна, булыжник, верстак; нет поля — не крафтим),
 //     skillOff {навык:причина} и skillKnown [имена] (выученные навыки: выключенный/не найденный decide не предлагает; нет полей — как раньше)}
 // -> null | {key, kind:'body'|'learned', name, params, why, preempt?, score?, others?} (score/others — В: счёт выбранного дела и следующих)
-function decide(s) {
+function decide(s, out) {
   if (!s.on) return null;
   if (s.task && s.task.source !== 'autopilot') return null; // мозг или рефлекс заняли тело — не лезем
   if (s.runnerOther) return null;                            // мозг запустил выученный навык
@@ -354,13 +356,24 @@ function decide(s) {
   if (en) {
     if (run === 'fight_player' || run === 'escape_player') return null;
     const critHere = (o ? o.hitsToDie != null && o.hitsToDie <= 1 : s.hp <= T.apCritHp) && !s.hasFood;
+    if (process.env.HC_STAGE2 && out) { // этап 2: бой или побег от мухи — выбирает решатель (общая таблица, итоги матчей); прежний порядок — подсказка
+      const oldFight = en.aggressor && s.hasWeapon && s.hp >= T.apFightHp && s.alone; // прежнее правило — порядок по умолчанию
+      // thresholds apCritHp: при критическом HP из укрытия не выходим — ни побег, ни бой (кроме прежнего боя, он и так шёл)
+      const stayIn = critHere && s.sheltered;
+      const fightA = stayIn && !oldFight ? null : body('fight_player', 'fight', { target: en.name, radius: T.apFightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout }, `дерусь с ${en.name}`, true);
+      const escA = stayIn ? null : body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why})`, true);
+      out.urgent = (oldFight ? [fightA, escA] : [escA, fightA]).filter(a => a && ok(a.key));
+      if (out.urgent.length) return out.urgent[0];
+      delete out.urgent;
+    }
     if (en.aggressor && s.hasWeapon && s.hp >= T.apFightHp && s.alone && ok('fight_player'))
       return body('fight_player', 'fight', { target: en.name, radius: T.apFightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout }, `отбиваюсь от ${en.name}`, true);
     if (ok('escape_player') && !(critHere && s.sheltered)) return body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why}) — ${s.sheltered ? 'выхожу из укрытия в поле' : 'в поле'}`, true);
   }
   // неудачный побег от игрока — не возвращаемся к работе: уходим на базу, пока не оторвёмся (в работе — пауза после побега)
   const escapePlayerFailed = !!(s.failInfo && s.failInfo.escape_player && s.failInfo.escape_player.reason === 'побег не оторвал от врага' && s.blocked && s.blocked.escape_player);
-  const workBan = !!en || escapePlayerFailed; // враг-игрок в enemyR или pausa после неудачного побега — никакой работы (build/сбор/разведка/рутина)
+  // этап 2: пауза после неудачного побега запрещает только повторный побег (его держит blocked.escape_player), работу — нет
+  const workBan = !!en || (escapePlayerFailed && !process.env.HC_STAGE2); // враг-игрок в enemyR или pausa после неудачного побега — никакой работы (build/сбор/разведка/рутина)
   if (escapePlayerFailed && !lowHpOf(s) && s.blocked && s.blocked.escape_player && s.base && s.baseDist != null && s.baseDist > s.base.r && ok('go_base')) {
     return s.goSafe
       ? learned('go_base', 'go_safe', { x: s.base.x, y: s.base.y, z: s.base.z, max_sec: T.goSafeMaxSec, priority: true }, 'побег от игрока не удался — ухожу на базу (go_safe)')
@@ -539,6 +552,19 @@ function decide(s) {
     const lim = mob.name === 'creeper' ? T.creeperInterruptDist : nightSoon ? T.hostileR : T.safetyWorkDist;
     const what = run === 'go_base' ? 'дорогу' : /^build/.test(run) ? 'стройку' : run === 'explore' ? 'разведку' : 'сбор';
     if (mob.d <= lim) {
+      if (process.env.HC_STAGE2 && out) { // этап 2: бой, укрытие или отход от моба — выбирает решатель; прежний порядок — подсказка
+        const sfight = body('safety_fight', 'fight', { target: String(mob.name).toLowerCase(), radius: T.fightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout },
+          `безопасность: ${mob.name} рядом (${mob.d} м) — бросаю ${what}, отбиваюсь`, true);
+        const sshel = body('safety_shelter', 'shelter', { mode: 'walls' }, `безопасность: ${mob.name} рядом (${mob.d} м), прошлый побег от такого не оторвался — бросаю ${what}, сразу укрываюсь стенами`, true);
+        const sesc = body('safety_escape', 'escape', { distance: T.apEscapeDist, shelter: true }, `безопасность: ${mob.name} рядом (${mob.d} м) — бросаю ${what}, отхожу`, true);
+        const list = [];
+        if (mob.name !== 'creeper' && s.hasWeapon && fightWins) list.push(sfight);
+        if (escFailed(mob) && mob.name !== 'creeper' && !s.sheltered && s.blocks >= 2) list.push(sshel);
+        list.push(sesc);
+        out.urgent = list.filter(a => ok(a.key));
+        if (out.urgent.length) return out.urgent[0];
+        delete out.urgent;
+      }
       if (mob.name !== 'creeper' && s.hasWeapon && fightWins && ok('safety_fight'))
         return body('safety_fight', 'fight', { target: String(mob.name).toLowerCase(), radius: T.fightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout },
           `безопасность: ${mob.name} рядом (${mob.d} м) — бросаю ${what}, отбиваюсь`, true);
@@ -675,7 +701,11 @@ function decide(s) {
       const a = foodQuest(`мало HP (${s.hp}), сытость ${s.food}, еды нет — регенерации нет`, dark);
       if (a) return a;
     }
-    if (danger && !s.sheltered) {
+    // в воде укрытие не строится (стенам не к чему прислониться: разбор 2-го мира этапа 2 — 33 раза подряд «пустота вокруг»,
+    // отход на 8 м сбрасывал провалы, и снова укрытие в той же воде) — сперва к берегу, укрываемся уже на суше
+    if (danger && !s.sheltered && s.inWater && ok('lowhp_move'))
+      return body('lowhp_move', 'explore', { distance: T.apLowHpWaterDist }, `мало HP (${s.hp}) — я в воде, укрытие тут не встанет — плыву к суше`);
+    if (danger && !s.sheltered && !s.inWater) {
       // 1) лесенка (L003, не трогаем): блоки → укрытие. При crit наружу не ходим — только укрыться.
       if (!crit && s.blocks < need && !bad('lowhp_dirt') && ok('lowhp_dirt')) {
         // 1) блоки — раньше укрытия: без них shelter падает «блоков на стены мало»
@@ -743,6 +773,7 @@ function decide(s) {
   const add = (score, act) => { act = withTool(act); if (act && ok(act.key)) cands.push({ score: score - T.apFailPenalty * tried(act.key), act }); };
   const wider = (k, r0) => Math.min(96, r0 + 24 * tried(k)); // повтор сбора — шире радиус
   const pick = () => {
+    if (out) out.cands = cands.slice(); // этап 2: весь список кандидатов — решателю (hardcore/decider.js); без out ничего не меняется
     if (!cands.length) return null;
     cands.sort((a, b) => b.score - a.score);
     return { ...cands[0].act, score: Math.round(cands[0].score), ...(cands.length > 1 ? { others: cands.slice(1, 4).map(c => `${c.act.key} ${Math.round(c.score)}`) } : {}) };
@@ -762,7 +793,7 @@ function decide(s) {
       if (s.hasPickaxe && s.hostilesNear === 0) add(Math.max(0, (calm ? 25 : 75) - press), body('night_shelter_dig', 'shelter', { mode: 'dig' }, calm ? 'ночь: дел нет — закапываюсь до утра' : respawnFar ? `ночь, возродилась далеко от базы (${Math.round(s.baseDist)} м): закапываюсь до утра, домой не иду` : `ночь, мало HP (${s.hp}): закапываюсь`));
       add(Math.max(0, (calm ? 25 : 70) - press), body('night_shelter', 'shelter', {}, calm ? 'ночь: дел нет — строю укрытие' : respawnFar ? `ночь, возродилась далеко от базы (${Math.round(s.baseDist)} м): строю укрытие до утра, домой не иду` : `ночь, мало HP (${s.hp}): строю укрытие`));
     }
-    if (!nightQuiet && (s.phase === 'ночь' || s.phase === 'закат')) add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью'));
+    if (!nightQuiet && (s.phase === 'ночь' || s.phase === 'закат')) add(50, learned('night_mine', process.env.HC_STAGE2 ? 'hc_night_mine' : 'night_mine', {}, 'копаю туннель ночью'));
     // v0.3 инструменты: ночь спокойная (мобов нет, ударов нет) — вместо ожидания делаю недостающее (верстак тело ставит само)
     if (calm && s.hostilesNear === 0) { const ta = toolActs()[0]; if (ta) add(T.apToolNight, ta.act); }
     // v0.3 еда: регенерации нет и есть нечего, а животные рядом (мобов нет — иначе выше защита) — охота и ночью
@@ -1446,7 +1477,7 @@ function gather(ctx, ap) {
   const blocked = {};
   for (const [k, t] of Object.entries(ap.until)) if (t > now) blocked[k] = true;
   return {
-    on: ap.on, idle: now - Math.max(ap.lastBrainCmd, ap.lastBusy) >= IDLE_MS && now >= (ap.pausedUntil || 0), // pausedUntil — «стой» хозяина (lib/owner.js)
+    on: ap.on, idle: now - Math.max(ap.lastBrainCmd, ap.lastBusy) >= idleMsNow() && now >= (ap.pausedUntil || 0), // pausedUntil — «стой» хозяина (lib/owner.js)
     task: cur ? { name: cur.name, source: cur.source } : null,
     running: ap.running ? { key: ap.running.key, name: ap.running.name, kind: ap.running.kind } : null, runnerOther: ap.runnerOther,
     hp: Math.round(bot.health), food: bot.food,
@@ -1459,6 +1490,7 @@ function gather(ctx, ap) {
     logs: sum(/_(log|stem)$/) + Math.floor(sum(/_planks$/) / 4), cobble: sum(/^(cobblestone|cobbled_deepslate)$/),
     phase: ti.phase, isNight: ti.isNight, nightIn: ti.nightIn, sheltered,
     inLava: [feet, head].some(b => b && b.name === 'lava'),
+    inWater: !!feet && feet.name === 'water',   // стоит (плывёт) в воде: укрытие тут не встанет — стенам не к чему прислониться
     // снимок «горю» (заявка учителя, день 21): флаг «on fire» из метадаты — так же, как lib/perception.js и lib/danger.js
     onFire: (v => typeof v === 'number' && (v & 1) === 1)((bot.entity.metadata || [])[0]),
     suffocating: !!head && A.isSolid(head) && head.boundingBox === 'block',
@@ -1982,6 +2014,8 @@ function create(ctx) {
     if (ap.yieldWatch && ap.yieldWatch.name === run.name) ap.yieldWatch = null;
     ap.history.push({ key: run.key, name: run.name, verdict, sec: Math.round(sec), ...(byBrain ? { brain: cmdAction } : {}), ...(err ? { error: err.split('\n')[0].slice(0, 160) } : {}) });
     if (ap.history.length > 20) ap.history.shift();
+    // хардкор-стенд (этап 2): итог дела — для очков жизни (круг провалов) в hardcore/fly.js; вне стенда (без HC_STAND) — ничего
+    if (process.env.HC_STAND) ctx.events.push('deed', { key: run.key, name: run.name, verdict, sec: Math.round(sec), ...(err ? { error: err.split('\n')[0].slice(0, 120) } : {}) });
     note(`${run.name}: ${verdict}${byBrain ? ` (команда ${cmdWho}: ${cmdAction})` : ''}${err && (verdict === 'провал' || verdict === 'навык выключен') ? ' — ' + err.split('\n')[0].slice(0, 160) : ''}`);
     if (ap.goalFailNote) { note(ap.goalFailNote); ap.goalFailNote = null; } // «цель X: та же причина — не повторяю» — сразу после провала
     if (ap.running === run) ap.running = null;
@@ -1993,6 +2027,7 @@ function create(ctx) {
     ap.running = run;
     if (act.key === 'recover' && ctx.lastDeath) ap.recoverFor = ctx.lastDeath.ts;
     note(act.why, true);
+    if (process.env.HC_STAGE2) ctx.events.push('deed_start', { key: act.key, name: act.name, sit: act.sit || null, coarse: act.coarse || null, explore: !!act.explore });
     const p = act.kind === 'learned'
       ? runnerGo(act.name, act.params, (act.base || act.name) === 'day_routine' ? 720 : (act.base || act.name) === 'go_safe' ? T.goSafeMaxSec + 60 : 900)
       : act.name === 'goto' // не навык из SKILLS: переход на базу — свой Task (source autopilot)
@@ -2039,7 +2074,9 @@ function create(ctx) {
       }
       await refreshGoal();
       const st = gather(ctx, ap);
-      const act = decide(st);
+      const out = process.env.HC_STAGE2 ? {} : null;
+      let act = decide(st, out);
+      if (out) act = require('../hardcore/decider').choose(ctx, st, act, out); // этап 2: один решатель
       // простой страшнее смерти: сколько автопилот уже «ждёт» при свободном теле (s.waitSec в decide — потолок apWaitMaxSec)
       ap.waitSince = !act && st.idle && !st.task && !st.runnerOther && !ap.running ? (ap.waitSince || now) : 0;
       if (!act) {
@@ -2080,4 +2117,4 @@ function attach(api) {
 }
 
 // версия (v0.4 ночь у базы, этап 3): ночью у базы без угроз нужда стройки/цели (spruce_fence, torch, доски, палки) крафтится из сумки (night_craft), stone плавится из булыжника (night_smelt), сырое мясо жарится (night_cook) — вместо «дел нет — пережидаю ночь»; счёт ниже угроз и еды, выше wait_night; после успеха пауза nightCraftPauseMs. Прежняя (v0.4 еда и ночь, этап 2): подъём — HP<8 без climb_up, «потолок» → dig_at (surface_dig), 2 одинаковых провала surface_* — пауза 10 мин; закат + запас<6 — охота (≤64 м от базы) и жарка +14; ферма без воды — farm_plot_v1 dry=1, семена: днём у базы short_grass; HP≤6 без еды — ночью поводок 16 м, укрытие; меч в руку (equip_best); побег fled:false → 5 мин сразу укрытие; резерв 8 dirt (reserve_dirt); смерть далеко (>96 м): ночью укрытие, днём домой по точкам дна каньона. Прежняя (v0.4 стоп-кран, этап 1): козы — не дичь (GAME без goat: охота и память мест с животными их не видят); «Автопилот:»-цель упала «не хватает [блоков]: a ×n» → ap.goalNeed, decide даёт gather_list с ключом goal_gather (ночью с угрозой и камень без кирки — не начинаем; buildGatherMax доборов подряд без успеха или пустой добор — обычный провал цели: пауза, шаг вдвое меньше, счёт очереди), потом цель снова; версии навыков из GET /skills (pickVersions: включённые и не broken, лучшая по (ok+1)/(runs+2), при счёте < 0.5 новая версия с runs < 3 — на пробу) звать вместо базового имени, key/паузы/сбой кода — по базе (в why «gather_list → gather_list_v12»). Прежняя (v0.3 ночь у базы, шаг 6): кровать — шерсти одного цвета ≥ 3 и досок хватает (3, +4 на верстак) → craft `<цвет>_bed`; шерсти нет, овцы рядом, день — make_bed (ножницы/охота на овец); кровать в сумке и муха у базы → bring_bed_home ставит её у базы (позиция в памяти, блок исчез — забываем), ночью у базы без угроз sleep (сам ставит кровать из сумки) со счётом выше wait_night и укрытия, моб подошёл во сне — защита как у wait_night; на закате (до ночи < 150 с) у базы light_base из факелов в сумке или угля сверх запаса 2 (не чаще раза в 15 мин). Прежняя (v0.3 еда, этап 2): рыбалка — нет еды и вода рядом (worldmem, 40 м): удочка (3 палки + 2 нити; нить только с пауков — нет, ветку пропускаем) → fish до запаса или 240 с, сырую рыбу жарит smelt как мясо; вода подо льдом — dig_at ломает лёд над водой, потом fish; заход без улова — пауза 10 мин; деревня из памяти (worldmem village ≤ 200 м) шагом foodQuest перед базой/полем: идём, собираем созревшую пшеницу/морковь/картофель (harvest с пересадкой, жителей не трогаем), культуру пробуем раз в 30 мин; ферма — база ≤ 48 м, вода у базы, семена ≥ 2 и мотыга (или доски на неё): выученный farm_plot с центром на воде, потом раз в 30 мин собрать и пересадить. Прежняя (v0.3 очередь, шаг 3): работа без мозга — раздел «## План» в brain/notes.md (behavior/plan.js): пункты `- [ ] чертёж x y z rot=…` и `- [ ] Автопилот: навык ключ=значение`, `[x]` готово, `[-]` пропуск, после « | » комментарий; порядок: «Постройка:» из «Текущей цели» (не готова и не провалена) → первый открытый пункт очереди → «Автопилот:» цели; пункт готов (build_done / ok навыка) — память data/autopilot_plan.json + событие plan_item_done + перечитать notes.md; planFailPauses пауз стройки (или провалов навыка) подряд без нового блока — пункт провален, идём к следующему, повтор через 6 ч (или через 30 мин, когда открытых нет); нет чертежа / неизвестный навык / битая строка — пропуск с причиной в журнале; раздел пропал из notes.md — работаем по последней копии; мозг включён (пульт) — после build_done 10 мин ждём его «Постройку:», выключен — берём сразу; статус очереди — в snapshot autopilot.plan. Прежняя (v0.3 инструменты, шаг 2): набор кирка/меч/лопата/топор — каменные при булыжнике ≥ цены (+палки), иначе деревянные, деревянные кирку и меч меняю на каменные; крафт (craft тела: верстак и палки сам) раньше рутины, после еды при низком HP и угроз; перед collect/gather_list (камень/руда — кирка, земля/песок/гравий — лопата, брёвна — топор) сначала крафт, а кирки нет и не из чего — дело не берём, день сначала даёт дерево; ночью без угроз крафт вместо ожидания; выключенный (или не найденный) у исполнителя выученный навык decide не предлагает вовсе (список раз в 30 с, как go_safe) — без «night_mine: навык выключен» ×60. Прежняя (v0.3 еда, этап 1): рефлекс доедает до 18 при HP < 20 (регенерация); низкий HP без еды — не «жду 120 с», а сразу за едой: охота рядом → наверх из пещеры (climb_up/climb_stairs) → место, где видела животных → база → поле (explore шире с каждым провалом), ночью только ближнее, враг-игрок рядом — ждём; зомби по силам — бой ради гнилой плоти; днём запас еды < 6 — охота впрок (к закату важнее), сырое + топливо — smelt тела, пшеница — хлеб; нужно дерево под землёй — сначала наверх; pathfinder обходит сталагмиты/сталактиты. Прежняя (заявки 23.10, «простой страшнее смерти»): у любого «жду» потолок apWaitMaxSec (waitSec из тика), HP 20 без моба рядом — не «мало HP»; низкий HP без угрозы и с регеном — работа, без регена и с едой — ем сам; ночь без мобов — работа/добор, укрытие и wait_night — запас; своё дело прерывается мобом (safety_*, preempt); добор: прерван — продолжаю, пусто — к постройке, нехватка по памяти после рестарта. До неё: как 20261022-225845-1e05a2, но цель добора — ИТОГ (need из ответа build_blueprint), а не дельта (missing); «добор сделан» только по факту прибавки в сумке; после пустого добора — пауза с причиной и смена тактики, не повтор того же вызова; добор ночью не начинать; шаг build_gather в коде; по заявке учителя
-module.exports = { nextWaypoint, ROUTE_HOME, rodFeasible, hoeFeasible, farmWaterPick, fishSpot, toolTiers, toolFeasible, toolNext, toolFor, toolsForAct, skillGate, attach, decide, lowHpOf, gather, create, noteAnimalSpot, forgetAnimalSpot, animalSpotOf, foodInv, undergroundOf, goalState, goalAfter, buildState, buildAfter, buildStatus, lackOf, newBuildSt, gameNear, GAME, goalGatherAfter, pickVersions, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, READONLY, SHORT_BRAIN };
+module.exports = { nextWaypoint, ROUTE_HOME, rodFeasible, hoeFeasible, farmWaterPick, fishSpot, toolTiers, toolFeasible, toolNext, toolFor, toolsForAct, skillGate, attach, decide, lowHpOf, gather, create, noteAnimalSpot, forgetAnimalSpot, animalSpotOf, foodInv, undergroundOf, goalState, goalAfter, buildState, buildAfter, buildStatus, lackOf, newBuildSt, gameNear, GAME, goalGatherAfter, pickVersions, stepParams, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList, IDLE_MS, idleMsNow, READONLY, SHORT_BRAIN };

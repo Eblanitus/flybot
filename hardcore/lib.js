@@ -95,7 +95,10 @@ function deathMessage(lines, nick) {
 // Короткая причина из сообщения о смерти: «Zombie», «fall», «starve»… Для сводки, полное сообщение тоже хранится.
 function causeOf(msg) {
   if (!msg) return null;
-  let m = /(?:slain|shot|killed|blown up|fireballed|stung|impaled|squashed|skewered|pummeled) by (?:an? )?([A-Za-z0-9_ ]+?)(?: using| whilst|$)/.exec(msg);
+  let m = /(?:slain|shot|killed|blown up|fireballed|stung|impaled|squashed|skewered|pummeled|smashed|doomed to fall) by (?:an? )?([A-Za-z0-9_ ]+?)(?: using| whilst|$)/.exec(msg);
+  if (m) return m[1].trim();
+  // «HC_1 drowned whilst trying to escape Zombie», «HC_1 was killed while fighting HC_2»: в воде/огне, но добил моб или муха — причина он
+  m = /(?:whilst|while) (?:trying to escape|fighting) (?:an? )?([A-Za-z0-9_ ]+?)(?: using|$)/.exec(msg);
   if (m) return m[1].trim();
   const table = [[/fell|hit the ground|fell from/, 'fall'], [/drowned/, 'drown'], [/starved/, 'starve'], [/lava/, 'lava'],
     [/burned|flames|fire/, 'fire'], [/suffocated/, 'suffocate'], [/blew up/, 'explosion'], [/froze/, 'freeze'], [/cactus|pricked/, 'cactus']];
@@ -128,6 +131,15 @@ function summarizeWorld(cards) {
       const kills = cards.reduce((n, c) => n + (c.killCount || 0), 0);
       const top = cards.slice().sort((a, b) => (b.killCount || 0) - (a.killCount || 0))[0];
       return { kills, killsArmed: cards.reduce((n, c) => n + (c.killsArmed || 0), 0), killsByNick: Object.fromEntries(cards.map(c => [c.nick, c.killCount || 0])), topKiller: top && top.killCount ? top.nick : null };
+    })() : {}),
+    // этап 2: очки жизни — среднее по всем мухам и по группам (group: learn / control; до Б11 группы нет — 'all')
+    ...(cards.some(c => c.pointsTotal != null) ? (() => {
+      const avg = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 100) / 100 : null;
+      const pts = c => Number(c.pointsTotal) || 0;
+      const groups = {};
+      for (const c of cards) (groups[c.group || 'all'] = groups[c.group || 'all'] || []).push(pts(c));
+      return { pointsAvg: avg(cards.map(pts)), pointsByNick: Object.fromEntries(cards.map(c => [c.nick, pts(c)])),
+        pointsByGroup: Object.fromEntries(Object.entries(groups).map(([g, a]) => [g, avg(a)])) };
     })() : {})
   };
 }
@@ -142,6 +154,7 @@ function makeChronicle(max = 300) {
   return {
     events,
     note: push,
+    nights: () => nights,
     observe(f) {
       if (f.wt == null) return;
       const tod = ((f.wt % 24000) + 24000) % 24000, day = Math.floor(f.wt / 24000) + 1;
@@ -189,4 +202,12 @@ function makeLadder() {
   };
 }
 
-module.exports = { DEATH_WORDS, stepsNow, makeLadder, STEP_TEXT, makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };
+// подпись группы мухи для ленты и логов (этап 2): учится / контроль; при проверке правки учителя (В2) — с правкой (А) / без правки (Б)
+const GROUP_TEXT = { learn: 'учится', control: 'контроль' };
+function groupLabel(c) {
+  const g = c && GROUP_TEXT[c.group];
+  const t = c && c.teachGroup ? (c.teachGroup === 'A' ? `правка ${c.teach} (А)` : `без правки ${c.teach} (Б)`) : null;
+  return [g, t].filter(Boolean).join(', ');
+}
+
+module.exports = { DEATH_WORDS, stepsNow, makeLadder, STEP_TEXT, makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp, GROUP_TEXT, groupLabel };

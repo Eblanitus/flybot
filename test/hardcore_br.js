@@ -27,6 +27,17 @@ const L = require('../hardcore/lib');
     assert(Math.min(...ds) >= 100 && Math.min(...ds) <= 300, JSON.stringify(ds));
   }
 }
+// перенос на точку: команда по номеру попытки и ответ сервера (05.11 — «Could not spread» у воды)
+{
+  assert.strictEqual(BR.spreadCmd({ x: -227, z: -32 }, 'HC_1'), 'spreadplayers -227 -32 0 1 false HC_1');
+  assert.strictEqual(BR.spreadCmd({ x: -227, z: -32 }, 'HC_1', 1), 'spreadplayers -227 -32 0 24 false HC_1');
+  assert.strictEqual(BR.spreadCmd({ x: 5, z: 6 }, 'HC_1', 99), `spreadplayers 5 6 0 ${BR.SPREAD_RADII[BR.SPREAD_RADII.length - 1]} false HC_1`);
+  assert.deepStrictEqual(BR.parseSpread('[21:00:48] [Server thread/INFO]: Could not spread 1 entity/entities around -226.5, -31.5 (too many entities for space - try using spread of at most 0.00)'), { ok: false, x: -227, z: -32 });
+  assert.deepStrictEqual(BR.parseSpread('[21:01:26] [Server thread/INFO]: Spread 1 entity/entities around -535.5, 160.5 with an average distance of 0.00 block(s) apart'), { ok: true, x: -536, z: 160 });
+  assert.deepStrictEqual(BR.parseSpread('[..]: Spread 1 entity/entities around 65.5, -136.5 with an average distance of 0.00 block(s) apart'), { ok: true, x: 65, z: -137 });
+  assert.strictEqual(BR.parseSpread('[..]: got: spreadplayers 1 2 0 1 false HC_1'), null);
+  assert.strictEqual(BR.parseSpread('HC_1 joined the game'), null);
+}
 // кто кого убил
 assert.deepStrictEqual(BR.parseKill('HC_2 was slain by HC_4 using Stone Sword'), { victim: 'HC_2', killer: 'HC_4' });
 assert.deepStrictEqual(BR.parseKill('[12:00] [Server thread/INFO]: HC_1 was shot by HC_3'), { victim: 'HC_1', killer: 'HC_3' });

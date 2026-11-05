@@ -4,7 +4,8 @@
 // Вне стенда (нет HC_POOL_RUNS — его ставит hardcore/fly.js) пул выключен: база просто зовёт родной навык, как раньше.
 'use strict';
 const pick = require('./pick');
-const { runForeign } = require('./shim');
+const G = require('./gate');
+const { runForeign, parseSurvey } = require('./shim');
 const CATALOG = require('./catalog.json');
 
 const DAY_DELA = ['wood', 'stone', 'food', 'farm', 'furnace', 'iron', 'bed', 'combat'];
@@ -30,6 +31,17 @@ function deloOf(snap, slot, rnd = Math.random) {
   if (!sum(inv, /^(iron|diamond|netherite)_pickaxe$/) || (!sum(inv, IRON_ARMOR) && !ironWorn)) return 'iron';
   if (!sum(inv, /_bed$/) && !seen.bed) return 'bed';
   return DAY_DELA[Math.floor(rnd() * DAY_DELA.length) % DAY_DELA.length];
+}
+
+// Поиск пещеры ищет вход в пещеру: без пещеры в виду его не предлагаем (решение хозяина 05.11)
+const CAVE = new Set(['v2.exploreCave', 'v2.exploreCaveAndGatherResourcesV2']);
+const CAVE_R = 12, CAVE_DY = 2;   // честный снимок тела: блоки только видимые или помнимые, остальное '?'; объём ≤ 4096
+// пещера в виду — воздух ниже y 60 в честном снимке рядом; снимка нет (не стенд, тест) — пещеры нет
+async function caveInView(api) {
+  let grid;
+  try { grid = parseSurvey(await api.cmd('survey', { radius: CAVE_R, dy: CAVE_DY })); } catch (e) { return false; }
+  for (const [key, name] of grid) if (name === 'air' && Number(key.split(',')[1]) < 60) return true;
+  return false;
 }
 
 // Кандидаты дела: чужие навыки из каталога + родной
@@ -58,7 +70,16 @@ async function dispatch(api, params = {}, opts = {}) {
   if (!process.env.HC_POOL_RUNS) return api.skill(opts.native, params);   // не стенд — как раньше
   const snap = await api.snapshot();
   const delo = deloOf(snap, opts.slot);
-  const cands = candidates(delo, opts.native);
+  let cands = candidates(delo, opts.native);
+  if (cands.some(c => CAVE.has(c.id)) && !(await caveInView(api))) {
+    cands = cands.filter(c => !CAVE.has(c.id));
+    api.log('пул: пещеры в виду нет — поиск пещеры не предлагаю');
+  }
+  if (cands.some(c => G.NEED[c.id])) {   // навык, который ходит в поиске, — только при цели рядом (решение хозяина 05.11)
+    const before = cands.length;
+    cands = G.withTarget(await G.viewOfApi(api, snap), cands);
+    if (cands.length < before) api.log(`пул: цели рядом нет — ${before - cands.length} навыков не предлагаю`);
+  }
   const ch = pick.choose(delo, cands);
   api.log(`пул: дело ${delo}, беру ${ch.id} (${ch.why}, счёт ${ch.score}, запусков ${ch.runs}) из ${cands.length}`);
   const maxSec = Math.min(Number(params.max_sec) || opts.maxSec || 300, opts.maxSec || 300);
@@ -73,4 +94,4 @@ async function dispatch(api, params = {}, opts = {}) {
   return { ok: true, pool: { delo, skill: ch.id, why: ch.why, ok: r.ok, ...(r.err ? { error: r.err } : {}) }, gained: r.gained, calls: (r.calls || []).slice(-12) };
 }
 
-module.exports = { dispatch, deloOf, candidates, runNative, DAY_DELA };
+module.exports = { dispatch, deloOf, candidates, runNative, DAY_DELA, caveInView, CAVE };

@@ -33,6 +33,14 @@ const DIR = __dirname;
 const DATA = process.env.RUNNER_DATA ? path.resolve(process.env.RUNNER_DATA) : DIR; // для проверок: своя папка с learned/ и статистикой
 const LEARNED = process.env.RUNNER_LEARNED ? path.resolve(process.env.RUNNER_LEARNED) : path.join(DATA, 'learned'); // хардкор-стенд: навыки общие, статистика своя
 const HISTORY = path.join(LEARNED, '.history');
+// хардкор-стенд (hardcore/fly.js): навыки общие и из git — ни снимков в историю, ни версий из неё (иначе старый код без починки становится версией)
+const NO_VERSIONS = process.env.RUNNER_NO_VERSIONS === '1';
+// там же уже сделанные из истории копии навыков стенда (hc_*_vN, «// версия: из истории …») — не навыки: старый код без починки
+// (разбор 2-го мира этапа 2: hc_night_mine_v1 без починки туннеля брался в 2/3 ночей). Файл не трогаем — его не видно
+const staleCopy = name => {
+  if (!NO_VERSIONS || !/^hc_[a-z0-9_]+_v\d+$/.test(name)) return false;
+  try { return /^\/\/ версия: из истории /.test(fs.readFileSync(fileOf(name), 'utf8').slice(0, 200)); } catch (e) { return false; }
+};
 const TRASH = path.join(LEARNED, '.trash');
 const STATS_FILE = path.join(DATA, 'skills_stats.json');
 const LOG_FILE = path.join(DATA, 'runner.log');
@@ -108,6 +116,7 @@ function trash(fullPath, label) {
 }
 // Положить текущую версию в историю, если её там нет (вызывается после успешного check/run)
 function snapshotVersion(name) {
+  if (NO_VERSIONS) return null;
   let src;
   try { src = fs.readFileSync(fileOf(name), 'utf8'); } catch (e) { return null; }
   const h = sha(src);
@@ -126,6 +135,7 @@ function snapshotVersion(name) {
 // История -> версии: каждый снимок с новым кодом становится <имя>_v<N> (копия; .history не трогаем)
 let importSig = null;
 function importVersions() {
+  if (NO_VERSIONS) return [];
   let sig;
   try { sig = fs.readdirSync(HISTORY).sort().join('|'); } catch (e) { return []; }
   if (sig === importSig) return [];
@@ -307,11 +317,12 @@ async function listSkills() {
   importVersions();
   let files = [];
   try { files = fs.readdirSync(LEARNED, { withFileTypes: true }).filter(d => d.isFile() && !d.name.startsWith('.')).map(d => d.name); } catch (e) {}
-  const skills = []; const ignored = [];
+  const skills = []; const ignored = []; const hidden = [];
   await Promise.all(files.map(async f => {
     const m = /^(.+)\.js$/.exec(f);
     if (!m || !NAME_RE.test(m[1])) { ignored.push(f); return; }
     const name = m[1];
+    if (staleCopy(name)) { hidden.push(name); return; }
     const c = await checkFile(name);
     const s = stats[name];
     let note = null;
@@ -332,13 +343,13 @@ async function listSkills() {
     });
   }));
   skills.sort((a, b) => a.name.localeCompare(b.name));
-  return { ok: true, skills, ...(ignored.length ? { ignoredFiles: ignored, ignoredHint: 'имя файла должно быть вида snake_case.js' } : {}), active: active ? { name: active.name, runId: active.runId } : null };
+  return { ok: true, skills, ...(ignored.length ? { ignoredFiles: ignored, ignoredHint: 'имя файла должно быть вида snake_case.js' } : {}), ...(hidden.length ? { hiddenCopies: hidden } : {}), active: active ? { name: active.name, runId: active.runId } : null };
 }
 
 async function handleRun(b) {
   const bad = badName(b.name);
   if (bad) return [400, { ok: false, error: bad }];
-  if (!fs.existsSync(fileOf(b.name))) return [404, { ok: false, error: `навык не найден: learned/${b.name}.js` }];
+  if (!fs.existsSync(fileOf(b.name)) || staleCopy(b.name)) return [404, { ok: false, error: `навык не найден: learned/${b.name}.js` }];
   if (!isEnabled(b.name)) {
     const s = stats[b.name];
     return [200, { ok: false, error: `версия "${b.name}" выключена: ${s.disabledReason || 'вручную'}. Другие версии навыка — GET /catalog?name=${V.baseOf(b.name)}; вернуть эту — /enable.` }];

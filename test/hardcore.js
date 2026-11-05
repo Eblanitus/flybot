@@ -50,12 +50,41 @@ assert.strictEqual(L.causeOf('HC_1 was shot by Skeleton using Bow'), 'Skeleton')
 assert.strictEqual(L.causeOf('HC_1 starved to death'), 'starve');
 assert.strictEqual(L.causeOf('HC_1 fell from a high place'), 'fall');
 assert.strictEqual(L.causeOf(null), null);
+// умерла в воде, но добил моб или муха — причина он, а не «утонула»; моб-утопленник Drowned — тоже моб
+assert.strictEqual(L.causeOf('HC_1 drowned'), 'drown');
+assert.strictEqual(L.causeOf('HC_1 drowned whilst trying to escape Zombie'), 'Zombie');
+assert.strictEqual(L.causeOf('HC_1 drowned whilst trying to escape HC_2'), 'HC_2');
+assert.strictEqual(L.causeOf('HC_1 drowned whilst trying to escape HC_2 using Stone Sword'), 'HC_2');
+assert.strictEqual(L.causeOf('HC_1 was slain by Drowned'), 'Drowned');
+assert.strictEqual(L.causeOf('HC_1 was impaled by Drowned using Trident'), 'Drowned');
+assert.strictEqual(L.causeOf('HC_1 was killed while fighting Eblanitus228'), 'Eblanitus228');
+assert.strictEqual(L.causeOf('HC_1 was smashed by Eblanitus228'), 'Eblanitus228');
+{
+  const { causeFromMessage } = require('../lib/body_events');
+  assert.strictEqual(causeFromMessage('HC_1 drowned', 'HC_1'), 'утонул');
+  assert.strictEqual(causeFromMessage('HC_1 drowned whilst trying to escape Zombie', 'HC_1'), 'zombie');
+  assert.strictEqual(causeFromMessage('HC_1 drowned whilst trying to escape HC_2 using [Stone Sword]', 'HC_1'), 'hc_2');
+  assert.strictEqual(causeFromMessage('HC_1 was slain by Drowned', 'HC_1'), 'drowned');
+}
 
 assert.strictEqual(L.firstNightEnd(0, 0), 23000);          // утро первого дня — до конца первой ночи
 assert.strictEqual(L.firstNightEnd(1000, 6000), 18000);    // полдень
 assert.strictEqual(L.firstNightEnd(0, 15000), 32000);      // появился ночью — считается следующая ночь
 const sum = L.summarizeWorld([{ result: 'death', lifeSec: 10 }, { result: 'death', lifeSec: 30, firstNightSurvived: true }, { result: 'crash', lifeSec: 0 }]);
 assert.deepStrictEqual([sum.bots, sum.deaths, sum.crashes, sum.firstNight, sum.medianLifeSec], [3, 2, 1, 1, 10]);
+// очки жизни (этап 2, А4): средние по мухам и по группам; карточки без очков — полей нет (старые миры не ломаются)
+{
+  const ps = L.summarizeWorld([{ nick: 'HC_1', result: 'death', pointsTotal: 1, group: 'learn' }, { nick: 'HC_2', result: 'death', pointsTotal: 2, group: 'learn' },
+    { nick: 'HC_3', result: 'timeout', pointsTotal: 6, group: 'control' }]);
+  assert.strictEqual(ps.pointsAvg, 3);
+  assert.deepStrictEqual(ps.pointsByGroup, { learn: 1.5, control: 6 });
+  assert.deepStrictEqual(ps.pointsByNick, { HC_1: 1, HC_2: 2, HC_3: 6 });
+  const old = L.summarizeWorld([{ nick: 'HC_1', result: 'death', lifeSec: 100 }]);
+  assert(!('pointsAvg' in old) && !('pointsByGroup' in old));
+  const tlHtml = TL.worldHtml({ id: 'w2', seed: '5', durSec: 120, cheats: 0, pointsAvg: 3 }, [{ nick: 'HC_1', result: 'death', pointsTotal: 4, events: [] }]);
+  assert(tlHtml.includes('очки в среднем 3'), 'шапка мира: очки в среднем');
+  assert(TL.svgFor([{ nick: 'HC_1', pointsTotal: 4, events: [{ wt: 1, kind: 'start', text: 'x' }] }]).includes('HC_1 · 4 оч.'), 'подпись мухи: очки');
+}
 
 // хроника: ночь, пережитая ночь, новый день, HP низкий (повтор — только после HP > 8)
 {
@@ -127,6 +156,13 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     assert(props2.includes('view-distance=20'), 'view-distance=20 в баттл-рояле');
     for (const w of worlds) assert(w.br && w.brSpawn && w.brSpawn.points.HC_1 && w.brSpawn.points.HC_1.sent, JSON.stringify(w.brSpawn));
     assert(/got: spreadplayers -?\d+ -?\d+ 0 1 false HC_1/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', worlds[0].id, 'server.log'), 'utf8')), 'расстановка ушла в сервер');
+    // 05.11: у точки нет суши — сервер «Could not spread», стенд пробует ту же точку с радиусом шире (иначе муха остаётся в куче у спавна)
+    for (const w of worlds) {
+      const p1 = w.brSpawn.points.HC_1, p2 = w.brSpawn.points.HC_2;
+      assert(p1.placed && p1.tries === 0, 'HC_1 поставлен с первого раза: ' + JSON.stringify(p1));
+      assert(p2.placed && p2.tries === 1 && !p2.failed, 'HC_2 поставлен со второй попытки: ' + JSON.stringify(p2));
+      assert(new RegExp(`got: spreadplayers ${p2.x} ${p2.z} 0 24 false HC_2`).test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', w.id, 'server.log'), 'utf8')), 'повтор с радиусом 24');
+    }
     assert(!fs.existsSync(path.join(s.srv, 'hc_world')), 'мир ушёл в архив');
     const arch = fs.readdirSync(s.cfg.archiveDir).sort();
     assert.strictEqual(arch.filter(n => L.WORLD_ID_RE.test(n)).length, 2, arch.join(','));

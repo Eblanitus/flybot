@@ -15,6 +15,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 const L = require('./lib');
 const BR = require('./br');
+const P = require('./points');
 
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : d; };
 const A = {
@@ -22,7 +23,13 @@ const A = {
   world: arg('world', ''), seed: arg('seed', ''), out: arg('out', `card-${Date.now()}.json`), maxSec: +arg('maxSec', 7260),
   ctlBase: +arg('ctlBase', 3310), runnerBase: +arg('runnerBase', 3410), joinSec: +arg('joinSec', 120),
   br: arg('br', ''),   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
-  pool: arg('pool', '')   // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
+  pool: arg('pool', ''),  // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
+  shared: arg('shared', ''),  // этап 2 (Б10): общая память мух (<папка>/variants.json, experience.json, decider_v2.json); жизнь берёт копию, стенд сливает после мира
+  group: arg('group', ''),    // этап 2 (Б11): learn — учащаяся муха, control — контроль (без проб решателя; общей памяти нет — stand не даёт --shared)
+  learned: arg('learned', ''),  // этап 2 (В2): папка навыков группы А (копия brain/learned с правкой учителя); пусто — brain/learned
+  offer: arg('offer', ''),      // этап 2 (В2): новые навыки правки через запятую — кандидаты решателя (только группа А)
+  teach: arg('teach', ''),      // этап 2 (В2): «id:A» или «id:B» — правка учителя и группа мухи; пусто — без правки
+  stage2: arg('stage2', '') === '1'   // этап 2 (Б6+): охота и бой — дела решателя, охотник здесь только смотрит
 };
 const ROOT = path.join(__dirname, '..');
 const num = Number((/(\d+)$/.exec(A.name) || [0, 0])[1]);
@@ -30,15 +37,22 @@ const CTL = A.ctlBase + num, RUN = A.runnerBase + num;
 const life = path.join(path.dirname(path.resolve(A.out)), A.name + '.fly');
 const dirs = { data: path.join(life, 'data'), runner: path.join(life, 'runner') };
 for (const d of Object.values(dirs)) fs.mkdirSync(d, { recursive: true });
+if (A.shared) require('./memory').prepareLife(path.resolve(A.shared), life);   // Б10: копия общей памяти — в данные жизни (слияние — стенд, после мира)
 const notes = path.join(life, 'notes.md');
 if (!fs.existsSync(notes)) fs.writeFileSync(notes, '# Заметки\n\nНовый хардкор-мир: базы нет, целей нет.\n');
 
+const [teachId, teachGroup] = A.teach ? A.teach.split(':') : [];   // В2: правка учителя (id) и её группа (A — с правкой, B — без)
 const env = Object.assign({}, process.env, {
-  DATA_DIR: dirs.data, FLYBOT_NOTES: notes, FLYBOT_NO_BRAIN: '1', FLYBOT_LEDGER_LOG: path.join(life, 'inventory.jsonl'),   // журнал сумки: изменения, удары, смерть (lib/ledger.js)
+  DATA_DIR: dirs.data, FLYBOT_NOTES: notes, FLYBOT_NO_BRAIN: '1', HC_STAND: '1', FLYBOT_LEDGER_LOG: path.join(life, 'inventory.jsonl'),   // журнал сумки: изменения, удары, смерть (lib/ledger.js)
   MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
+  RUNNER_NO_VERSIONS: '1',   // навыки общие и из git: бегун не делает версий из своей истории и не берёт уже сделанные копии навыков стенда (разбор 2-го мира: старый hc_night_mine_v1 без починки)
   ...(A.br ? { HC_BR_PREFIX: A.br } : {}),
-  ...(A.pool ? { HC_POOL_RUNS: path.resolve(A.pool) } : {})   // по нему day_routine_v7 и night_mine_v7 берут навык из пула
+  ...(A.shared ? { HC_DECIDER_MEM: path.join(path.resolve(A.shared), require('./memory').DECIDER_FILE) } : {}),   // Б10: таблица решателя (читается раз за жизнь; файл по версии очков)
+  ...(A.learned ? { RUNNER_LEARNED: path.resolve(A.learned) } : {}),   // В2: навыки группы А — с правкой учителя (бегун читает их отсюда)
+  ...(teachGroup === 'A' && A.offer ? { HC_TEACH_OFFER: A.offer } : {}),   // В2: новые навыки правки — в списке решателя
+  ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя
+  ...(A.pool ? (A.stage2 ? { HC_POOL: '1' } : { HC_POOL_RUNS: path.resolve(A.pool) }) : {})   // без этапа 2: по HC_POOL_RUNS day_routine_v7 и night_mine_v7 берут навык из пула; на этапе 2 навыки пула — дела решателя (HC_POOL)
 });
 const kids = [];
 function run(name, file, args) {
@@ -72,6 +86,8 @@ const t0 = Date.now();
 const frames = [], chat = [];
 const chron = L.makeChronicle();
 const ladder = L.makeLadder();
+const pts = P.makePoints();   // очки жизни (этап 2, А1–А3): ступени, убийства, простой, круг провалов, штраф за раннюю смерть
+const deeds = [];             // дела жизни (этап 2, Б9): каждое начатое дело с обстановкой; награда — итог жизни (writeCard → deeds.jsonl)
 let spawned = false, written = false, age0 = null, tod0 = null, wtStart = null, lastWt = null, lastSnap = null, evSince = 0, lowNoHealSec = 0;
 let lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, everTable = false, wasClosed = false;
 const exits = [], acts = {}, lastDeath = { msg: null };
@@ -111,6 +127,11 @@ async function readEvents() {
     }
     if (e.type === 'info' && typeof d.msg === 'string' && /^съел /.test(d.msg)) eats++;   // автоеда тела (behavior/reflexes.js)
     if (e.type === 'death') lastDeath.msg = d.message || d.cause || null;
+    if (e.type === 'deed' && (d.verdict === 'ok' || d.verdict === 'провал')) pts.deed(d.key, d.verdict === 'ok', Math.round((Date.now() - t0) / 1000));
+    if (e.type === 'deed_start') deeds.push({ t: Math.round((Date.now() - t0) / 1000), key: d.key, name: d.name, sit: d.sit || null, coarse: d.coarse || null, explore: !!d.explore });
+    if (e.type === 'deed') { // В1: итог дела — в последнее дело с тем же ключом без итога, чтобы в deeds.jsonl было видно, чем кончилось
+      for (let i = deeds.length - 1; i >= 0; i--) if (deeds[i].key === d.key && !deeds[i].verdict) { deeds[i].verdict = d.verdict || null; deeds[i].sec = d.sec != null ? d.sec : null; break; }
+    }
     if (e.type === 'chat' || e.type === 'system') {
       const m = String(d.msg || d.text || d.message || '');
       if (m.includes(A.name)) { chat.push(m.slice(0, 200)); while (chat.length > 20) chat.shift(); }
@@ -128,6 +149,7 @@ function noteKill(m) {
   if (k.killer === A.name) {
     const weapon = BR.weaponOf(lastSnap && lastSnap.heldItem);
     kills.push({ victim: k.victim, lifeSec: Math.round((Date.now() - t0) / 1000), wt: lastWt, weapon, hp: lastSnap ? r1(lastSnap.health || 0) : null, inv: invOf(lastSnap) });
+    pts.kill(weapon, Math.round((Date.now() - t0) / 1000), k.victim);
     chron.note(lastWt, 'kill', `убил ${k.victim} (${weapon === 'fist' ? 'кулаком' : weapon})`);
     console.log(`[fly] ${A.name}: убил ${k.victim}, всего ${kills.length}`);
   } else if (k.victim === A.name) killedBy = k.killer;
@@ -148,18 +170,7 @@ function noteGone(m) {
 // чужое дело тела (рефлекс, автопилот бежит или ест) не перебивает.
 // Дальняя метка: расстояние неизвестно — считаем FAR_D (дальше любой видимой); идём отрезками до LEG блоков (goto тела, LEG_SEC),
 // после каждого — снова смотрим метку. Ближе NEAR_FOLLOW и муха загружена — follow.
-const FAR_D = 999, LEG = 96, LEG_SEC = 60, NEAR_FOLLOW = 48;
-function farLeg(pos, m) {
-  if (!pos) return null;
-  let dx, dz;
-  if (m.at) { dx = m.at[0] - pos.x; dz = m.at[2] - pos.z; }
-  else if (m.heading) { dx = m.heading[0]; dz = m.heading[1]; }
-  else return null;
-  const h = Math.hypot(dx, dz);
-  if (h < 1) return null;
-  const k = Math.min(LEG, m.at ? h : LEG) / h;
-  return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
-}
+const { FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg } = BR;   // сами функции — в hardcore/br.js (их берёт и решатель, Б6)
 const BUSY_SKILLS = new Set(['escape', 'eat', 'shelter', 'wait_night', 'defend', 'recover', 'swim_to', 'pillar_up']);
 async function huntTick(s, f) {
   if (!A.br || Date.now() - hunt.lastAt < 2000) return;
@@ -172,6 +183,7 @@ async function huntTick(s, f) {
     // дальняя метка (tracked_waypoint): позиция примерная (чанк) или только направление (heading) — расстояние неизвестно
     seenFlies.set(m.name, { name: m.name, d: m.d == null ? FAR_D : m.d, at: m.at, heading: m.heading || null, far: !!m.far, t: now });
   }
+  if (A.stage2) { hunt.why = 'этап 2: охота — дело решателя в теле (hunt_go), охотник только смотрит'; return; }
   const ti = s.eyes && s.eyes.task && s.eyes.task.status !== 'done' ? s.eyes.task : null;
   const task = ti ? String(ti.name || ti) : null, taskBy = ti ? String(ti.by || ti.source || 'brain') : null;
   // наша команда кончилась или её вытеснили. goto — простая команда тела (не навык, в снимке задачи нет): жива, пока ждём её ответ
@@ -241,7 +253,7 @@ async function tick() {
       if (s.gameMode === 'spectator') return finish('already_dead', { note: 'вошёл зрителем — в этом мире уже умирал' });
       const f = frameOf(s); tod0 = f.tod; age0 = f.wt; wtStart = f.wt;
       chron.note(wtStart, 'start', 'старт (FlyBot, автопилот)');
-      console.log(`[fly] ${A.name} в мире ${A.world}, тело :${CTL}, навыки :${RUN}`);
+      console.log(`[fly] ${A.name} в мире ${A.world}, тело :${CTL}, навыки :${RUN}${A.group ? `, группа: ${L.groupLabel({ group: A.group })}` : ''}`);
     }
     lastSnap = s;
     if ((s.health || 0) > 0 && s.gameMode !== 'spectator') aliveSnap = s;   // сумка «до смерти» — после смерти снимок уже пустой
@@ -251,11 +263,13 @@ async function tick() {
     lowest.hp = Math.min(lowest.hp, f.hp); if (f.food != null) lowest.food = Math.min(lowest.food, f.food);
     if (f.hp < 10 && f.food != null && f.food < 18) lowNoHealSec++;
     chron.observe(f);
+    const tod = f.tod == null ? null : ((f.tod % 24000) + 24000) % 24000;
+    pts.frame({ t: f.t, day: tod != null && !(tod >= 13000 && tod < 23000), pos: f.pos, inv: invOf(s) });
     // выход из укрытия (8.1): было закрыто со всех сторон — стало открыто; HP и сытость в этот момент — в карточку
     const closed = !!(s.sheltered && s.sheltered.closed);
     if (wasClosed && !closed) { exits.push({ lifeSec: f.t, wt: f.wt, hp: f.hp, food: f.food }); chron.note(f.wt, 'leave', `вышел: HP ${f.hp}, сытость ${f.food}`); }
     wasClosed = closed;
-    for (const n of ladder.update(situation(s), f.t, f.wt)) { chron.note(f.wt, 'stage', `ступень ${n}: ${L.STEP_TEXT[n]}`); console.log(`[fly] ${A.name}: ступень ${n} — ${L.STEP_TEXT[n]}`); }
+    for (const n of ladder.update(situation(s), f.t, f.wt)) { if (n <= 5) pts.step(n, f.t); chron.note(f.wt, 'stage', `ступень ${n}: ${L.STEP_TEXT[n]}`); console.log(`[fly] ${A.name}: ступень ${n} — ${L.STEP_TEXT[n]}`); }
     await readEvents();
     if (A.br && f.hp > 0 && s.gameMode !== 'spectator') await huntTick(s, f).catch(e => console.error('[fly] охотник:', e.message));
     if (s.gameMode === 'spectator' || f.hp <= 0) {
@@ -272,8 +286,12 @@ function writeCard(result, extra = {}) {
   chron.note(lastWt, result === 'death' ? 'death' : 'end', endText);
   const lifeSec = Math.round((Date.now() - t0) / 1000);
   const last = exits[exits.length - 1];
+  const gameDays = age0 != null && lastWt != null ? (lastWt - age0) / 24000 : 0;   // прожито игровых дней от старта мира
+  if (result === 'death') pts.death(gameDays, lifeSec);   // хозяин 05.11: умер рано — штраф −(7 − дней); живой на конце мира — без штрафа
+  const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
+  try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
   const card = {
-    nick: A.name, world: A.world, seed: A.seed, result, mode: A.br ? 'stage1v-br' : 'stage1b-flybot',
+    nick: A.name, world: A.world, seed: A.seed, result, mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot'), group: A.group || null, teach: teachId || null, teachGroup: teachGroup || null,
     startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), lifeSec,
     gameDays: age0 != null && lastWt != null ? r1((lastWt - age0) / 24000) : null,
     spawnTimeOfDay: tod0, firstNightSurvived: chron.events.some(e => e.kind === 'night_survived'),
@@ -283,11 +301,13 @@ function writeCard(result, extra = {}) {
     deathSoonAfterExit: result === 'death' && !!last && lifeSec - last.lifeSec <= 60,
     autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null,
     invLast: invOf(aliveSnap), handLast: aliveSnap && aliveSnap.heldItem ? (aliveSnap.heldItem.name || aliveSnap.heldItem) : null,
+    points: pts.toJSON(), pointsTotal: pts.total,
+    deeds: { n: rated.length, explore: rated.filter(x => x.explore).length },
     ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, legs: hunt.legs, lastWhy: hunt.why } } : {}),
     ...extra
   };
   try { fs.writeFileSync(A.out, JSON.stringify(card, null, 1)); } catch (e) { console.error('карточка не записана:', e.message); }
-  console.log(`[fly] ${A.name}: ${result}, ${lifeSec} с, высшая ступень ${ladder.top()}${A.br ? `, убийств ${kills.length}` : ''}`);
+  console.log(`[fly] ${A.name}: ${result}, ${lifeSec} с, высшая ступень ${ladder.top()}${A.br ? `, убийств ${kills.length}` : ''}, очков ${pts.total}`);
 }
 function finish(result, extra) {
   writeCard(result, extra);

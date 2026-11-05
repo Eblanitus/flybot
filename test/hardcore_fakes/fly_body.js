@@ -16,7 +16,8 @@ const cmds = [];
 const events = [{ id: 1, type: 'task_started', name: 'eat', by: 'autopilot' }, { id: 2, type: 'task_done', name: 'collect' },
   ...(BR ? [{ id: 4, type: 'chat', kind: 'system', text: `HC_9 was slain by ${process.argv[4]} using Stone Sword` },
     { id: 5, type: 'chat', kind: 'system', text: `HC_9 was slain by ${process.argv[4]} using Stone Sword` }] : []),
-  { id: 3, type: 'chat', kind: 'system', text: `${process.argv[4]} was slain by ${BR ? 'HC_8' : 'Zombie'}` }].sort((a, b) => a.id - b.id);
+  { id: 3, type: 'chat', kind: 'system', text: `${process.argv[4]} was slain by ${BR ? 'HC_8' : 'Zombie'}` }, { id: 6, type: 'deed_start', data: { key: 'day_routine', name: 'day_routine', sit: 'day|open|high|none|none|plain', coarse: 'day|none|none', explore: false } },
+  { id: 7, type: 'deed', data: { key: 'day_routine', name: 'day_routine', verdict: 'провал', sec: 3 } }].sort((a, b) => a.id - b.id);
 http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/cmd') {   // команда охотника: запомнить, отдать ok
     let b = ''; req.on('data', d => b += d);
@@ -33,8 +34,9 @@ http.createServer((req, res) => {
       inventory: (inv[Math.min(step - 1, 3)] || []).concat(BR ? [{ name: 'stone_sword', count: 1 }] : []), sheltered: { closed: step === 2 }, eyes: { time: { day: 0, tod: 1000 + sec * 20 }, enemies: [] }, autopilot: { on: true, observerOnly, cmds, runnerUrl: process.env.RUNNER_URL || null, mcVersion: process.env.MC_VERSION || null },
       ...(BR ? { heldItem: { name: 'stone_sword' }, locator: [{ name: 'HC_9', d: 8, at: [9, 64, 2], onBar: true, hidden: null, gamemode: 0 }, { name: 'HC_5', d: 50, at: [50, 64, 2], onBar: false, hidden: null, gamemode: 0 }] } : {}) });
   }
+  // deed тоже не раньше 3-й секунды (курсор /events идёт по id: раннее deed сдвинуло бы его мимо убийств HC_9)
   // убийство HC_9 — не раньше 3-й секунды: сначала охотник должен её увидеть и начать бой (мёртвую он уже не преследует)
-  if (req.url.startsWith('/events')) { const since = +(/since=(\d+)/.exec(req.url) || [0, 0])[1]; return send({ events: events.filter(e => e.id > since && (sec >= 3 || !/HC_9 was slain/.test(e.text || ''))), lastId: 3 }); }
+  if (req.url.startsWith('/events')) { const since = +(/since=(\d+)/.exec(req.url) || [0, 0])[1]; return send({ events: events.filter(e => e.id > since && (sec >= 3 || !(/^deed/.test(e.type) || /HC_9 was slain/.test(e.text || '')))), lastId: 3 }); }
   send({});
 }).listen(port, '127.0.0.1');
 setTimeout(() => process.exit(0), 20000);

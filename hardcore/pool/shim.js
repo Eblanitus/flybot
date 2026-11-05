@@ -116,6 +116,7 @@ function makeEnv(api, opts = {}) {
     return b => names.has(b.name);
   }
   function findBlocks(o = {}) {
+    check('поиск блоков');   // поиск без действий тела тоже упирается в потолок (иначе цикл чужого навыка не кончится)
     const me = pos(), max = Number(o.maxDistance) || 16, count = Number(o.count) || 1, m = matcherOf(o.matching);
     const center = o.point ? new Vec3(o.point.x, o.point.y, o.point.z) : me;
     const out = [];
@@ -157,6 +158,7 @@ function makeEnv(api, opts = {}) {
     findBlock: o => { const p = findBlocks({ ...o, count: 1 })[0]; return p ? blockAt(p) : null; },
     blockAt,
     nearestEntity: (filter = () => true) => {
+      check('поиск существ');
       const me = pos();
       return S.ents.filter(e => { try { return filter(e); } catch (er) { return false; } }).sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0] || null;
     },
@@ -236,6 +238,8 @@ function makeEnv(api, opts = {}) {
       const until = Math.min(Date.now() + Math.min(Number(maxTime) || 60, 1200) * 1000, deadline);
       let fails = 0;
       for (;;) {
+        // после потолка разведка бросает ошибку, а не возвращает null: иначе цикл навыка («пока не нашёл коров») крутится без конца, не отдавая очередь событий
+        check('разведка');
         const r = await callback();
         if (r) return r;
         if (Date.now() >= until) return null;

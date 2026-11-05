@@ -17,12 +17,13 @@ const DROP = { stone: 'cobblestone', grass_block: 'dirt', coal_ore: 'coal', iron
 const SMELT = { raw_iron: 'iron_ingot', beef: 'cooked_beef', porkchop: 'cooked_porkchop', chicken: 'cooked_chicken', mutton: 'cooked_mutton', cobblestone: 'stone', sand: 'glass' };
 const MEAT = { cow: 'beef', pig: 'porkchop', chicken: 'chicken', sheep: 'mutton' };
 
-function world() {
+function world(bare = false) {
   const m = new Map();
   for (let x = -12; x <= 12; x++) for (let z = -12; z <= 12; z++) {
     for (let y = 50; y <= 62; y++) m.set(`${x},${y},${z}`, 'stone');
     m.set(`${x},63,${z}`, 'grass_block');
   }
+  if (bare) return m;   // пустой мир: камень и трава, без руды, растений, воды и животных (проверка «навык ходит впустую без цели»)
   for (let y = 64; y <= 67; y++) m.set(`3,${y},0`, 'oak_log');
   m.set('3,68,0', 'oak_leaves');
   m.set('-4,63,-4', 'water'); m.set('-5,63,-4', 'water');
@@ -32,11 +33,11 @@ function world() {
   return m;
 }
 
-function fakeBody(startInv) {
-  const items = { ...startInv }; const calls = []; const armor = []; const grid = world();
+function fakeBody(startInv, bare = false) {
+  const items = { ...startInv }; const calls = []; const armor = []; const grid = world(bare);
   let food = 14; const pos = { x: 0.5, y: 64, z: 0.5 };
   const add = (n, k = 1) => { items[n] = (items[n] || 0) + k; };
-  const ents = [['cow', 'animal', 4, 0], ['pig', 'animal', -4, 1], ['sheep', 'animal', 0, 5], ['chicken', 'animal', 5, 5], ['zombie', 'hostile', 8, -8], ['skeleton', 'hostile', -8, 8], ['spider', 'hostile', 9, 2], ['creeper', 'hostile', -9, -2]];
+  const ents = bare ? [] : [['cow', 'animal', 4, 0], ['pig', 'animal', -4, 1], ['sheep', 'animal', 0, 5], ['chicken', 'animal', 5, 5], ['zombie', 'hostile', 8, -8], ['skeleton', 'hostile', -8, 8], ['spider', 'hostile', 9, 2], ['creeper', 'hostile', -9, -2]];
   const api = {
     log() {},
     async snapshot() {
@@ -224,6 +225,10 @@ module.exports = async () => {
     try {
       const seen = new Set();
       let foreign = 0;
+      // зерно для Math.random: проба и выбор новичка идут от него. Без зерна проверка «не меньше 4 разных» падала примерно в одном прогоне из шести (14 запусков, проба 30%)
+      const realRandom = Math.random;
+      let seedState = 20260411 >>> 0;
+      Math.random = () => { seedState = (seedState + 0x6D2B79F5) >>> 0; let t = seedState; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
       for (let i = 0; i < 14; i++) {
         h = fakeBody({});   // пустая сумка: дело «дерево»
         r = await day.run(h.api, { max_sec: 20 });
@@ -231,6 +236,7 @@ module.exports = async () => {
         if (r.pool) { assert.strictEqual(r.ok, true, 'чужой навык: автопилоту ok, настоящий итог в pool.ok'); assert.strictEqual(typeof r.pool.ok, 'boolean'); foreign++; }
         else assert.strictEqual(r.did, 'day_routine_v6', 'родной навык: итог как есть');
       }
+      Math.random = realRandom;
       assert(foreign > 0);
       const lines = fs.readFileSync(process.env.HC_POOL_RUNS, 'utf8').trim().split('\n').map(l => JSON.parse(l));
       assert.strictEqual(lines.length, 14);
@@ -242,7 +248,8 @@ module.exports = async () => {
       assert.strictEqual([...st.values()].reduce((s, x) => s + x.runs, 0), 14);
       // ночь: с мечом иногда бой, иначе ночные навыки
       h = fakeBody({ stone_sword: 1, stone_pickaxe: 1 });
-      await night.run(h.api, {});
+      // потолок 20 с: чужой навык (например v2.exploreCave) может крутиться до потолка; без него тест шёл 300 с и упирался в таймаут прогона
+      await night.run(h.api, { max_sec: 20 });
       const last = JSON.parse(fs.readFileSync(process.env.HC_POOL_RUNS, 'utf8').trim().split('\n').pop());
       assert(['night', 'combat'].includes(last.delo), last.delo);
     } finally {
@@ -252,5 +259,6 @@ module.exports = async () => {
   }
   console.log(`hardcore_pool: ok (${ok}/${results.length} чужих навыков удались на поддельном теле)`);
 };
+module.exports.world = world; module.exports.fakeBody = fakeBody; module.exports.RICH = RICH; // для test/hardcore_pool_run.js (Б8)
 
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });
