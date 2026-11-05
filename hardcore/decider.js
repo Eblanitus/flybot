@@ -71,10 +71,20 @@ function biomeOf(bot) { // как biomeName в lib/perception.js (там не э
   } catch (e) {}
   return 'unknown';
 }
+// срочное (враг рядом, Б7): список в порядке прежних правил — подсказка 0.9, 0.8, …; выбор — тот же, что для всех дел
+function urgentPick(list, st, { rate = 0, rnd = Math.random } = {}) {
+  if (list.length < 2) return list[0];
+  const ch = pickOption(list.map((a, i) => ({ key: a.key, prior: 0.9 - 0.1 * i, act: a })), st, { rate, rnd });
+  return ch.act === list[0] && !ch.explore ? list[0] : { ...ch.act, explore: ch.explore, why: `${ch.act.why} — решатель: ${ch.why}` };
+}
 // выбор дела: out.cands — все кандидаты автопилота (score = подсказка); без out.cands — дело автопилота как было
 function choose(ctx, s, act, out) {
   const sit = sitOf(s, biomeOf(ctx.bot));
   const tag = a => (a ? { ...a, sit: sit.key, coarse: sit.coarse } : a);
+  if (out && out.urgent && out.urgent.length) { // срочное (враг рядом): тот же выбор по общей таблице, с пробами
+    const st = statsFor(memory(), sit);
+    return tag(urgentPick(out.urgent, st, { rate: process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st)) }));
+  }
   if (!out || !out.cands) return tag(act);
   const opts = out.cands.map(c => ({ key: c.act.key, prior: c.score / 100, act: c.act }));
   const h = huntOption(ctx, s); // Б6: охота — дело в общем списке (не при блокировке hunt_go)
@@ -110,4 +120,4 @@ function huntOption(ctx, s, bar) { // bar — панель локатора; в 
 }
 const _reset = () => { MEM = null; SEEN.clear(); }; // для тестов
 
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, memory, biomeOf, huntOption, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };

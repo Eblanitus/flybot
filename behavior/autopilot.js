@@ -356,6 +356,16 @@ function decide(s, out) {
   if (en) {
     if (run === 'fight_player' || run === 'escape_player') return null;
     const critHere = (o ? o.hitsToDie != null && o.hitsToDie <= 1 : s.hp <= T.apCritHp) && !s.hasFood;
+    if (process.env.HC_STAGE2 && out) { // этап 2: бой или побег от мухи — выбирает решатель (общая таблица, итоги матчей); прежний порядок — подсказка
+      const oldFight = en.aggressor && s.hasWeapon && s.hp >= T.apFightHp && s.alone; // прежнее правило — порядок по умолчанию
+      // thresholds apCritHp: при критическом HP из укрытия не выходим — ни побег, ни бой (кроме прежнего боя, он и так шёл)
+      const stayIn = critHere && s.sheltered;
+      const fightA = stayIn && !oldFight ? null : body('fight_player', 'fight', { target: en.name, radius: T.apFightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout }, `дерусь с ${en.name}`, true);
+      const escA = stayIn ? null : body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why})`, true);
+      out.urgent = (oldFight ? [fightA, escA] : [escA, fightA]).filter(a => a && ok(a.key));
+      if (out.urgent.length) return out.urgent[0];
+      delete out.urgent;
+    }
     if (en.aggressor && s.hasWeapon && s.hp >= T.apFightHp && s.alone && ok('fight_player'))
       return body('fight_player', 'fight', { target: en.name, radius: T.apFightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout }, `отбиваюсь от ${en.name}`, true);
     if (ok('escape_player') && !(critHere && s.sheltered)) return body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why}) — ${s.sheltered ? 'выхожу из укрытия в поле' : 'в поле'}`, true);
@@ -542,6 +552,19 @@ function decide(s, out) {
     const lim = mob.name === 'creeper' ? T.creeperInterruptDist : nightSoon ? T.hostileR : T.safetyWorkDist;
     const what = run === 'go_base' ? 'дорогу' : /^build/.test(run) ? 'стройку' : run === 'explore' ? 'разведку' : 'сбор';
     if (mob.d <= lim) {
+      if (process.env.HC_STAGE2 && out) { // этап 2: бой, укрытие или отход от моба — выбирает решатель; прежний порядок — подсказка
+        const sfight = body('safety_fight', 'fight', { target: String(mob.name).toLowerCase(), radius: T.fightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout },
+          `безопасность: ${mob.name} рядом (${mob.d} м) — бросаю ${what}, отбиваюсь`, true);
+        const sshel = body('safety_shelter', 'shelter', { mode: 'walls' }, `безопасность: ${mob.name} рядом (${mob.d} м), прошлый побег от такого не оторвался — бросаю ${what}, сразу укрываюсь стенами`, true);
+        const sesc = body('safety_escape', 'escape', { distance: T.apEscapeDist, shelter: true }, `безопасность: ${mob.name} рядом (${mob.d} м) — бросаю ${what}, отхожу`, true);
+        const list = [];
+        if (mob.name !== 'creeper' && s.hasWeapon && fightWins) list.push(sfight);
+        if (escFailed(mob) && mob.name !== 'creeper' && !s.sheltered && s.blocks >= 2) list.push(sshel);
+        list.push(sesc);
+        out.urgent = list.filter(a => ok(a.key));
+        if (out.urgent.length) return out.urgent[0];
+        delete out.urgent;
+      }
       if (mob.name !== 'creeper' && s.hasWeapon && fightWins && ok('safety_fight'))
         return body('safety_fight', 'fight', { target: String(mob.name).toLowerCase(), radius: T.fightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout },
           `безопасность: ${mob.name} рядом (${mob.d} м) — бросаю ${what}, отбиваюсь`, true);
