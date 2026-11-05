@@ -762,7 +762,7 @@ function decide(s) {
       if (s.hasPickaxe && s.hostilesNear === 0) add(Math.max(0, (calm ? 25 : 75) - press), body('night_shelter_dig', 'shelter', { mode: 'dig' }, calm ? 'ночь: дел нет — закапываюсь до утра' : respawnFar ? `ночь, возродилась далеко от базы (${Math.round(s.baseDist)} м): закапываюсь до утра, домой не иду` : `ночь, мало HP (${s.hp}): закапываюсь`));
       add(Math.max(0, (calm ? 25 : 70) - press), body('night_shelter', 'shelter', {}, calm ? 'ночь: дел нет — строю укрытие' : respawnFar ? `ночь, возродилась далеко от базы (${Math.round(s.baseDist)} м): строю укрытие до утра, домой не иду` : `ночь, мало HP (${s.hp}): строю укрытие`));
     }
-    if (!nightQuiet && (s.phase === 'ночь' || s.phase === 'закат')) add(50, learned('night_mine', 'night_mine', {}, 'копаю туннель ночью'));
+    if (!nightQuiet && (s.phase === 'ночь' || s.phase === 'закат')) add(50, learned('night_mine', process.env.HC_STAGE2 ? 'hc_night_mine' : 'night_mine', {}, 'копаю туннель ночью'));
     // v0.3 инструменты: ночь спокойная (мобов нет, ударов нет) — вместо ожидания делаю недостающее (верстак тело ставит само)
     if (calm && s.hostilesNear === 0) { const ta = toolActs()[0]; if (ta) add(T.apToolNight, ta.act); }
     // v0.3 еда: регенерации нет и есть нечего, а животные рядом (мобов нет — иначе выше защита) — охота и ночью
