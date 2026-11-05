@@ -1982,6 +1982,8 @@ function create(ctx) {
     if (ap.yieldWatch && ap.yieldWatch.name === run.name) ap.yieldWatch = null;
     ap.history.push({ key: run.key, name: run.name, verdict, sec: Math.round(sec), ...(byBrain ? { brain: cmdAction } : {}), ...(err ? { error: err.split('\n')[0].slice(0, 160) } : {}) });
     if (ap.history.length > 20) ap.history.shift();
+    // хардкор-стенд (этап 2): итог дела — для очков жизни (круг провалов) в hardcore/fly.js; вне стенда (без HC_STAND) — ничего
+    if (process.env.HC_STAND) ctx.events.push('deed', { key: run.key, name: run.name, verdict, sec: Math.round(sec), ...(err ? { error: err.split('\n')[0].slice(0, 120) } : {}) });
     note(`${run.name}: ${verdict}${byBrain ? ` (команда ${cmdWho}: ${cmdAction})` : ''}${err && (verdict === 'провал' || verdict === 'навык выключен') ? ' — ' + err.split('\n')[0].slice(0, 160) : ''}`);
     if (ap.goalFailNote) { note(ap.goalFailNote); ap.goalFailNote = null; } // «цель X: та же причина — не повторяю» — сразу после провала
     if (ap.running === run) ap.running = null;
