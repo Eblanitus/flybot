@@ -17,7 +17,8 @@ const DEFAULTS = {
   serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
   version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b', flyCtlBase: 3310, flyRunnerBase: 3410, flyJoinSec: 120,
   battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
-  pool: true,   // этап 2 (хозяин 04.11): мухи берут навыки из пула hardcore/pool (родные + Voyager/Odyssey), общая память <dataDir>/pool_runs.jsonl
+  pool: false,   // пул навыков (hardcore/pool): включает хозяин в конфиге. С stage2 — навыки пула в списке решателя (HC_POOL); без — day_routine_v7/night_mine_v7 по HC_POOL_RUNS, как было
+  stage2: false, controlBots: 2,   // этап 2 (хозяин 05.11): учащиеся мухи; последние controlBots — контроль (без общей памяти и без проб решателя)
   brStartTime: 12000,   // 1в (хозяин 04.11): мир начинается сразу вечером (12000 — закат, ночь с 13000), чтобы мухи не успевали спокойно развиться; null — как раньше
   maxWorldMin: 120, keepArchives: 10, worldsTarget: 0, serverStartTimeoutSec: 300, serverStopTimeoutSec: 90,
   botStaggerSec: 3, pauseBetweenWorldsSec: 5, maxServerFails: 3,
@@ -163,12 +164,35 @@ async function stopServer(cfg, p) {
 
 const isBr = cfg => !!cfg.battleRoyale && cfg.botMode !== '1a';   // баттл-рояль только у бота FlyBot (1б/1в)
 
+// этап 2: группа мухи по нику — последние controlBots мух (HC_9, HC_10 при 10 мухах) контроль, остальные учатся; без stage2 — null
+function groupOf(cfg, nick) {
+  if (!cfg.stage2) return null;
+  const num = Number((/(\d+)$/.exec(nick) || [0, 0])[1]);
+  return num > cfg.bots - cfg.controlBots ? 'control' : 'learn';
+}
+// состав групп для лога мира: «учатся HC_1–HC_8, контроль HC_9, HC_10»
+function groupsText(cfg) {
+  const nicks = Array.from({ length: cfg.bots }, (_, i) => cfg.botPrefix + (i + 1));
+  const span = a => (a.length > 2 ? `${a[0]}–${a[a.length - 1]}` : a.join(', '));
+  const learn = nicks.filter(n => groupOf(cfg, n) === 'learn'), ctl = nicks.filter(n => groupOf(cfg, n) === 'control');
+  return [learn.length ? `учатся ${span(learn)}` : '', ctl.length ? `контроль ${span(ctl)}` : ''].filter(Boolean).join(', ');
+}
+// аргументы мухи (тела) без запуска — чистая сборка, её проверяет test/hardcore_stage2_stand.js
+function botArgs(cfg, w, nick, cardFile) {
+  const fly = cfg.botMode !== '1a';   // 1б: настоящий FlyBot с автопилотом (hardcore/fly.js); 1а: простой бот life.js
+  const group = groupOf(cfg, nick);
+  return ['--host', '127.0.0.1', '--port', String(cfg.port), '--name', nick, '--version', cfg.version,
+    '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60),
+    ...(fly ? ['--ctlBase', String(cfg.flyCtlBase), '--runnerBase', String(cfg.flyRunnerBase), '--joinSec', String(cfg.flyJoinSec)] : []),
+    ...(isBr(cfg) ? ['--br', cfg.botPrefix] : []), ...(fly && cfg.pool ? ['--pool', path.join(cfg.dataDir, 'pool_runs.jsonl')] : []),
+    ...(fly && group ? ['--stage2', '1', '--group', group] : []),
+    ...(fly && group === 'learn' ? ['--shared', path.join(cfg.dataDir, 'shared')] : [])];
+}
+
 function startBot(cfg, w, nick, cardFile) {
   const fly = cfg.botMode !== '1a';   // 1б: настоящий FlyBot с автопилотом (hardcore/fly.js); 1а: простой бот life.js
   const base = cfg.botCmd || [process.execPath, path.join(HERE, fly ? 'fly.js' : 'life.js')];
-  const args = [...base.slice(1), '--host', '127.0.0.1', '--port', String(cfg.port), '--name', nick, '--version', cfg.version,
-    '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60), ...(fly ? ['--ctlBase', String(cfg.flyCtlBase), '--runnerBase', String(cfg.flyRunnerBase), '--joinSec', String(cfg.flyJoinSec)] : []),
-    ...(isBr(cfg) ? ['--br', cfg.botPrefix] : []), ...(fly && cfg.pool ? ['--pool', path.join(cfg.dataDir, 'pool_runs.jsonl')] : [])];
+  const args = [...base.slice(1), ...botArgs(cfg, w, nick, cardFile)];
   const out = fs.openSync(path.join(w.dir, `${nick}.out.log`), 'a');
   const p = spawn(base[0], args, { cwd: HERE, stdio: ['pipe', out, out], windowsHide: true });
   p.exited = new Promise(r => {
@@ -188,7 +212,7 @@ async function runWorld(cfg, n) {
   const old = fs.existsSync(propsFile) ? fs.readFileSync(propsFile, 'utf8') : '';
   fs.writeFileSync(propsFile, L.patchProperties(old, L.worldProperties(cfg, seed)));
   const stage = cfg.botMode === '1a' ? '1а' : isBr(cfg) ? '1в (баттл-рояль)' : '1б';
-  log(`мир ${id}: сид ${seed}, ботов ${cfg.bots}, порт ${cfg.port}, бот этапа ${stage}`);
+  log(`мир ${id}: сид ${seed}, ботов ${cfg.bots}, порт ${cfg.port}, бот этапа ${stage}${cfg.stage2 ? `, этап 2 — ${groupsText(cfg)}` : ''}`);
 
   const srv = startServer(cfg, path.join(dir, 'server.log'));
   srv.consoleCommands = [];
@@ -269,7 +293,7 @@ async function runWorld(cfg, n) {
     if (!c) c = { nick: b.nick, result: timedOut ? 'timeout' : 'crash', exitCode: b.p.exitCode, note: 'бот не написал карточку' };
     const msg = L.deathMessage(srv.lines, b.nick);
     if (msg) { c.deathMessageServer = msg; if (!c.cause) c.cause = L.causeOf(msg); }
-    return Object.assign({ world: id, seed, nick: b.nick, mode: cfg.botMode === '1a' ? 'stage1a' : isBr(cfg) ? 'stage1v-br' : 'stage1b-flybot' }, c);
+    return Object.assign({ world: id, seed, nick: b.nick, mode: cfg.botMode === '1a' ? 'stage1a' : cfg.stage2 ? 'stage2' : isBr(cfg) ? 'stage1v-br' : 'stage1b-flybot' }, c);
   });
   for (const c of cards) appendJsonl(path.join(cfg.dataDir, 'lives.jsonl'), c);
   // этап 2 (Б10): общая память — только учащиеся мухи (группа learn), только законченные жизни (смерть или срок); мухи мира друг у друга не учатся
@@ -332,7 +356,7 @@ async function main(cfgFile) {
     } catch (e) { log(`лента мира не нарисована: ${e.message}`); }
     if (r.serverOk) {
       fails = 0;
-      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, высшая ступень ${r.topStepMax}${r.br ? `, убийств муха→муха ${r.kills} (оружием ${r.killsArmed})` : ''}, читов ${r.cheats}${r.pointsAvg != null ? `, очки в среднем ${r.pointsAvg}` : ''}; лента —${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
+      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, высшая ступень ${r.topStepMax}${r.br ? `, убийств муха→муха ${r.kills} (оружием ${r.killsArmed})` : ''}, читов ${r.cheats}${r.pointsAvg != null ? `, очки в среднем ${r.pointsAvg}` : ''}${r.pointsByGroup && Object.keys(r.pointsByGroup).some(g => g !== 'all') ? `, очки по группам: ${Object.entries(r.pointsByGroup).map(([g, v]) => `${L.GROUP_TEXT[g] || g} ${v}`).join(', ')}` : ''}; лента —${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
       prune(cfg);
     } else if (++fails >= cfg.maxServerFails) {
       const msg = `сервер ${fails} раза подряд не поднялся — стенд остановлен. Смотри server.log в ${path.join(cfg.dataDir, 'worlds')}`;
@@ -345,5 +369,5 @@ async function main(cfgFile) {
   return 0;
 }
 
-module.exports = { main, loadConfig, checkSetup, DEFAULTS };
+module.exports = { main, loadConfig, checkSetup, DEFAULTS, botArgs, groupOf, groupsText };
 if (require.main === module) main().then(c => process.exit(c), e => { log(`стенд упал: ${e.stack || e}`); process.exit(1); });   // exit: консоль держит stdin открытым

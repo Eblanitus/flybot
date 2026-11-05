@@ -199,4 +199,12 @@ function makeLadder() {
   };
 }
 
-module.exports = { DEATH_WORDS, stepsNow, makeLadder, STEP_TEXT, makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp };
+// подпись группы мухи для ленты и логов (этап 2): учится / контроль; при проверке правки учителя (В2) — с правкой (А) / без правки (Б)
+const GROUP_TEXT = { learn: 'учится', control: 'контроль' };
+function groupLabel(c) {
+  const g = c && GROUP_TEXT[c.group];
+  const t = c && c.teachGroup ? (c.teachGroup === 'A' ? `правка ${c.teach} (А)` : `без правки ${c.teach} (Б)`) : null;
+  return [g, t].filter(Boolean).join(', ');
+}
+
+module.exports = { DEATH_WORDS, stepsNow, makeLadder, STEP_TEXT, makeChronicle, makeSeed, patchProperties, worldProperties, worldId, WORLD_ID_RE, pruneList, isInside, countCheats, deathMessage, causeOf, firstNightEnd, summarizeWorld, stamp, GROUP_TEXT, groupLabel };

@@ -17,7 +17,9 @@
   "brSpawnMax": 900,
   "brStartTime": 12000,
   "brViewDistance": 20,
-  "pool": true,
+  "pool": false,
+  "stage2": false,
+  "controlBots": 2,
   "maxWorldMin": 120,
   "worldsTarget": 20,
   "keepArchives": 10

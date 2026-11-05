@@ -25,6 +25,7 @@ const A = {
   br: arg('br', ''),   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
   pool: arg('pool', ''),  // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
   shared: arg('shared', ''),  // этап 2 (Б10): общая память мух (<папка>/variants.json, experience.json, decider.json); жизнь берёт копию, стенд сливает после мира
+  group: arg('group', ''),    // этап 2 (Б11): learn — учащаяся муха, control — контроль (без проб решателя; общей памяти нет — stand не даёт --shared)
   stage2: arg('stage2', '') === '1'   // этап 2 (Б6+): охота и бой — дела решателя, охотник здесь только смотрит
 };
 const ROOT = path.join(__dirname, '..');
@@ -43,6 +44,7 @@ const env = Object.assign({}, process.env, {
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
   ...(A.br ? { HC_BR_PREFIX: A.br } : {}),
   ...(A.shared ? { HC_DECIDER_MEM: path.join(path.resolve(A.shared), 'decider.json') } : {}),   // Б10: таблица решателя (читается раз за жизнь)
+  ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя
   ...(A.pool ? (A.stage2 ? { HC_POOL: '1' } : { HC_POOL_RUNS: path.resolve(A.pool) }) : {})   // без этапа 2: по HC_POOL_RUNS day_routine_v7 и night_mine_v7 берут навык из пула; на этапе 2 навыки пула — дела решателя (HC_POOL)
 });
 const kids = [];
@@ -242,7 +244,7 @@ async function tick() {
       if (s.gameMode === 'spectator') return finish('already_dead', { note: 'вошёл зрителем — в этом мире уже умирал' });
       const f = frameOf(s); tod0 = f.tod; age0 = f.wt; wtStart = f.wt;
       chron.note(wtStart, 'start', 'старт (FlyBot, автопилот)');
-      console.log(`[fly] ${A.name} в мире ${A.world}, тело :${CTL}, навыки :${RUN}`);
+      console.log(`[fly] ${A.name} в мире ${A.world}, тело :${CTL}, навыки :${RUN}${A.group ? `, группа: ${L.groupLabel({ group: A.group })}` : ''}`);
     }
     lastSnap = s;
     if ((s.health || 0) > 0 && s.gameMode !== 'spectator') aliveSnap = s;   // сумка «до смерти» — после смерти снимок уже пустой
@@ -279,7 +281,7 @@ function writeCard(result, extra = {}) {
   const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
   try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
   const card = {
-    nick: A.name, world: A.world, seed: A.seed, result, mode: A.br ? 'stage1v-br' : 'stage1b-flybot',
+    nick: A.name, world: A.world, seed: A.seed, result, mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot'), group: A.group || null,
     startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), lifeSec,
     gameDays: age0 != null && lastWt != null ? r1((lastWt - age0) / 24000) : null,
     spawnTimeOfDay: tod0, firstNightSurvived: chron.events.some(e => e.kind === 'night_survived'),

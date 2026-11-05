@@ -5,6 +5,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { GROUP_TEXT, groupLabel } = require('./lib');
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const KIND = {
@@ -56,6 +57,8 @@ function svgFor(cards) {
   cards.forEach((c, i) => {
     const y = top + i * rowH + 16;
     out.push(`<text x="6" y="${y + 4}">${esc(c.nick)}${c.pointsTotal != null ? ` · ${esc(c.pointsTotal)} оч.` : ''}</text>`);
+    const gl = groupLabel(c);   // этап 2: группа мухи — второй строкой мелко (старые миры — без группы, строки нет)
+    if (gl) out.push(`<text x="6" y="${y + 18}" class="s">${esc(gl)}</text>`);
     const ev = (c.events || []).filter(e => e.wt != null);
     if (!ev.length) { out.push(`<text x="${L}" y="${y + 4}" class="s">нет событий: ${esc(c.result || '')} ${esc(c.note || c.reason || '')}</text>`); return; }
     const a = x(c.wtStart != null ? c.wtStart : ev[0].wt), b = x(c.wtEnd != null ? c.wtEnd : ev[ev.length - 1].wt);
@@ -86,16 +89,29 @@ function legend() {
     '<span><i class="dot" style="background:var(--nightband);border-radius:2px"></i>ночь</span></div>';
 }
 
+// этап 2: кто в какой группе и средние очки по группам — в шапку мира; у старых миров (без групп) — пусто
+function groupsLine(cards, w) {
+  const by = {};
+  for (const c of cards) if (c.group) (by[c.group] = by[c.group] || []).push(c.nick);
+  const span = a => (a.length > 2 ? `${a[0]}–${a[a.length - 1]}` : a.join(', '));
+  const names = { learn: 'учатся', control: 'контроль' };
+  const parts = Object.entries(by).map(([g, ns]) => `${names[g] || g} ${esc(span(ns))}`);
+  const pg = w && w.pointsByGroup ? Object.entries(w.pointsByGroup).filter(([g]) => g !== 'all').map(([g, v]) => `${GROUP_TEXT[g] || g} ${esc(v)}`) : [];
+  if (pg.length) parts.push(`очки в среднем: ${pg.join(', ')}`);
+  return parts.join(' · ');
+}
 function worldHtml(w, cards) {
-  const rows = cards.map(c => `<tr><td>${esc(c.nick)}</td><td>${esc(c.result)}</td><td>${c.lifeSec != null ? Math.round(c.lifeSec / 60) + ' мин' : '—'}</td>` +
+  const gl = groupsLine(cards, w);
+  const rows = cards.map(c => `<tr><td>${esc(c.nick)}</td><td>${esc(groupLabel(c))}</td><td>${c.pointsTotal != null ? esc(c.pointsTotal) : '—'}</td><td>${esc(c.result)}</td><td>${c.lifeSec != null ? Math.round(c.lifeSec / 60) + ' мин' : '—'}</td>` +
     `<td>${c.gameDays != null ? c.gameDays : '—'}</td><td>${c.firstNightSurvived ? 'да' : 'нет'}</td><td>${esc(c.deathMessageServer || c.deathMessage || c.cause || c.reason || c.note || '')}</td></tr>`).join('');
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Мир ${esc(w.id)}</title><style>${CSS}</style></head><body><div class="wrap">
 <p class="muted"><a href="index.html">← все миры</a></p>
 <h1>Мир ${esc(w.id)}</h1>
 <p class="muted">сид ${esc(w.seed)} · ботов ${cards.length} · умерло ${cards.filter(c => c.result === 'death').length} · пережили первую ночь ${cards.filter(c => c.firstNightSurvived).length}${w.pointsAvg != null ? ` · очки в среднем ${esc(w.pointsAvg)}` : ''} · мир шёл ${w.durSec != null ? Math.round(w.durSec / 60) + ' мин' : '—'} · читов ${w.cheats != null ? w.cheats : '—'}${w.br ? ` · убийств муха→муха ${w.kills != null ? w.kills : cards.reduce((n, c) => n + (c.killCount || 0), 0)}${cards.some(c => c.killCount) ? ' (' + cards.filter(c => c.killCount).map(c => `${esc(c.nick)} ${c.killCount}`).join(', ') + ')' : ''}` : ''}${w.consoleCommands && w.consoleCommands.length ? ` · команды хозяина: ${esc(w.consoleCommands.join('; '))}` : ''}</p>
+${gl ? `<p class="muted">${gl}</p>` : ''}
 <div class="box">${legend()}${svgFor(cards)}</div>
-<div class="box"><table><tr><th>Бот</th><th>Итог</th><th>Прожил</th><th>Игровых дней</th><th>Первая ночь</th><th>Причина</th></tr>${rows}</table></div>
+<div class="box"><table><tr><th>Бот</th><th>Группа</th><th>Очки</th><th>Итог</th><th>Прожил</th><th>Игровых дней</th><th>Первая ночь</th><th>Причина</th></tr>${rows}</table></div>
 </div></body></html>`;
 }
 
