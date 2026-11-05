@@ -90,6 +90,7 @@ function choose(ctx, s, act, out) {
   const h = huntOption(ctx, s); // Б6: охота — дело в общем списке (не при блокировке hunt_go)
   if (h && !(s.blocked && s.blocked.hunt_go)) opts.push(h);
   opts.push(...poolOptions(ctx, s)); // Б8: навыки пула дела — в том же списке (пусто без HC_POOL)
+  opts.push(...stepOptions(ctx, s)); // короткие навыки (hardcore/steps, хозяин 05.11): шаги длинных навыков — в том же списке (с пулом; HC_STEPS=0 — выключить)
   opts.push(...teachOptions(s));     // В2: новые навыки правки учителя (только группе А; пусто без HC_TEACH_OFFER)
   if (!opts.length) return tag(act);
   const st = statsFor(memory(), sit);
@@ -151,6 +152,13 @@ function poolOptions(ctx, s) {
   return list.map(c => ({ key: 'pool:' + c.id, prior: 0, act: { key: 'pool:' + c.id, kind: 'learned', name: 'pool_run',
       params: { id: c.id, delo, max_sec: 300 }, why: `пул: ${c.id} (дело ${delo})` } }));
 }
+// --- короткие навыки (хозяин 05.11): длинные навыки порезаны на шаги, каждый шаг — кандидат с подсказкой 0, как навык пула.
+// Шаг предлагается только когда есть из чего его делать (материал в сумке, цель в виду). Включены вместе с пулом (HC_POOL).
+function stepOptions(ctx, s) {
+  if (!process.env.HC_POOL || process.env.HC_STEPS === '0') return [];
+  if (!ctx.bot || !ctx.bot.inventory) return [];
+  try { return require('./steps/steps.js').options(ctx, s); } catch (e) { return []; }
+}
 // --- правка учителя (В2): новые навыки из offer — кандидаты решателя с подсказкой 0; только группе А (env HC_TEACH_OFFER от fly.js) ---
 function teachOptions(s) {
   const offer = (process.env.HC_TEACH_OFFER || '').split(',').filter(Boolean);
@@ -159,4 +167,4 @@ function teachOptions(s) {
 }
 const _reset = () => { MEM = null; SEEN.clear(); }; // для тестов
 
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, poolOptions, teachOptions, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, poolOptions, stepOptions, teachOptions, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
