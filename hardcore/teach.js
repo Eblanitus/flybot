@@ -14,4 +14,12 @@ function buildLearned(baseDir, overlayDir, outDir) {
   return over;
 }
 
-module.exports = { buildLearned };
+// вердикт проверки правки (В3): после n миров с обеими группами — средняя очков группы А не ниже средней Б → «оставить», иначе «откат»; раньше n миров — null
+function verdictOf(result, n) {
+  const ws = ((result && result.worlds) || []).filter(w => typeof w.A === 'number' && typeof w.B === 'number').slice(0, n);
+  if (ws.length < n) return null;
+  const mean = k => ws.reduce((s, w) => s + w[k], 0) / ws.length;
+  return mean('A') >= mean('B') ? 'оставить' : 'откат';
+}
+
+module.exports = { buildLearned, verdictOf };

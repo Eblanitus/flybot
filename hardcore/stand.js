@@ -174,7 +174,26 @@ function groupOf(cfg, nick) {
 // правка учителя (В2): id проверки, пока нет вердикта (result.json); группа А — учащиеся HC_1–HC_5 (с правкой), Б — остальные учащиеся
 const TEACH_A = 5;
 const teachId = cfg => (cfg.stage2 && cfg.teach && cfg.teach.id ? String(cfg.teach.id) : null);
-const teachDone = cfg => { const id = teachId(cfg); return !!id && fs.existsSync(path.join(cfg.dataDir, 'teach', id, 'result.json')); };
+// готово — когда в result.json есть вердикт (до него файл есть, но verdict: null)
+const teachDone = cfg => { const id = teachId(cfg); if (!id) return false; try { return !!JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'teach', id, 'result.json'), 'utf8')).verdict; } catch (e) { return false; } };
+// В3: после каждого мира — средние очков групп А и Б в result.json; набралось teach.worlds миров — вердикт (оставить / откат)
+function teachAfterWorld(cfg, worldId, cards, log = () => {}) {
+  const tid = teachId(cfg);
+  if (!tid || teachDone(cfg)) return null;
+  const file = path.join(cfg.dataDir, 'teach', tid, 'result.json');
+  let res = { id: tid, worlds: [], verdict: null };
+  try { res = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {}
+  const avgOf = g => { const ps = cards.filter(c => c.teachGroup === g && typeof c.pointsTotal === 'number').map(c => c.pointsTotal); return ps.length ? Math.round(ps.reduce((s, x) => s + x, 0) / ps.length * 100) / 100 : null; };
+  const A = avgOf('A'), B = avgOf('B');
+  res.worlds.push({ world: worldId, A, B });
+  const need = Number(cfg.teach.worlds) || 3;
+  res.verdict = TEACH.verdictOf(res, need);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(res, null, 1));
+  const f = v => (v == null ? 'нет' : v.toFixed(1));
+  log(`учитель ${tid}: мир ${worldId} — А ${f(A)}, Б ${f(B)} (миров ${res.worlds.length} из ${need})${res.verdict ? ` — ${res.verdict}` : ''}`);
+  return res.verdict;
+}
 function teachGroupOf(cfg, nick) {
   if (!teachId(cfg) || teachDone(cfg) || groupOf(cfg, nick) !== 'learn') return null;
   return Number((/(\d+)$/.exec(nick) || [0, 0])[1]) <= TEACH_A ? 'A' : 'B';
@@ -322,6 +341,10 @@ async function runWorld(cfg, n) {
     if (lines) fs.appendFileSync(path.join(cfg.dataDir, 'deeds_all.jsonl'), lines + '\n');
   }
   // этап 2 (Б10): общая память — только учащиеся мухи (группа learn), только законченные жизни (смерть или срок); мухи мира друг у друга не учатся
+  if (teachId(cfg)) { // В3: средние группы А и Б за этот мир; набралось teach.worlds — вердикт (правка остаётся в проверке, пока нет вердикта)
+    const v = teachAfterWorld(cfg, id, cards, log);
+    if (v) log(`учитель ${teachId(cfg)}: проверка закончена — ${v}${v === 'откат' ? ', правка никому не выдаётся' : ', правку переносит учитель (В4)'}`);
+  }
   if (cfg.stage2) for (const b of bots) {
     const c = cards.find(x => x.nick === b.nick);
     if (!c || c.group !== 'learn' || c.teachGroup === 'A' || !(c.result === 'death' || c.result === 'timeout')) continue;   // В2: дела группы А во время проверки не сливаем
@@ -394,5 +417,5 @@ async function main(cfgFile) {
   return 0;
 }
 
-module.exports = { main, loadConfig, checkSetup, DEFAULTS, botArgs, groupOf, groupsText, teachGroupOf, teachId, teachDone, TEACH_A };
+module.exports = { main, loadConfig, checkSetup, DEFAULTS, botArgs, groupOf, groupsText, teachGroupOf, teachId, teachDone, teachAfterWorld, TEACH_A };
 if (require.main === module) main().then(c => process.exit(c), e => { log(`стенд упал: ${e.stack || e}`); process.exit(1); });   // exit: консоль держит stdin открытым
