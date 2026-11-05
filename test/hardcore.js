@@ -156,12 +156,17 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     assert(props2.includes('view-distance=20'), 'view-distance=20 в баттл-рояле');
     for (const w of worlds) assert(w.br && w.brSpawn && w.brSpawn.points.HC_1 && w.brSpawn.points.HC_1.sent, JSON.stringify(w.brSpawn));
     assert(/got: spreadplayers -?\d+ -?\d+ 0 1 false HC_1/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', worlds[0].id, 'server.log'), 'utf8')), 'расстановка ушла в сервер');
-    // 05.11: у точки нет суши — сервер «Could not spread», стенд пробует ту же точку с радиусом шире (иначе муха остаётся в куче у спавна)
+    // 05.11: у точки нет суши — сервер «Could not spread»; хозяин: не искать рядом, а перебросить на новую точку на том же расстоянии от центра
     for (const w of worlds) {
       const p1 = w.brSpawn.points.HC_1, p2 = w.brSpawn.points.HC_2;
       assert(p1.placed && p1.tries === 0, 'HC_1 поставлен с первого раза: ' + JSON.stringify(p1));
-      assert(p2.placed && p2.tries === 1 && !p2.failed, 'HC_2 поставлен со второй попытки: ' + JSON.stringify(p2));
-      assert(new RegExp(`got: spreadplayers ${p2.x} ${p2.z} 0 24 false HC_2`).test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', w.id, 'server.log'), 'utf8')), 'повтор с радиусом 24');
+      assert(p2.placed && p2.tries === 2 && !p2.failed && !p2.wide, 'HC_2 поставлен с третьей точки: ' + JSON.stringify(p2));
+      assert(p2.at.x !== p2.x || p2.at.z !== p2.z, 'HC_2 переброшен на другую точку');
+      const r0 = Math.max(Math.hypot(p2.x, p2.z), 150);
+      assert(Math.abs(Math.hypot(p2.at.x, p2.at.z) - r0) < 2, 'новая точка на том же расстоянии от центра: ' + JSON.stringify(p2));
+      const log = fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', w.id, 'server.log'), 'utf8');
+      assert.strictEqual((log.match(/^(?:.*got: )?spreadplayers -?\d+ -?\d+ 0 1 false HC_2$/gm) || []).length, 3, 'три точки HC_2, все с радиусом 1');
+      assert(new RegExp(`spreadplayers ${p2.at.x} ${p2.at.z} 0 1 false HC_2`).test(log), 'последняя — новая точка');
     }
     assert(!fs.existsSync(path.join(s.srv, 'hc_world')), 'мир ушёл в архив');
     const arch = fs.readdirSync(s.cfg.archiveDir).sort();
