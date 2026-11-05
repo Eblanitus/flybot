@@ -118,7 +118,7 @@ const NEED = {
 
 const matches = (want, name) => (want instanceof RegExp ? want.test(name) : want === name);
 function invOf(snap) { const m = {}; for (const it of (snap && snap.inventory) || []) m[it.name] = (m[it.name] || 0) + it.count; return m; }
-function makeView(grid, ents, inv) { return { blocks: new Set(grid.values()), ents, inv }; }
+function makeView(grid, ents, inv) { return { blocks: new Set(grid.values()), ents, inv, grid }; }   // grid — где что лежит (короткие навыки hardcore/steps ищут место по нему)
 
 // есть ли один вариант группы в виде мухи
 function hasAlt(a, view) {
