@@ -45,6 +45,13 @@ const L = require('../hardcore/lib');
       assert(Math.abs(Math.hypot(q.x, q.z) - 500) < 1.5, 'то же расстояние: ' + JSON.stringify(q));
       assert(others.every(o => Math.hypot(o.x - q.x, o.z - q.z) >= 300), 'не ближе 300 к другим: ' + JSON.stringify(q));
     }
+    // 05.11 лог хозяина: 465 -131 → 461 -144 → 474 -94 (рядом с водной точкой, потому что только там нет мух ближе 300). Теперь бросок не короче 300
+    const dense = [{ x: -309, z: 362 }, { x: -160, z: -145 }, { x: 186, z: -258 }, { x: -442, z: 75 }, { x: 112, z: 458 }, { x: -36, z: -476 }, { x: -16, z: 177 }, { x: 347, z: 230 }, { x: -423, z: -486 }];
+    for (let k = 0; k < 200; k++) {
+      const w = { x: 465, z: -131 }, q = BR.repickPoint(w, dense, { min: 300, from: w });
+      assert(Math.hypot(q.x - w.x, q.z - w.z) >= 300, 'бросок не короче 300 от водной точки: ' + JSON.stringify(q));
+      assert(Math.abs(Math.hypot(q.x, q.z) - Math.hypot(w.x, w.z)) < 1.5, 'то же расстояние от центра');
+    }
     const c = BR.repickPoint({ x: 10, z: 0 }, [], { minR: 150 });
     assert(Math.abs(Math.hypot(c.x, c.z) - 150) < 1.5, 'у самого центра — не ближе minR');
     assert(BR.REPICK_MAX >= 5 && BR.REPICK_MAX <= 50);
