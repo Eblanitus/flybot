@@ -271,7 +271,7 @@ function lowHpOf(s) {
   return !o.win && o.passiveTtdSec < T.apReactSec;
 }
 // s: {on, idle, task:{name,source}|null, running:{key,name,kind}|null, runnerOther, hp, food, hasFood, hasWeapon, hasPickaxe,
-//     blocks, logs, cobble, phase, isNight, nightIn, sheltered, inLava, suffocating, stuck, underWater,
+//     blocks, logs, cobble, phase, isNight, nightIn, sheltered, inLava, inWater, suffocating, stuck, underWater,
 //     hostilesNear, hostile:{name,id,d}|null (ближайший враждебный моб в hostileR),
 //     hitRecent (по муху недавно били — урон в тике), enemies:[{name,d,why,aggressor}], alone, freeBed, animals,
 //     recoverable, blocked:{key:true},
@@ -701,7 +701,11 @@ function decide(s, out) {
       const a = foodQuest(`мало HP (${s.hp}), сытость ${s.food}, еды нет — регенерации нет`, dark);
       if (a) return a;
     }
-    if (danger && !s.sheltered) {
+    // в воде укрытие не строится (стенам не к чему прислониться: разбор 2-го мира этапа 2 — 33 раза подряд «пустота вокруг»,
+    // отход на 8 м сбрасывал провалы, и снова укрытие в той же воде) — сперва к берегу, укрываемся уже на суше
+    if (danger && !s.sheltered && s.inWater && ok('lowhp_move'))
+      return body('lowhp_move', 'explore', { distance: T.apLowHpWaterDist }, `мало HP (${s.hp}) — я в воде, укрытие тут не встанет — плыву к суше`);
+    if (danger && !s.sheltered && !s.inWater) {
       // 1) лесенка (L003, не трогаем): блоки → укрытие. При crit наружу не ходим — только укрыться.
       if (!crit && s.blocks < need && !bad('lowhp_dirt') && ok('lowhp_dirt')) {
         // 1) блоки — раньше укрытия: без них shelter падает «блоков на стены мало»
@@ -1486,6 +1490,7 @@ function gather(ctx, ap) {
     logs: sum(/_(log|stem)$/) + Math.floor(sum(/_planks$/) / 4), cobble: sum(/^(cobblestone|cobbled_deepslate)$/),
     phase: ti.phase, isNight: ti.isNight, nightIn: ti.nightIn, sheltered,
     inLava: [feet, head].some(b => b && b.name === 'lava'),
+    inWater: !!feet && feet.name === 'water',   // стоит (плывёт) в воде: укрытие тут не встанет — стенам не к чему прислониться
     // снимок «горю» (заявка учителя, день 21): флаг «on fire» из метадаты — так же, как lib/perception.js и lib/danger.js
     onFire: (v => typeof v === 'number' && (v & 1) === 1)((bot.entity.metadata || [])[0]),
     suffocating: !!head && A.isSolid(head) && head.boundingBox === 'block',

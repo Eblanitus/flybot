@@ -17,11 +17,11 @@ const card = path.join(__dirname, 'HC_x.json');   // только как арг�
 // 0) значения по умолчанию и пример конфига: этап 2 выключен, пул выключен (включает хозяин в конфиге)
 {
   assert.strictEqual(S.DEFAULTS.stage2, false);
-  assert.strictEqual(S.DEFAULTS.controlBots, 2);
+  assert.strictEqual(S.DEFAULTS.controlBots, 3);
   assert.strictEqual(S.DEFAULTS.pool, false);
   const ex = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hardcore', 'config.example.json'), 'utf8'));
   assert.strictEqual(ex.stage2, false);
-  assert.strictEqual(ex.controlBots, 2);
+  assert.strictEqual(ex.controlBots, 3);
   assert.strictEqual(ex.pool, false);
   console.log('значения по умолчанию и config.example.json: этап 2 выключен, пул выключен: OK');
 }

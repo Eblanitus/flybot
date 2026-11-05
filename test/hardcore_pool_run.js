@@ -42,7 +42,10 @@ const calm = { isNight: false, sheltered: false, underground: false, hp: 20, hos
   const opts = D.poolOptions(fakeCtx(), calm);
   // без брёвна рядом навыки, которым нужно бревно, не предлагаем; остальные навыки дела — как были
   assert(LOG_IDS.every(id => G.NEED[id]), 'навыки с брёвнами в таблице цели');
-  assert.strictEqual(opts.length, CATALOG.wood.length - LOG_IDS.length, 'навыки дела wood без брёвна рядом: ' + opts.length);
+  // крафт из дерева тоже ждёт материала (разбор 2-го мира этапа 2): в пустой сумке — только навыки без цели в таблице
+  const WOOD_CRAFT = ['v3.craftWoodenSword', 'v2.craftWoodenPickaxe', 'o.equipPickaxeOrCraftOne', 'o.equipSwordOrCraftOne', 'o.equipAxeOrCraftOne'];
+  assert.deepStrictEqual(opts.map(o => o.act.params.id).sort(), CATALOG.wood.map(e => e.id).filter(id => !LOG_IDS.includes(id) && !WOOD_CRAFT.includes(id)).sort(), 'навыки дела wood без брёвна рядом и без дерева в сумке');
+  assert(opts.some(o => o.act.params.id === 'v1.craftOakPlanksAndSticks'));
   assert(!opts.some(o => LOG_IDS.includes(o.act.params.id)));
   assert(opts.every(o => o.prior === 0 && o.key.startsWith('pool:') && o.act.kind === 'learned' && o.act.name === 'pool_run' && o.act.params.delo === 'wood'));
 

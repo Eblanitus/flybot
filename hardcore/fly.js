@@ -46,6 +46,7 @@ const env = Object.assign({}, process.env, {
   DATA_DIR: dirs.data, FLYBOT_NOTES: notes, FLYBOT_NO_BRAIN: '1', HC_STAND: '1', FLYBOT_LEDGER_LOG: path.join(life, 'inventory.jsonl'),   // журнал сумки: изменения, удары, смерть (lib/ledger.js)
   MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
+  RUNNER_NO_VERSIONS: '1',   // навыки общие и из git: бегун не делает версий из своей истории и не берёт уже сделанные копии навыков стенда (разбор 2-го мира: старый hc_night_mine_v1 без починки)
   ...(A.br ? { HC_BR_PREFIX: A.br } : {}),
   ...(A.shared ? { HC_DECIDER_MEM: path.join(path.resolve(A.shared), 'decider.json') } : {}),   // Б10: таблица решателя (читается раз за жизнь)
   ...(A.learned ? { RUNNER_LEARNED: path.resolve(A.learned) } : {}),   // В2: навыки группы А — с правкой учителя (бегун читает их отсюда)

@@ -74,6 +74,28 @@ async function spinChild() {
   assert(!G.present(V([], { fishing_rod: 1 }), 'v2.catchThreeFish'), 'удочка без воды — не предлагаю');
   assert(!G.present(V([], { string: 1 }), 'o.craftFishingRod') && G.present(V([], { string: 2 }), 'o.craftFishingRod'), 'удочка — от 2 ниток');
 
+  // 2в) крафт только из сумки (разбор 2-го мира этапа 2): лук, стрелы, броня, каменные и деревянные инструменты — только при материале
+  const NOWOOD = { cobblestone: 3 };
+  assert(!G.present(V([], { stick: 3 }), 'o.craftBow'), 'лук без ниток — не предлагаю');
+  assert(!G.present(V([], { string: 3 }), 'o.craftBow'), 'лук без дерева на палки и верстак — не предлагаю');
+  assert(G.present(V([], { string: 3, stick: 3, crafting_table: 1 }), 'o.craftBow'), 'нитки, палки и верстак — предлагаю');
+  assert(G.present(V([], { string: 3, oak_log: 2 }), 'o.craftBow'), 'нитки и 2 бревна (палки и верстак) — предлагаю');
+  assert(!G.present(V([], { string: 3, oak_log: 1 }), 'o.craftBow'), 'нитки и 1 бревно: на верстак и палки мало — не предлагаю');
+  assert(!G.present(V([], { stick: 1, crafting_table: 1 }), 'o.craftArrow'), 'стрелы без кремня, гравия, пера и кур — не предлагаю');
+  assert(G.present(V([['1,64,1', 'gravel']], { feather: 1, stick: 1, crafting_table: 1 }), 'o.craftArrow'), 'гравий рядом, перо и палка — предлагаю');
+  assert(G.present(G.makeView(new Map(), [{ name: 'chicken', d: 8 }], { flint: 1, stick: 1, crafting_table: 1 }), 'o.craftArrow'), 'кремень и курица рядом — предлагаю');
+  assert(!G.present(V([], {}), 'o.equipArmor') && G.present(V([], { leather_helmet: 1 }), 'o.equipArmor'), 'броня — только когда она в сумке');
+  for (const id of ['v3.craftStonePickaxe', 'v3.craftStoneAxe', 'v3.craftStoneSword', 'o.craftStonePickaxe', 'v1.craftStonePickaxe']) {
+    assert(!G.present(V([], { stick: 2, crafting_table: 1 }), id), 'без булыжника не предлагаю: ' + id);
+    assert(!G.present(V([], NOWOOD), id), 'без палок и досок не предлагаю: ' + id);
+    assert(G.present(V([], { cobblestone: 3, oak_planks: 2, crafting_table: 1 }), id), 'булыжник и доски — предлагаю: ' + id);
+  }
+  assert(!G.present(V([], { oak_planks: 1 }), 'v3.craftWoodenSword') && G.present(V([], { oak_planks: 2, stick: 1 }), 'v3.craftWoodenSword'), 'деревянный меч — от 2 досок и палки');
+  assert(!G.present(V([], {}), 'v2.craftWoodenPickaxe') && G.present(V([], { spruce_log: 2 }), 'v2.craftWoodenPickaxe'), 'деревянная кирка — от 2 брёвен');
+  assert(G.present(V([], { stone_sword: 1 }), 'o.equipSwordOrCraftOne') && !G.present(V([], {}), 'o.equipSwordOrCraftOne'), 'меч: есть в сумке — предлагаю, нет ни меча, ни дерева — нет');
+  assert(!G.present(V([], { stone_pickaxe: 1 }), 'o.equipAxeOrCraftOne'), 'кирка — не топор');
+  assert(!G.present(V([], { oak_log: 2 }), 'o.equipPickaxeOrCraftOne') && G.present(V([], { oak_log: 3 }), 'o.equipPickaxeOrCraftOne'), 'кирки нет: верстак, доски и палки — от 3 брёвен');
+
   // 3) кандидаты: в пустом мире животных нет — охота и разведение не предлагаются; натив и готовка остаются
   const kept = G.withTarget(bare, RUN.candidates('food', 'day_routine_v6')).map(c => c.id);
   for (const id of ['v3.killThreeCows', 'v3.killThreeChickens', 'v3.killThreeSheep', 'v1.killTwoPigs', 'o.breedCow', 'o.breedSheep', 'o.breedChicken'])
@@ -92,9 +114,13 @@ async function spinChild() {
   const ctx = { bot: { food: 20, entities: {}, entity: { position: { x: 0, y: 64, z: 0 } },
     inventory: { items: () => [{ name: 'wooden_pickaxe', count: 1 }], slots: [] } } };
   const offered = DECIDER.poolOptions(ctx, { isNight: false, blocked: {} }).map(o => o.act.params.id);
-  assert(offered.length > 0 && offered.every(id => G.present({ blocks: new Set(), ents: [], inv: { wooden_pickaxe: 1 } }, id)), 'решатель предлагает только навыки с целью рядом: ' + offered.join(' '));
-  assert(offered.includes('v3.craftStonePickaxe') && !offered.includes('v1.mineTenCobblestone'), 'крафт из сумки предлагается, камень без камня рядом — нет');
+  assert(offered.every(id => G.present({ blocks: new Set(), ents: [], inv: { wooden_pickaxe: 1 } }, id)), 'решатель предлагает только навыки с целью рядом: ' + offered.join(' '));
+  assert(!offered.includes('v1.mineTenCobblestone'), 'камень без камня рядом — не предлагаю');
   assert(!offered.includes('v1.craftStonePickaxe'), 'крафт с добычей камня без камня в сумке и рядом — не предлагаю');
+  assert(!offered.includes('v3.craftStonePickaxe'), 'крафт из сумки без булыжника — не предлагаю (разбор 2-го мира)');
+  const ctx2 = { bot: { ...ctx.bot, inventory: { items: () => [{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }], slots: [] } } };   // новая муха: вид решателя кэшируется по мухе
+  const offered2 = DECIDER.poolOptions(ctx2, { isNight: false, blocked: {} }).map(o => o.act.params.id);
+  assert(offered2.includes('v3.craftStonePickaxe'), 'булыжник и палки в сумке — крафт предлагается: ' + offered2.join(' '));
   delete process.env.HC_POOL;
 
   console.log('hardcore_pool_gate: ok');

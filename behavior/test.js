@@ -38,6 +38,11 @@ module.exports = async function selfTest() {
   assert.strictEqual(a.key, 'lowhp_move'); assert.strictEqual(a.name, 'explore'); // без оружия — побега нет, отходим
   a = decide({ ...base, ...mob9, hasWeapon: false, hp: 5, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt (добыто 0/10)', count: 2 } } });
   assert.strictEqual(a.key, 'lowhp_move', 'земля не идёт — меняем тактику');
+  // в воде укрытие не встаёт (стенам не к чему прислониться: разбор 2-го мира этапа 2, 33 провала подряд) — плывём к суше
+  a = decide({ ...base, ...mob9, hp: 5, blocks: T.apLowHpBlocks, inWater: true });
+  assert.strictEqual(a.key, 'lowhp_move', 'в воде — к суше, а не укрытие'); assert.strictEqual(a.params.distance, T.apLowHpWaterDist);
+  a = decide({ ...base, ...mob9, hp: 5, blocks: 0, inWater: true });
+  assert.strictEqual(a.key, 'lowhp_move', 'в воде и блоков нет — тоже к суше');
   // v0.3 еда: еле жива, есть нечего, регенерации нет — днём без угрозы ждать бесполезно: за едой (раньше — null, «жду» часами)
   assert.strictEqual(decide({ ...base, hp: 2, food: 0, hasFood: false, blocks: 0, failInfo: { lowhp_dirt: { reason: 'не вижу dirt', count: 2 } } }).key, 'food_explore');
   // ...ночью без ближней еды — по-прежнему ждём (укрыться нечем), в поле ночью не идём

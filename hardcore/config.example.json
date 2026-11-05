@@ -19,7 +19,7 @@
   "brViewDistance": 20,
   "pool": false,
   "stage2": false,
-  "controlBots": 2,
+  "controlBots": 3,
   "maxWorldMin": 120,
   "worldsTarget": 20,
   "keepArchives": 10

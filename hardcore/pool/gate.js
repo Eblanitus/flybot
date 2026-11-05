@@ -2,9 +2,10 @@
 // «Честно» — тот же вид, что у мухи: блоки из survey (видно или помнится, остальное в снимок не попадает), существа из scan, сумка из снимка.
 // Рядом: блоки — окно 10 по ширине и 4 по высоте (объём 3969 ≤ 4096), существа — не дальше 16 блоков.
 // У навыка — список групп: выполниться должны все группы, внутри группы хватает одного варианта:
-//   b — блок с таким именем рядом; e — существо рядом; i — в сумке хватает (штук по именам не меньше n: тогда искать не нужно);
+//   b — блок с таким именем рядом; e — существо рядом; i — в сумке хватает (штук по именам или регуляркам не меньше n: тогда искать не нужно);
 //   f — свой признак по виду сумки (например, угля хватает на всё).
-// Навыков вне таблицы это не касается: крафт из сумки, пещера (своя проверка в run.js), натив.
+// Крафт из сумки — тоже в таблице: предлагаем, только когда материал есть (в сумке, а если навык ходит за ним сам — рядом).
+// Навыков вне таблицы это не касается: пещера (своя проверка в run.js), натив.
 'use strict';
 const { parseSurvey } = require('./shim');
 
@@ -14,6 +15,17 @@ const GRASS = ['short_grass', 'tall_grass', 'grass'];   // 'grass' — стар�
 const b = names => ({ b: [].concat(names) }), e = names => ({ e: [].concat(names) });   // всегда список (и для одной регулярки тоже)
 const i = (names, n = 1) => ({ i: [].concat(names), n });   // в сумке хватает: сумма штук по именам не меньше n
 const f = fn => ({ f: fn });   // свой признак по виду сумки
+// дерево на крафт: досок нужно planks, палок sticks (палки из досок: 2 доски → 4 палки), бревно — 4 доски.
+// table — навык сам крафтит верстак, если его нет в сумке (Odyssey): ещё 4 доски. Считаем всё вместе, как тратит тело.
+const PLANKS = /_planks$/, WOOD_LOG = /_(log|stem)$/;
+const sumOf = (inv, re) => Object.entries(inv).filter(([n]) => re.test(n)).reduce((s, [, c]) => s + c, 0);
+const wood = (planks, sticks, table = false) => f(v => {
+  const needSticks = Math.max(0, sticks - (v.inv.stick || 0));
+  const need = planks + Math.ceil(needSticks / 4) * 2 + (table && !v.inv.crafting_table ? 4 : 0);
+  return need === 0 || sumOf(v.inv, PLANKS) + 4 * sumOf(v.inv, WOOD_LOG) >= need;
+});
+const ARMOR = /_(helmet|chestplate|leggings|boots)$/;
+const SWORD = /_sword$/, PICKAXE = /_pickaxe$/, AXE = /^(wooden|stone|iron|golden|diamond|netherite)_axe$/;
 
 // id каталога → группы. Собрано по коду навыков: все, кто в поиске зовёт exploreUntil, и те, кто сам идёт за блоком или существом.
 const NEED = {
@@ -78,14 +90,30 @@ const NEED = {
   // крафт, который сам идёт за добычей, если в сумке мало (решение хозяина 05.11: «все такие навыки так же»):
   // материала хватает — крафт доступен всегда; не хватает — нужен блок рядом. Пороги — из кода навыка.
   'v3.craftWoodenPickaxe': [[i('oak_log', 4), b(['oak_log'])]],
-  'v1.craftStonePickaxe': [[i('cobblestone', 3), b(['stone'])]],
-  'v3.craftStoneTools': [[i('cobblestone', 6), b(['stone'])]],
+  'v1.craftStonePickaxe': [[i('cobblestone', 3), b(['stone'])], [wood(0, 2)]],
+  'v3.craftStoneTools': [[i('cobblestone', 6), b(['stone'])], [wood(0, 5)]],
   'v1.craftFurnace': [[i('cobblestone', 8), b(['stone'])]],
   'v3.craftChest': [[i('oak_planks', 8), b(['oak_log'])]],
   'v3.craftIronChestplate': [[i('iron_ingot', 8), b(['iron_ore'])]],
   'v3.craftIronHelmet': [[i('iron_ingot', 5), b(['iron_ore'])]],
   'v3.craftIronLeggingsAndBoots': [[i('iron_ingot', 11), b(['iron_ore'])],
     [f(v => (v.inv.coal || 0) >= 11 - (v.inv.iron_ingot || 0)), b(['coal_ore'])]],
+  // крафт только из сумки (разбор 2-го мира этапа 2: лук без ниток 21 раз, стрелы, броня, каменные и деревянные инструменты без материалов).
+  // За материалом эти навыки не ходят: без него — «ничего не прибавилось» или «не хватает». Пороги — из кода навыка.
+  'v3.craftStonePickaxe': [[i('cobblestone', 3)], [wood(0, 2)]],
+  'v3.craftStoneAxe': [[i('cobblestone', 3)], [wood(0, 2)]],
+  'v3.craftStoneSword': [[i('cobblestone', 2)], [wood(0, 1)]],
+  'o.craftStonePickaxe': [[i('cobblestone', 3), b(['stone'])], [wood(0, 2, true)]],   // за булыжником ходит сам, за деревом — нет
+  'v3.craftWoodenSword': [[wood(2, 1)]],
+  'v2.craftWoodenPickaxe': [[wood(3, 2)]],
+  // надеть инструмент, а нет его — скрафтить деревянный: нужен инструмент в сумке или дерево на него
+  'o.equipSwordOrCraftOne': [[i(SWORD), wood(2, 1, true)]],
+  'o.equipPickaxeOrCraftOne': [[i(PICKAXE), wood(3, 2, true)]],
+  'o.equipAxeOrCraftOne': [[i(AXE), wood(3, 2, true)]],
+  // бой: лук — 3 нитки (за ними не ходит); стрелы — кремень (или гравий рядом), перо (или курица рядом: навык бьёт кур, пока нет пера)
+  'o.craftBow': [[i('string', 3)], [wood(0, 3, true)]],
+  'o.craftArrow': [[i('flint'), b(['gravel'])], [i('feather'), e(['chicken'])], [wood(0, 1, true)]],
+  'o.equipArmor': [[i(ARMOR)]],   // надеть нечего — броня не в сумке
 };
 
 const matches = (want, name) => (want instanceof RegExp ? want.test(name) : want === name);
@@ -96,7 +124,7 @@ function makeView(grid, ents, inv) { return { blocks: new Set(grid.values()), en
 function hasAlt(a, view) {
   if (a.b) return [...view.blocks].some(n => a.b.some(w => matches(w, n)));
   if (a.e) return view.ents.some(x => x.d <= ENT_R && a.e.includes(x.name));
-  if (a.i) return a.i.reduce((s, n) => s + (view.inv[n] || 0), 0) >= (a.n || 1);
+  if (a.i) return Object.entries(view.inv).filter(([n]) => a.i.some(w => matches(w, n))).reduce((s, [, c]) => s + c, 0) >= (a.n || 1);
   if (a.f) return !!a.f(view);
   return false;
 }

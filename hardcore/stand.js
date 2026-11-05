@@ -19,7 +19,7 @@ const DEFAULTS = {
   version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b', flyCtlBase: 3310, flyRunnerBase: 3410, flyJoinSec: 120,
   battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
   pool: false,   // пул навыков (hardcore/pool): включает хозяин в конфиге. С stage2 — навыки пула в списке решателя (HC_POOL); без — day_routine_v7/night_mine_v7 по HC_POOL_RUNS, как было
-  stage2: false, controlBots: 2, teach: null,   // этап 2 (хозяин 05.11): учащиеся мухи; последние controlBots — контроль (без общей памяти и без проб решателя); teach: {id, offer, worlds} — правка учителя (В2)
+  stage2: false, controlBots: 3, teach: null,   // этап 2 (хозяин 05.11): учащиеся мухи; последние controlBots — контроль (без общей памяти и без проб решателя); teach: {id, offer, worlds} — правка учителя (В2)
   brStartTime: 12000,   // 1в (хозяин 04.11): мир начинается сразу вечером (12000 — закат, ночь с 13000), чтобы мухи не успевали спокойно развиться; null — как раньше
   maxWorldMin: 120, keepArchives: 10, worldsTarget: 0, serverStartTimeoutSec: 300, serverStopTimeoutSec: 90,
   botStaggerSec: 3, pauseBetweenWorldsSec: 5, maxServerFails: 3,
@@ -165,7 +165,7 @@ async function stopServer(cfg, p) {
 
 const isBr = cfg => !!cfg.battleRoyale && cfg.botMode !== '1a';   // баттл-рояль только у бота FlyBot (1б/1в)
 
-// этап 2: группа мухи по нику — последние controlBots мух (HC_9, HC_10 при 10 мухах) контроль, остальные учатся; без stage2 — null
+// этап 2: группа мухи по нику — последние controlBots мух (HC_8–HC_10 при 10 мухах и 3 контрольных) контроль, остальные учатся; без stage2 — null
 function groupOf(cfg, nick) {
   if (!cfg.stage2) return null;
   const num = Number((/(\d+)$/.exec(nick) || [0, 0])[1]);
