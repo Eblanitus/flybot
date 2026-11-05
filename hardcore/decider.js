@@ -90,6 +90,7 @@ function choose(ctx, s, act, out) {
   const h = huntOption(ctx, s); // Б6: охота — дело в общем списке (не при блокировке hunt_go)
   if (h && !(s.blocked && s.blocked.hunt_go)) opts.push(h);
   opts.push(...poolOptions(ctx, s)); // Б8: навыки пула дела — в том же списке (пусто без HC_POOL)
+  opts.push(...teachOptions(s));     // В2: новые навыки правки учителя (только группе А; пусто без HC_TEACH_OFFER)
   if (!opts.length) return tag(act);
   const st = statsFor(memory(), sit);
   const rate = process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st)); // пробы везде: муху никак не ограничиваем (хозяин 05.11)
@@ -133,6 +134,12 @@ function poolOptions(ctx, s) {
     .map(c => ({ key: 'pool:' + c.id, prior: 0, act: { key: 'pool:' + c.id, kind: 'learned', name: 'pool_run',
       params: { id: c.id, delo, max_sec: 300 }, why: `пул: ${c.id} (дело ${delo})` } }));
 }
+// --- правка учителя (В2): новые навыки из offer — кандидаты решателя с подсказкой 0; только группе А (env HC_TEACH_OFFER от fly.js) ---
+function teachOptions(s) {
+  const offer = (process.env.HC_TEACH_OFFER || '').split(',').filter(Boolean);
+  return offer.filter(n => !(s.blocked && s.blocked['teach:' + n]))
+    .map(n => ({ key: 'teach:' + n, prior: 0, act: { key: 'teach:' + n, kind: 'learned', name: n, params: {}, why: `правка учителя: ${n}` } }));
+}
 const _reset = () => { MEM = null; SEEN.clear(); }; // для тестов
 
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, poolOptions, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, poolOptions, teachOptions, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };

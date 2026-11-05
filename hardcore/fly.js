@@ -26,6 +26,9 @@ const A = {
   pool: arg('pool', ''),  // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
   shared: arg('shared', ''),  // этап 2 (Б10): общая память мух (<папка>/variants.json, experience.json, decider.json); жизнь берёт копию, стенд сливает после мира
   group: arg('group', ''),    // этап 2 (Б11): learn — учащаяся муха, control — контроль (без проб решателя; общей памяти нет — stand не даёт --shared)
+  learned: arg('learned', ''),  // этап 2 (В2): папка навыков группы А (копия brain/learned с правкой учителя); пусто — brain/learned
+  offer: arg('offer', ''),      // этап 2 (В2): новые навыки правки через запятую — кандидаты решателя (только группа А)
+  teach: arg('teach', ''),      // этап 2 (В2): «id:A» или «id:B» — правка учителя и группа мухи; пусто — без правки
   stage2: arg('stage2', '') === '1'   // этап 2 (Б6+): охота и бой — дела решателя, охотник здесь только смотрит
 };
 const ROOT = path.join(__dirname, '..');
@@ -38,12 +41,15 @@ if (A.shared) require('./memory').prepareLife(path.resolve(A.shared), life);   /
 const notes = path.join(life, 'notes.md');
 if (!fs.existsSync(notes)) fs.writeFileSync(notes, '# Заметки\n\nНовый хардкор-мир: базы нет, целей нет.\n');
 
+const [teachId, teachGroup] = A.teach ? A.teach.split(':') : [];   // В2: правка учителя (id) и её группа (A — с правкой, B — без)
 const env = Object.assign({}, process.env, {
   DATA_DIR: dirs.data, FLYBOT_NOTES: notes, FLYBOT_NO_BRAIN: '1', HC_STAND: '1', FLYBOT_LEDGER_LOG: path.join(life, 'inventory.jsonl'),   // журнал сумки: изменения, удары, смерть (lib/ledger.js)
   MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
   ...(A.br ? { HC_BR_PREFIX: A.br } : {}),
   ...(A.shared ? { HC_DECIDER_MEM: path.join(path.resolve(A.shared), 'decider.json') } : {}),   // Б10: таблица решателя (читается раз за жизнь)
+  ...(A.learned ? { RUNNER_LEARNED: path.resolve(A.learned) } : {}),   // В2: навыки группы А — с правкой учителя (бегун читает их отсюда)
+  ...(teachGroup === 'A' && A.offer ? { HC_TEACH_OFFER: A.offer } : {}),   // В2: новые навыки правки — в списке решателя
   ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя
   ...(A.pool ? (A.stage2 ? { HC_POOL: '1' } : { HC_POOL_RUNS: path.resolve(A.pool) }) : {})   // без этапа 2: по HC_POOL_RUNS day_routine_v7 и night_mine_v7 берут навык из пула; на этапе 2 навыки пула — дела решателя (HC_POOL)
 });
@@ -284,7 +290,7 @@ function writeCard(result, extra = {}) {
   const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
   try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
   const card = {
-    nick: A.name, world: A.world, seed: A.seed, result, mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot'), group: A.group || null,
+    nick: A.name, world: A.world, seed: A.seed, result, mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot'), group: A.group || null, teach: teachId || null, teachGroup: teachGroup || null,
     startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), lifeSec,
     gameDays: age0 != null && lastWt != null ? r1((lastWt - age0) / 24000) : null,
     spawnTimeOfDay: tod0, firstNightSurvived: chron.events.some(e => e.kind === 'night_survived'),
