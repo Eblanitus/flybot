@@ -285,7 +285,7 @@ async function runWorld(cfg, n) {
   const bots = [];
   currentBots = bots;
   // Баттл-рояль: каждую муху сразу после входа переносим на её точку (пары в brSpawnMin..brSpawnMax блоков).
-  // spreadplayers с разбросом 0 и радиусом 1 ставит на поверхность у точки — не в воздух и не в камень. Это расстановка стенда,
+  // spreadplayers с разбросом 0 и радиусом 1 ставит на поверхность у точки — не в воздух и не в камень; у воды — новая точка (см. onSpread). Это расстановка стенда,
   // а не вмешательство: команды пишутся в строку мира (brSpawn), а не в consoleCommands.
   if (isBr(cfg)) {
     const BR = require('./br');
@@ -294,33 +294,49 @@ async function runWorld(cfg, n) {
     if (!sp.ok) log(`мир ${id}: ${cfg.bots} мух не расставить так, чтобы все пары были в ${cfg.brSpawnMin}–${cfg.brSpawnMax} блоках — беру лучшую найденную расстановку`);
     const byPoint = {};   // «x z» → ник: ответ сервера на spreadplayers называет точку, а не муху
     sp.points.forEach((pt, i) => { const nick = nickOf(cfg, i + 1); w.brSpawn.points[nick] = pt; byPoint[`${pt.x} ${pt.z}`] = nick; });
+    // pt.x/pt.z — исходная точка расстановки, pt.at — куда шлём сейчас (после воды — новая), pt.tries — сколько раз была вода
+    const WIDE = BR.SPREAD_RADII.length - 1;
     const send = (nick, pt) => {
-      try { srv.stdin.write(BR.spreadCmd(pt, nick, pt.tries) + '\n'); return true; }
+      try { srv.stdin.write(BR.spreadCmd(pt.at, nick, pt.wide ? WIDE : 0) + '\n'); return true; }
       catch (e) { log(`мир ${id}: ${nick} не расставлен: ${e.message}`); return false; }
     };
     const onJoin = l => {
       const m = /: ([A-Za-z0-9_]{3,16}) joined the game/.exec(l);
       const pt = m && w.brSpawn.points[m[1]];
       if (!pt || pt.sent) return;
-      pt.sent = true; pt.tries = 0;
+      pt.sent = true; pt.tries = 0; pt.at = { x: pt.x, z: pt.z };
       if (send(m[1], pt)) log(`мир ${id}: ${m[1]} → ${pt.x} ${pt.z}`);
     };
-    // Сервер не нашёл суши у точки (вода) — та же точка с радиусом шире; без этого муха остаётся у точки появления мира, в куче с другими
+    // Сервер не нашёл суши у точки (вода) — хозяин 05.11: не искать рядом, а перебросить на новую случайную точку
+    // на том же расстоянии от центра; после REPICK_MAX водных точек — последний раз ищем сушу в широком радиусе.
     const onSpread = l => {
       const s = BR.parseSpread(l);
       const nick = s && byPoint[`${s.x} ${s.z}`], pt = nick && w.brSpawn.points[nick];
       if (!pt || !pt.sent || pt.placed || pt.failed) return;
+      if (s.x !== pt.at.x || s.z !== pt.at.z) return;   // ответ на старую точку
       if (s.ok) {
         pt.placed = true;
-        if (pt.tries) log(`мир ${id}: ${nick} поставлен в ${BR.SPREAD_RADII[pt.tries]} блоках от точки ${pt.x} ${pt.z}`);
+        if (pt.tries) log(`мир ${id}: ${nick} поставлен ${pt.wide ? `в ${BR.SPREAD_RADII[WIDE]} блоках от` : 'на новую точку'} ${pt.at.x} ${pt.at.z} (водных точек до этого: ${pt.tries})`);
         return;
       }
-      if (++pt.tries >= BR.SPREAD_RADII.length) {
+      pt.tries++;
+      if (pt.wide) {
         pt.failed = true;
-        log(`мир ${id}: ${nick} не поставлен — в ${BR.SPREAD_RADII[BR.SPREAD_RADII.length - 1]} блоках от ${pt.x} ${pt.z} нет суши, остался у точки появления мира`);
+        log(`мир ${id}: ${nick} не поставлен — водных точек: ${pt.tries}, остался у точки появления мира`);
         return;
       }
-      log(`мир ${id}: ${nick} — у ${pt.x} ${pt.z} нет суши, пробую в ${BR.SPREAD_RADII[pt.tries]} блоках`);
+      if (pt.tries > BR.REPICK_MAX) {
+        pt.wide = true;
+        log(`мир ${id}: ${nick} — ${BR.REPICK_MAX} новых точек и все в воде, ищу сушу в ${BR.SPREAD_RADII[WIDE]} блоках от ${pt.at.x} ${pt.at.z}`);
+        send(nick, pt);
+        return;
+      }
+      const others = Object.entries(w.brSpawn.points).filter(([n]) => n !== nick).map(([, o]) => o.at || o);
+      let q = BR.repickPoint({ x: pt.x, z: pt.z }, others, { min: cfg.brSpawnMin });
+      while (byPoint[`${q.x} ${q.z}`]) q = { x: q.x + 1, z: q.z };   // ответ сервера узнаём по точке — она должна быть своя
+      byPoint[`${q.x} ${q.z}`] = nick;
+      log(`мир ${id}: ${nick} — у ${pt.at.x} ${pt.at.z} вода, перебрасываю на ${q.x} ${q.z} (попытка ${pt.tries + 1})`);
+      pt.at = q;
       send(nick, pt);
     };
     for (const l of srv.lines.slice()) { onJoin(l); onSpread(l); }   // вошёл раньше, чем мы начали слушать

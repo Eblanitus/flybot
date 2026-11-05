@@ -37,6 +37,18 @@ const L = require('../hardcore/lib');
   assert.deepStrictEqual(BR.parseSpread('[..]: Spread 1 entity/entities around 65.5, -136.5 with an average distance of 0.00 block(s) apart'), { ok: true, x: 65, z: -137 });
   assert.strictEqual(BR.parseSpread('[..]: got: spreadplayers 1 2 0 1 false HC_1'), null);
   assert.strictEqual(BR.parseSpread('HC_1 joined the game'), null);
+  // 05.11: вода у точки — новая точка на том же расстоянии от центра, не ближе min к другим мухам
+  {
+    const orig = { x: 300, z: -400 }, others = [{ x: -500, z: 0 }, { x: 0, z: 600 }];
+    for (let k = 0; k < 50; k++) {
+      const q = BR.repickPoint(orig, others, { min: 300 });
+      assert(Math.abs(Math.hypot(q.x, q.z) - 500) < 1.5, 'то же расстояние: ' + JSON.stringify(q));
+      assert(others.every(o => Math.hypot(o.x - q.x, o.z - q.z) >= 300), 'не ближе 300 к другим: ' + JSON.stringify(q));
+    }
+    const c = BR.repickPoint({ x: 10, z: 0 }, [], { minR: 150 });
+    assert(Math.abs(Math.hypot(c.x, c.z) - 150) < 1.5, 'у самого центра — не ближе minR');
+    assert(BR.REPICK_MAX >= 5 && BR.REPICK_MAX <= 50);
+  }
 }
 // кто кого убил
 assert.deepStrictEqual(BR.parseKill('HC_2 was slain by HC_4 using Stone Sword'), { victim: 'HC_2', killer: 'HC_4' });

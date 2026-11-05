@@ -52,6 +52,24 @@ function pairError(pts, min, max) {
 // у точки появления мира — вместе с другими такими же (05.11: в мире 210036 так вышло у 9 мух из 10). Тогда та же точка
 // с радиусом шире: попытка tryN берёт SPREAD_RADII[tryN]. Пары мух при этом могут сдвинуться на радиус — это лучше, чем куча у спавна.
 const SPREAD_RADII = [1, 24, 64, 160, 400];
+// 05.11 хозяин: у точки вода — не искать сушу рядом, а перебросить муху на новую случайную точку на том же расстоянии
+// от центра расстановки (случайный угол). До REPICK_MAX новых точек; если всё вода — последний раз ищем сушу
+// в широком радиусе (SPREAD_RADII[последний]), иначе муха осталась бы в куче у точки появления мира.
+const REPICK_MAX = 20;
+// Новая точка вместо водной: то же расстояние от (cx, cz), что у исходной (не меньше minR — у самого центра «то же
+// расстояние» почти та же точка), случайный угол. Берём первую, что не ближе min к остальным мухам; нет такой — самую дальнюю от них.
+function repickPoint(orig, others = [], { min = 300, cx = 0, cz = 0, minR = 150, rand = Math.random, tries = 40 } = {}) {
+  const r = Math.max(Math.hypot(orig.x - cx, orig.z - cz), minR);
+  let best = null, bestD = -1;
+  for (let j = 0; j < tries; j++) {
+    const a = rand() * Math.PI * 2;
+    const q = { x: Math.round(cx + Math.cos(a) * r), z: Math.round(cz + Math.sin(a) * r) };
+    const d = others.length ? Math.min(...others.map(o => Math.hypot(o.x - q.x, o.z - q.z))) : Infinity;
+    if (d >= min) return q;
+    if (d > bestD) { best = q; bestD = d; }
+  }
+  return best;
+}
 const spreadCmd = (pt, nick, tryN = 0) => `spreadplayers ${pt.x} ${pt.z} 0 ${SPREAD_RADII[Math.min(tryN, SPREAD_RADII.length - 1)]} false ${nick}`;
 // Ответ сервера на spreadplayers одной мухи → { ok, x, z } (x, z — точка, как её передал стенд; сервер пишет центр блока X.5), иначе null
 function parseSpread(line) {
@@ -137,4 +155,4 @@ function farLeg(pos, m) {
   return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
 }
 
-module.exports = { spawnPoints, pairError, SPREAD_RADII, spreadCmd, parseSpread, parseKill, isFly, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };
+module.exports = { spawnPoints, pairError, SPREAD_RADII, REPICK_MAX, repickPoint, spreadCmd, parseSpread, parseKill, isFly, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };
