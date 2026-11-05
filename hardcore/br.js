@@ -57,18 +57,23 @@ const SPREAD_RADII = [1, 24, 64, 160, 400];
 // в широком радиусе (SPREAD_RADII[последний]), иначе муха осталась бы в куче у точки появления мира.
 const REPICK_MAX = 20;
 // Новая точка вместо водной: то же расстояние от (cx, cz), что у исходной (не меньше minR — у самого центра «то же
-// расстояние» почти та же точка), случайный угол. Берём первую, что не ближе min к остальным мухам; нет такой — самую дальнюю от них.
-function repickPoint(orig, others = [], { min = 300, cx = 0, cz = 0, minR = 150, rand = Math.random, tries = 40 } = {}) {
+// расстояние» почти та же точка), случайный угол. Точка должна быть не ближе moveMin к той, что оказалась в воде (from;
+// 05.11 хозяин: бросок должен быть настоящим, а не на 50 блоков), и по возможности не ближе min к остальным мухам;
+// нет такой — самая дальняя от них. Не нашлось и дальней от воды — самая дальняя от воды.
+function repickPoint(orig, others = [], { min = 300, moveMin = min, from = orig, cx = 0, cz = 0, minR = 150, rand = Math.random, tries = 300 } = {}) {
   const r = Math.max(Math.hypot(orig.x - cx, orig.z - cz), minR);
-  let best = null, bestD = -1;
+  let best = null, bestD = -1, far = null, farMoved = -1;
   for (let j = 0; j < tries; j++) {
     const a = rand() * Math.PI * 2;
     const q = { x: Math.round(cx + Math.cos(a) * r), z: Math.round(cz + Math.sin(a) * r) };
+    const moved = Math.hypot(q.x - from.x, q.z - from.z);
+    if (moved > farMoved) { far = q; farMoved = moved; }
+    if (moved < moveMin) continue;
     const d = others.length ? Math.min(...others.map(o => Math.hypot(o.x - q.x, o.z - q.z))) : Infinity;
     if (d >= min) return q;
     if (d > bestD) { best = q; bestD = d; }
   }
-  return best;
+  return best || far;
 }
 const spreadCmd = (pt, nick, tryN = 0) => `spreadplayers ${pt.x} ${pt.z} 0 ${SPREAD_RADII[Math.min(tryN, SPREAD_RADII.length - 1)]} false ${nick}`;
 // Ответ сервера на spreadplayers одной мухи → { ok, x, z } (x, z — точка, как её передал стенд; сервер пишет центр блока X.5), иначе null

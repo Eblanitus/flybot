@@ -341,7 +341,7 @@ async function runWorld(cfg, n) {
         return;
       }
       const others = Object.entries(w.brSpawn.points).filter(([n]) => n !== nick).map(([, o]) => o.at || o);
-      let q = BR.repickPoint({ x: pt.x, z: pt.z }, others, { min: cfg.brSpawnMin });
+      let q = BR.repickPoint({ x: pt.x, z: pt.z }, others, { min: cfg.brSpawnMin, from: pt.at });   // не ближе brSpawnMin к водной точке и к другим мухам
       while (byPoint[`${q.x} ${q.z}`]) q = { x: q.x + 1, z: q.z };   // ответ сервера узнаём по точке — она должна быть своя
       byPoint[`${q.x} ${q.z}`] = nick;
       log(`мир ${id}: ${nick} — у ${pt.at.x} ${pt.at.z} вода, перебрасываю на ${q.x} ${q.z} (попытка ${pt.tries + 1})`);
