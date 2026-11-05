@@ -47,6 +47,19 @@ function pairError(pts, min, max) {
   return e;
 }
 
+// Перенос мухи на её точку: spreadplayers с разбросом 0 ищет сушу в квадрате ±радиус вокруг точки. Если там только вода
+// (большие океаны large_biomes), сервер отвечает «Could not spread 1 entity/entities around X.5, Z.5», и муха остаётся
+// у точки появления мира — вместе с другими такими же (05.11: в мире 210036 так вышло у 9 мух из 10). Тогда та же точка
+// с радиусом шире: попытка tryN берёт SPREAD_RADII[tryN]. Пары мух при этом могут сдвинуться на радиус — это лучше, чем куча у спавна.
+const SPREAD_RADII = [1, 24, 64, 160, 400];
+const spreadCmd = (pt, nick, tryN = 0) => `spreadplayers ${pt.x} ${pt.z} 0 ${SPREAD_RADII[Math.min(tryN, SPREAD_RADII.length - 1)]} false ${nick}`;
+// Ответ сервера на spreadplayers одной мухи → { ok, x, z } (x, z — точка, как её передал стенд; сервер пишет центр блока X.5), иначе null
+function parseSpread(line) {
+  const m = /(Could not spread|Spread) 1 entit\w*\/entit\w* around (-?\d+(?:\.\d+)?), (-?\d+(?:\.\d+)?)/.exec(String(line || ''));
+  if (!m) return null;
+  return { ok: m[1] === 'Spread', x: Math.floor(Number(m[2])), z: Math.floor(Number(m[3])) };
+}
+
 // Сообщение о смерти → { victim, killer } если смерть засчитана мухе (ник с префиксом), иначе null.
 // Ванильные формы: «A was slain by B», «A was shot by B using …», «A didn't want to live in the same world as B»,
 // «A drowned whilst trying to escape B», «A was doomed to fall by B»… Жертва — первое слово, убийца — последняя другая муха в тексте.
@@ -121,4 +134,4 @@ function farLeg(pos, m) {
   return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
 }
 
-module.exports = { spawnPoints, pairError, parseKill, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };
+module.exports = { spawnPoints, pairError, SPREAD_RADII, spreadCmd, parseSpread, parseKill, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };

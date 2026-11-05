@@ -140,6 +140,13 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     assert(props2.includes('view-distance=20'), 'view-distance=20 в баттл-рояле');
     for (const w of worlds) assert(w.br && w.brSpawn && w.brSpawn.points.HC_1 && w.brSpawn.points.HC_1.sent, JSON.stringify(w.brSpawn));
     assert(/got: spreadplayers -?\d+ -?\d+ 0 1 false HC_1/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', worlds[0].id, 'server.log'), 'utf8')), 'расстановка ушла в сервер');
+    // 05.11: у точки нет суши — сервер «Could not spread», стенд пробует ту же точку с радиусом шире (иначе муха остаётся в куче у спавна)
+    for (const w of worlds) {
+      const p1 = w.brSpawn.points.HC_1, p2 = w.brSpawn.points.HC_2;
+      assert(p1.placed && p1.tries === 0, 'HC_1 поставлен с первого раза: ' + JSON.stringify(p1));
+      assert(p2.placed && p2.tries === 1 && !p2.failed, 'HC_2 поставлен со второй попытки: ' + JSON.stringify(p2));
+      assert(new RegExp(`got: spreadplayers ${p2.x} ${p2.z} 0 24 false HC_2`).test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', w.id, 'server.log'), 'utf8')), 'повтор с радиусом 24');
+    }
     assert(!fs.existsSync(path.join(s.srv, 'hc_world')), 'мир ушёл в архив');
     const arch = fs.readdirSync(s.cfg.archiveDir).sort();
     assert.strictEqual(arch.filter(n => L.WORLD_ID_RE.test(n)).length, 2, arch.join(','));

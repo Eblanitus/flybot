@@ -268,20 +268,44 @@ async function runWorld(cfg, n) {
   // spreadplayers с разбросом 0 и радиусом 1 ставит на поверхность у точки — не в воздух и не в камень. Это расстановка стенда,
   // а не вмешательство: команды пишутся в строку мира (brSpawn), а не в consoleCommands.
   if (isBr(cfg)) {
-    const sp = require('./br').spawnPoints(cfg.bots, { min: cfg.brSpawnMin, max: cfg.brSpawnMax });
+    const BR = require('./br');
+    const sp = BR.spawnPoints(cfg.bots, { min: cfg.brSpawnMin, max: cfg.brSpawnMax });
     w.brSpawn = { ok: sp.ok, points: {} };
     if (!sp.ok) log(`мир ${id}: ${cfg.bots} мух не расставить так, чтобы все пары были в ${cfg.brSpawnMin}–${cfg.brSpawnMax} блоках — беру лучшую найденную расстановку`);
-    sp.points.forEach((pt, i) => { w.brSpawn.points[`${cfg.botPrefix}${i + 1}`] = pt; });
+    const byPoint = {};   // «x z» → ник: ответ сервера на spreadplayers называет точку, а не муху
+    sp.points.forEach((pt, i) => { const nick = `${cfg.botPrefix}${i + 1}`; w.brSpawn.points[nick] = pt; byPoint[`${pt.x} ${pt.z}`] = nick; });
+    const send = (nick, pt) => {
+      try { srv.stdin.write(BR.spreadCmd(pt, nick, pt.tries) + '\n'); return true; }
+      catch (e) { log(`мир ${id}: ${nick} не расставлен: ${e.message}`); return false; }
+    };
     const onJoin = l => {
       const m = /: ([A-Za-z0-9_]{3,16}) joined the game/.exec(l);
       const pt = m && w.brSpawn.points[m[1]];
       if (!pt || pt.sent) return;
-      pt.sent = true;
-      try { srv.stdin.write(`spreadplayers ${pt.x} ${pt.z} 0 1 false ${m[1]}\n`); log(`мир ${id}: ${m[1]} → ${pt.x} ${pt.z}`); }
-      catch (e) { log(`мир ${id}: ${m[1]} не расставлен: ${e.message}`); }
+      pt.sent = true; pt.tries = 0;
+      if (send(m[1], pt)) log(`мир ${id}: ${m[1]} → ${pt.x} ${pt.z}`);
     };
-    for (const l of srv.lines.slice()) onJoin(l);   // вошёл раньше, чем мы начали слушать
+    // Сервер не нашёл суши у точки (вода) — та же точка с радиусом шире; без этого муха остаётся у точки появления мира, в куче с другими
+    const onSpread = l => {
+      const s = BR.parseSpread(l);
+      const nick = s && byPoint[`${s.x} ${s.z}`], pt = nick && w.brSpawn.points[nick];
+      if (!pt || !pt.sent || pt.placed || pt.failed) return;
+      if (s.ok) {
+        pt.placed = true;
+        if (pt.tries) log(`мир ${id}: ${nick} поставлен в ${BR.SPREAD_RADII[pt.tries]} блоках от точки ${pt.x} ${pt.z}`);
+        return;
+      }
+      if (++pt.tries >= BR.SPREAD_RADII.length) {
+        pt.failed = true;
+        log(`мир ${id}: ${nick} не поставлен — в ${BR.SPREAD_RADII[BR.SPREAD_RADII.length - 1]} блоках от ${pt.x} ${pt.z} нет суши, остался у точки появления мира`);
+        return;
+      }
+      log(`мир ${id}: ${nick} — у ${pt.x} ${pt.z} нет суши, пробую в ${BR.SPREAD_RADII[pt.tries]} блоках`);
+      send(nick, pt);
+    };
+    for (const l of srv.lines.slice()) { onJoin(l); onSpread(l); }   // вошёл раньше, чем мы начали слушать
     srv.on('line', onJoin);
+    srv.on('line', onSpread);
   }
   if (teachId(cfg) && !teachDone(cfg)) { // В2: папка навыков группы А — копия brain/learned и правка учителя поверх (hardcore/teach/<id>/learned)
     const tid = teachId(cfg), over = TEACH.buildLearned(path.join(HERE, '..', 'brain', 'learned'), path.join(HERE, 'teach', tid, 'learned'), path.join(cfg.dataDir, 'teach', tid, 'learned'));
