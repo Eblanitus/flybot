@@ -2076,6 +2076,11 @@ function create(ctx) {
       const st = gather(ctx, ap);
       const out = process.env.HC_STAGE2 ? {} : null;
       let act = decide(st, out);
+      if (out && process.env.HC_REFLEX) { // этап 2, учащиеся мухи: правила автопилота — не рефлексы, а дела общего списка (хозяин 05.11)
+        const RXM = require(process.env.HC_REFLEX);
+        if (act && !out.cands && !out.urgent) act = ap.running ? null : RXM.collectRules(decide, st, act, out); // идущее дело правило больше не прерывает
+        if (out.cands) out.cands.push(...RXM.skillCands(st)); // поесть — дело списка (раньше автоеда)
+      }
       if (out) act = require('../hardcore/decider').choose(ctx, st, act, out); // этап 2: один решатель
       // простой страшнее смерти: сколько автопилот уже «ждёт» при свободном теле (s.waitSec в decide — потолок apWaitMaxSec)
       ap.waitSince = !act && st.idle && !st.task && !st.runnerOther && !ap.running ? (ap.waitSince || now) : 0;
