@@ -224,6 +224,10 @@ module.exports = async () => {
     try {
       const seen = new Set();
       let foreign = 0;
+      // зерно для Math.random: проба и выбор новичка идут от него. Без зерна проверка «не меньше 4 разных» падала примерно в одном прогоне из шести (14 запусков, проба 30%)
+      const realRandom = Math.random;
+      let seedState = 20260411 >>> 0;
+      Math.random = () => { seedState = (seedState + 0x6D2B79F5) >>> 0; let t = seedState; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
       for (let i = 0; i < 14; i++) {
         h = fakeBody({});   // пустая сумка: дело «дерево»
         r = await day.run(h.api, { max_sec: 20 });
@@ -231,6 +235,7 @@ module.exports = async () => {
         if (r.pool) { assert.strictEqual(r.ok, true, 'чужой навык: автопилоту ok, настоящий итог в pool.ok'); assert.strictEqual(typeof r.pool.ok, 'boolean'); foreign++; }
         else assert.strictEqual(r.did, 'day_routine_v6', 'родной навык: итог как есть');
       }
+      Math.random = realRandom;
       assert(foreign > 0);
       const lines = fs.readFileSync(process.env.HC_POOL_RUNS, 'utf8').trim().split('\n').map(l => JSON.parse(l));
       assert.strictEqual(lines.length, 14);
