@@ -247,7 +247,8 @@ module.exports = async () => {
       assert.strictEqual([...st.values()].reduce((s, x) => s + x.runs, 0), 14);
       // ночь: с мечом иногда бой, иначе ночные навыки
       h = fakeBody({ stone_sword: 1, stone_pickaxe: 1 });
-      await night.run(h.api, {});
+      // потолок 20 с: чужой навык (например v2.exploreCave) может крутиться до потолка; без него тест шёл 300 с и упирался в таймаут прогона
+      await night.run(h.api, { max_sec: 20 });
       const last = JSON.parse(fs.readFileSync(process.env.HC_POOL_RUNS, 'utf8').trim().split('\n').pop());
       assert(['night', 'combat'].includes(last.delo), last.delo);
     } finally {
