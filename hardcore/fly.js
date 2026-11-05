@@ -24,7 +24,7 @@ const A = {
   ctlBase: +arg('ctlBase', 3310), runnerBase: +arg('runnerBase', 3410), joinSec: +arg('joinSec', 120),
   br: arg('br', ''),   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
   pool: arg('pool', ''),  // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
-  shared: arg('shared', ''),  // этап 2 (Б10): общая память мух (<папка>/variants.json, experience.json, decider.json); жизнь берёт копию, стенд сливает после мира
+  shared: arg('shared', ''),  // этап 2 (Б10): общая память мух (<папка>/variants.json, experience.json, decider_v2.json); жизнь берёт копию, стенд сливает после мира
   group: arg('group', ''),    // этап 2 (Б11): learn — учащаяся муха, control — контроль (без проб решателя; общей памяти нет — stand не даёт --shared)
   learned: arg('learned', ''),  // этап 2 (В2): папка навыков группы А (копия brain/learned с правкой учителя); пусто — brain/learned
   offer: arg('offer', ''),      // этап 2 (В2): новые навыки правки через запятую — кандидаты решателя (только группа А)
@@ -48,7 +48,7 @@ const env = Object.assign({}, process.env, {
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
   RUNNER_NO_VERSIONS: '1',   // навыки общие и из git: бегун не делает версий из своей истории и не берёт уже сделанные копии навыков стенда (разбор 2-го мира: старый hc_night_mine_v1 без починки)
   ...(A.br ? { HC_BR_PREFIX: A.br } : {}),
-  ...(A.shared ? { HC_DECIDER_MEM: path.join(path.resolve(A.shared), 'decider.json') } : {}),   // Б10: таблица решателя (читается раз за жизнь)
+  ...(A.shared ? { HC_DECIDER_MEM: path.join(path.resolve(A.shared), require('./memory').DECIDER_FILE) } : {}),   // Б10: таблица решателя (читается раз за жизнь; файл по версии очков)
   ...(A.learned ? { RUNNER_LEARNED: path.resolve(A.learned) } : {}),   // В2: навыки группы А — с правкой учителя (бегун читает их отсюда)
   ...(teachGroup === 'A' && A.offer ? { HC_TEACH_OFFER: A.offer } : {}),   // В2: новые навыки правки — в списке решателя
   ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя

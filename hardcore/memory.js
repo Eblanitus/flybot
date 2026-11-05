@@ -4,6 +4,9 @@
 'use strict';
 const fs = require('fs'), path = require('path');
 const FILES = ['variants.json', 'experience.json'];
+// таблица решателя: оценки дел — очки жизни, поэтому файл по версии формулы очков (hardcore/points.js VER). Хозяин 06.11:
+// опыт по старым очкам (decider.json, смерть = 0) не смешиваем с новыми — он остаётся на диске, мухи учатся заново в decider_v2.json
+const DECIDER_FILE = `decider_v${require('./points').VER}.json`;
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return d; } };
 const writeJson = (f, o) => { const tmp = f + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(o)); fs.renameSync(tmp, f); };
 // сумма без хвостов float (0.1 + 0.2 → 0.3); целые — как есть
@@ -57,8 +60,8 @@ function mergeLife(sharedDir, lifeDir) {
   }
   let rows = [];
   try { rows = fs.readFileSync(path.join(lifeDir, 'deeds.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch (e) {}
-  const memF = path.join(sharedDir, 'decider.json');
+  const memF = path.join(sharedDir, DECIDER_FILE);
   writeJson(memF, foldDeeds(readJson(memF, { exact: {}, coarse: {} }), rows));
   return rows.length;
 }
-module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
+module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES, DECIDER_FILE };
