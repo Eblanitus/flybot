@@ -89,6 +89,7 @@ function choose(ctx, s, act, out) {
   const opts = out.cands.map(c => ({ key: c.act.key, prior: c.score / 100, act: c.act }));
   const h = huntOption(ctx, s); // Б6: охота — дело в общем списке (не при блокировке hunt_go)
   if (h && !(s.blocked && s.blocked.hunt_go)) opts.push(h);
+  opts.push(...poolOptions(ctx, s)); // Б8: навыки пула дела — в том же списке (пусто без HC_POOL)
   if (!opts.length) return tag(act);
   const st = statsFor(memory(), sit);
   const rate = process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st)); // пробы везде: муху никак не ограничиваем (хозяин 05.11)
@@ -118,6 +119,20 @@ function huntOption(ctx, s, bar) { // bar — панель локатора; в 
     params: { x: leg.x, z: leg.z, r: 4, timeout: 60, label: `к мухе ${tgt.name}`, fail: `не дошла до ${tgt.name}` },
     why: `иду к ${tgt.name} (${tgt.d === BR.FAR_D ? 'далеко' : tgt.d + ' м'})` } };
 }
+// --- пул (Б8): навыки пула дела — кандидаты решателя с подсказкой 0; новичков пробуем первыми, дальше — их средние очки ---
+// включён только с HC_POOL (его ставит fly.js на этапе 2 при --pool); сумка и сытость — из тела, дело — как в deloOf
+function poolOptions(ctx, s) {
+  if (!process.env.HC_POOL) return [];
+  const bot = ctx.bot;
+  if (!bot || !bot.inventory) return [];
+  const POOL = require('./pool/run.js');
+  const snap = { inventory: bot.inventory.items().map(i => ({ name: i.name, count: i.count })), food: bot.food,
+    armor: [5, 6, 7, 8].map(i => bot.inventory.slots[i]).filter(Boolean).map(i => i.name), eyes: { blocks: {} } };
+  const delo = POOL.deloOf(snap, s.isNight ? 'night' : 'day');
+  return POOL.candidates(delo, null).filter(c => !c.native && !(s.blocked && s.blocked['pool:' + c.id]))
+    .map(c => ({ key: 'pool:' + c.id, prior: 0, act: { key: 'pool:' + c.id, kind: 'learned', name: 'pool_run',
+      params: { id: c.id, delo, max_sec: 300 }, why: `пул: ${c.id} (дело ${delo})` } }));
+}
 const _reset = () => { MEM = null; SEEN.clear(); }; // для тестов
 
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, poolOptions, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };

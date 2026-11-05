@@ -252,5 +252,6 @@ module.exports = async () => {
   }
   console.log(`hardcore_pool: ok (${ok}/${results.length} чужих навыков удались на поддельном теле)`);
 };
+module.exports.world = world; module.exports.fakeBody = fakeBody; module.exports.RICH = RICH; // для test/hardcore_pool_run.js (Б8)
 
 if (require.main === module) module.exports().catch(e => { console.error(e); process.exit(1); });

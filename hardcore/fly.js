@@ -40,7 +40,7 @@ const env = Object.assign({}, process.env, {
   MC_VERSION: A.version, RUNNER_URL: `http://127.0.0.1:${RUN}`,
   RUNNER_PORT: String(RUN), BODY_URL: `http://127.0.0.1:${CTL}`, RUNNER_DATA: dirs.runner, RUNNER_LEARNED: path.join(ROOT, 'brain', 'learned'),
   ...(A.br ? { HC_BR_PREFIX: A.br } : {}),
-  ...(A.pool ? { HC_POOL_RUNS: path.resolve(A.pool) } : {})   // по нему day_routine_v7 и night_mine_v7 берут навык из пула
+  ...(A.pool ? (A.stage2 ? { HC_POOL: '1' } : { HC_POOL_RUNS: path.resolve(A.pool) }) : {})   // без этапа 2: по HC_POOL_RUNS day_routine_v7 и night_mine_v7 берут навык из пула; на этапе 2 навыки пула — дела решателя (HC_POOL)
 });
 const kids = [];
 function run(name, file, args) {
