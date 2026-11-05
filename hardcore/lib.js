@@ -142,6 +142,7 @@ function makeChronicle(max = 300) {
   return {
     events,
     note: push,
+    nights: () => nights,
     observe(f) {
       if (f.wt == null) return;
       const tod = ((f.wt % 24000) + 24000) % 24000, day = Math.floor(f.wt / 24000) + 1;

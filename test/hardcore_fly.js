@@ -42,5 +42,12 @@ assert.deepStrictEqual(L.stepsNow({ inv: { stone_pickaxe: 1, stone_sword: 1 }, t
   const life = path.join(dir, 'HC_7.fly');
   assert(fs.existsSync(path.join(life, 'notes.md')) && fs.existsSync(path.join(life, 'data')) && fs.existsSync(path.join(life, 'runner')));
   assert(/ступень 1/.test(log), log);
+  // очки жизни (этап 2, А3): каждая ступень из лестницы (1–5) — +1; одно провалившееся дело круга не даёт
+  assert(c.pointsTotal >= 1, JSON.stringify(c.points));
+  assert.strictEqual(c.pointsTotal, c.points.total);
+  const stepsInLadder = Object.keys(c.ladder).map(Number).filter(n => n <= 5).length;
+  assert.strictEqual(c.points.byKind.step, stepsInLadder, JSON.stringify(c.points));
+  assert.strictEqual(c.points.byKind.cycle, undefined, 'один провал — круга нет');
+  assert(/очков \d+/.test(log), log);
   console.log('hardcore_fly: ok');
 })().catch(e => { console.error(e); process.exit(1); });

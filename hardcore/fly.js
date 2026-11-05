@@ -15,6 +15,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 const L = require('./lib');
 const BR = require('./br');
+const P = require('./points');
 
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : d; };
 const A = {
@@ -72,7 +73,9 @@ const t0 = Date.now();
 const frames = [], chat = [];
 const chron = L.makeChronicle();
 const ladder = L.makeLadder();
+const pts = P.makePoints();   // очки жизни (этап 2, А1–А3): ступени, ночи, убийства, простой, круг провалов
 let spawned = false, written = false, age0 = null, tod0 = null, wtStart = null, lastWt = null, lastSnap = null, evSince = 0, lowNoHealSec = 0;
+let ptsNights = 0;
 let lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, everTable = false, wasClosed = false;
 const exits = [], acts = {}, lastDeath = { msg: null };
 // баттл-рояль: свои убийства, кто убил меня, охота (что видели на локаторе, наша текущая команда, счёт решений)
@@ -111,6 +114,7 @@ async function readEvents() {
     }
     if (e.type === 'info' && typeof d.msg === 'string' && /^съел /.test(d.msg)) eats++;   // автоеда тела (behavior/reflexes.js)
     if (e.type === 'death') lastDeath.msg = d.message || d.cause || null;
+    if (e.type === 'deed' && (d.verdict === 'ok' || d.verdict === 'провал')) pts.deed(d.key, d.verdict === 'ok', Math.round((Date.now() - t0) / 1000));
     if (e.type === 'chat' || e.type === 'system') {
       const m = String(d.msg || d.text || d.message || '');
       if (m.includes(A.name)) { chat.push(m.slice(0, 200)); while (chat.length > 20) chat.shift(); }
@@ -128,6 +132,7 @@ function noteKill(m) {
   if (k.killer === A.name) {
     const weapon = BR.weaponOf(lastSnap && lastSnap.heldItem);
     kills.push({ victim: k.victim, lifeSec: Math.round((Date.now() - t0) / 1000), wt: lastWt, weapon, hp: lastSnap ? r1(lastSnap.health || 0) : null, inv: invOf(lastSnap) });
+    pts.kill(weapon, Math.round((Date.now() - t0) / 1000), k.victim);
     chron.note(lastWt, 'kill', `убил ${k.victim} (${weapon === 'fist' ? 'кулаком' : weapon})`);
     console.log(`[fly] ${A.name}: убил ${k.victim}, всего ${kills.length}`);
   } else if (k.victim === A.name) killedBy = k.killer;
@@ -251,11 +256,14 @@ async function tick() {
     lowest.hp = Math.min(lowest.hp, f.hp); if (f.food != null) lowest.food = Math.min(lowest.food, f.food);
     if (f.hp < 10 && f.food != null && f.food < 18) lowNoHealSec++;
     chron.observe(f);
+    while (ptsNights < chron.nights()) { ptsNights++; pts.night(f.t); } // пережил ночь → +1
+    const tod = f.tod == null ? null : ((f.tod % 24000) + 24000) % 24000;
+    pts.frame({ t: f.t, day: tod != null && !(tod >= 13000 && tod < 23000), pos: f.pos, inv: invOf(s) });
     // выход из укрытия (8.1): было закрыто со всех сторон — стало открыто; HP и сытость в этот момент — в карточку
     const closed = !!(s.sheltered && s.sheltered.closed);
     if (wasClosed && !closed) { exits.push({ lifeSec: f.t, wt: f.wt, hp: f.hp, food: f.food }); chron.note(f.wt, 'leave', `вышел: HP ${f.hp}, сытость ${f.food}`); }
     wasClosed = closed;
-    for (const n of ladder.update(situation(s), f.t, f.wt)) { chron.note(f.wt, 'stage', `ступень ${n}: ${L.STEP_TEXT[n]}`); console.log(`[fly] ${A.name}: ступень ${n} — ${L.STEP_TEXT[n]}`); }
+    for (const n of ladder.update(situation(s), f.t, f.wt)) { if (n <= 5) pts.step(n, f.t); chron.note(f.wt, 'stage', `ступень ${n}: ${L.STEP_TEXT[n]}`); console.log(`[fly] ${A.name}: ступень ${n} — ${L.STEP_TEXT[n]}`); }
     await readEvents();
     if (A.br && f.hp > 0 && s.gameMode !== 'spectator') await huntTick(s, f).catch(e => console.error('[fly] охотник:', e.message));
     if (s.gameMode === 'spectator' || f.hp <= 0) {
@@ -283,11 +291,12 @@ function writeCard(result, extra = {}) {
     deathSoonAfterExit: result === 'death' && !!last && lifeSec - last.lifeSec <= 60,
     autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null,
     invLast: invOf(aliveSnap), handLast: aliveSnap && aliveSnap.heldItem ? (aliveSnap.heldItem.name || aliveSnap.heldItem) : null,
+    points: pts.toJSON(), pointsTotal: pts.total,
     ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, legs: hunt.legs, lastWhy: hunt.why } } : {}),
     ...extra
   };
   try { fs.writeFileSync(A.out, JSON.stringify(card, null, 1)); } catch (e) { console.error('карточка не записана:', e.message); }
-  console.log(`[fly] ${A.name}: ${result}, ${lifeSec} с, высшая ступень ${ladder.top()}${A.br ? `, убийств ${kills.length}` : ''}`);
+  console.log(`[fly] ${A.name}: ${result}, ${lifeSec} с, высшая ступень ${ladder.top()}${A.br ? `, убийств ${kills.length}` : ''}, очков ${pts.total}`);
 }
 function finish(result, extra) {
   writeCard(result, extra);
