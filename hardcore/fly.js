@@ -75,6 +75,7 @@ const frames = [], chat = [];
 const chron = L.makeChronicle();
 const ladder = L.makeLadder();
 const pts = P.makePoints();   // очки жизни (этап 2, А1–А3): ступени, ночи, убийства, простой, круг провалов
+const deeds = [];             // дела жизни (этап 2, Б9): каждое начатое дело с обстановкой; награда — итог жизни (writeCard → deeds.jsonl)
 let spawned = false, written = false, age0 = null, tod0 = null, wtStart = null, lastWt = null, lastSnap = null, evSince = 0, lowNoHealSec = 0;
 let ptsNights = 0;
 let lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, everTable = false, wasClosed = false;
@@ -116,6 +117,7 @@ async function readEvents() {
     if (e.type === 'info' && typeof d.msg === 'string' && /^съел /.test(d.msg)) eats++;   // автоеда тела (behavior/reflexes.js)
     if (e.type === 'death') lastDeath.msg = d.message || d.cause || null;
     if (e.type === 'deed' && (d.verdict === 'ok' || d.verdict === 'провал')) pts.deed(d.key, d.verdict === 'ok', Math.round((Date.now() - t0) / 1000));
+    if (e.type === 'deed_start') deeds.push({ t: Math.round((Date.now() - t0) / 1000), key: d.key, name: d.name, sit: d.sit || null, coarse: d.coarse || null, explore: !!d.explore });
     if (e.type === 'chat' || e.type === 'system') {
       const m = String(d.msg || d.text || d.message || '');
       if (m.includes(A.name)) { chat.push(m.slice(0, 200)); while (chat.length > 20) chat.shift(); }
@@ -271,6 +273,8 @@ function writeCard(result, extra = {}) {
   chron.note(lastWt, result === 'death' ? 'death' : 'end', endText);
   const lifeSec = Math.round((Date.now() - t0) / 1000);
   const last = exits[exits.length - 1];
+  const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
+  try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
   const card = {
     nick: A.name, world: A.world, seed: A.seed, result, mode: A.br ? 'stage1v-br' : 'stage1b-flybot',
     startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), lifeSec,
@@ -283,6 +287,7 @@ function writeCard(result, extra = {}) {
     autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null,
     invLast: invOf(aliveSnap), handLast: aliveSnap && aliveSnap.heldItem ? (aliveSnap.heldItem.name || aliveSnap.heldItem) : null,
     points: pts.toJSON(), pointsTotal: pts.total,
+    deeds: { n: rated.length, explore: rated.filter(x => x.explore).length },
     ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, legs: hunt.legs, lastWhy: hunt.why } } : {}),
     ...extra
   };

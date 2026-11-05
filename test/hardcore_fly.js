@@ -49,5 +49,12 @@ assert.deepStrictEqual(L.stepsNow({ inv: { stone_pickaxe: 1, stone_sword: 1 }, t
   assert.strictEqual(c.points.byKind.step, stepsInLadder, JSON.stringify(c.points));
   assert.strictEqual(c.points.byKind.cycle, undefined, 'один провал — круга нет');
   assert(/очков \d+/.test(log), log);
+  // Б9: дела жизни — deeds.jsonl, одна строка на дело; награда каждого дела = итог жизни (pointsTotal карточки)
+  const deedLines = fs.readFileSync(path.join(life, 'deeds.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.strictEqual(deedLines.length, 1, JSON.stringify(deedLines));
+  assert.strictEqual(deedLines[0].key, 'day_routine');
+  assert.strictEqual(deedLines[0].r, c.pointsTotal, 'награда дела = итог жизни');
+  assert.deepStrictEqual(c.deeds, { n: 1, explore: 0 });
+  console.log('дела жизни: deeds.jsonl, награда = итог жизни: OK');
   console.log('hardcore_fly: ok');
 })().catch(e => { console.error(e); process.exit(1); });
