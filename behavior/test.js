@@ -2,9 +2,11 @@
 // Должна быть быстрой (< 15 с) и бросать исключение, если что-то не так.
 'use strict';
 const assert = require('assert');
-const { decide, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList } = require('./autopilot');
+const { decide: decideAny, escapePause, yieldPlan, isBrainYield, verdictOf, brainHoldsBody, failPause, isCodeCrash, crashList } = require('./autopilot');
 const R = require('./reflexes');
 const T = require('./thresholds');
+// этап 2 (HC_STAGE2 на стенде) меняет выбор (ночной туннель — hc_night_mine); здесь проверяется обычный автопилот, этап 2 — в test/hardcore_*.js
+const decide = (...a) => { const s2 = process.env.HC_STAGE2; delete process.env.HC_STAGE2; try { return decideAny(...a); } finally { if (s2 !== undefined) process.env.HC_STAGE2 = s2; } };
 
 module.exports = async function selfTest() {
   console.log('SELFTEST-START');
