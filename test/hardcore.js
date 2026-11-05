@@ -152,8 +152,8 @@ const readJsonl = f => fs.readFileSync(f, 'utf8').trim().split('\n').map(l => JS
     assert.strictEqual(new Set(worlds.map(w => w.seed)).size, 3, 'каждый мир — свой сид');
     const props2 = fs.readFileSync(path.join(s.srv, 'server.properties'), 'utf8');
     assert(props2.includes('level-type=minecraft\\:large_biomes') && props2.includes('hardcore=true') && props2.includes('difficulty=hard') && props2.includes('pvp=true'));
-    // баттл-рояль (1в, по умолчанию): дальность прорисовки 20 — локатор видит всю расстановку; мух переносят на точки после входа
-    assert(props2.includes('view-distance=20'), 'view-distance=20 в баттл-рояле');
+    // баттл-рояль (1в, по умолчанию): дальность прорисовки 12 — как просят сами мухи; мух переносят на точки после входа
+    assert(props2.includes('view-distance=12'), 'view-distance=12 в баттл-рояле');
     for (const w of worlds) assert(w.br && w.brSpawn && w.brSpawn.points.HC_1 && w.brSpawn.points.HC_1.sent, JSON.stringify(w.brSpawn));
     assert(/got: spreadplayers -?\d+ -?\d+ 0 1 false HC_1/.test(fs.readFileSync(path.join(s.cfg.dataDir, 'worlds', worlds[0].id, 'server.log'), 'utf8')), 'расстановка ушла в сервер');
     // 05.11: у точки нет суши — сервер «Could not spread»; хозяин: не искать рядом, а перебросить на новую точку на том же расстоянии от центра
