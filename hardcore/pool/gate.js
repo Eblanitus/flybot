@@ -33,9 +33,10 @@ const NEED = {
   'v3.killThreeChickens': [[e(['chicken'])]],
   'v3.killThreeSheep': [[e(['sheep'])]],
   'v1.killTwoPigs': [[e(['pig'])]],
-  // вода и рыба
-  'v2.catchThreeFish': [[b(['water'])]],
-  'v2.fishInNearbyWaterSafely': [[b(['water'])]],
+  // вода и рыба. Удочка: в сумке, или нитки на неё (2), или паук рядом — за нитками навык ходит сам (разбор 1-го мира этапа 2: рыбачили без удочки)
+  'v2.catchThreeFish': [[b(['water'])], [i('fishing_rod'), i('string', 2), e(['spider'])]],
+  'v2.fishInNearbyWaterSafely': [[b(['water'])], [i('fishing_rod'), i('string', 2), e(['spider'])]],
+  'o.craftFishingRod': [[i('string', 2)]],   // за нитками не ходит: без двух ниток только пишет «убей паука» и выходит
   'o.collectWaterWithBucket': [[b(['water'])]],
   'o.collectMilkWithBucket': [[e(['cow'])]],
   // поле: семена, пашня, урожай
@@ -45,6 +46,15 @@ const NEED = {
   'o.collectWheat': [[b(['wheat'])]],
   'o.collectCarrots': [[b(['carrots'])]],
   'o.collectPotatoes': [[b(['potatoes'])]],
+  // готовка и еда из сумки: за сырьём эти навыки не ходят, без него — провал на первой секунде (разбор 1-го мира этапа 2)
+  'v3.cookRawBeef': [[i('beef')]],
+  'o.cookBeef': [[i('beef')]],
+  'v3.cookChicken': [[i('chicken')]],
+  'v3.cookRawMutton': [[i('mutton')]],
+  'v1.cookPorkchops': [[i('porkchop')]],
+  'o.cookPorkchop': [[i('porkchop')]],
+  'v3.eatCookedMuttonIfHungry': [[i('cooked_mutton')]],
+  'o.makeBread': [[i('wheat', 3)]],
   // разведение: животных рядом не видно — не предлагаем
   'o.breedCow': [[e(['cow'])]],
   'o.breedSheep': [[e(['sheep'])]],

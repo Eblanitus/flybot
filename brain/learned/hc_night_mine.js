@@ -191,7 +191,7 @@ module.exports = {
     const tunnel = new Set(); // воздушные клетки, которые мы сами выкопали (и где стоим)
     const blocked = new Set(); // `${x,y,z}|dir` — отказы на этом месте
     let dirName = Object.prototype.hasOwnProperty.call(DIRS, params.dir) ? params.dir : null;
-    let steps = 0, fails = 0, sealedBehind = 0, sunk = 0;
+    let steps = 0, fails = 0, sealedBehind = 0, sunk = 0, fromTop = false; // fromTop — начали с поверхности и уходим вниз
     let first = true;
     const maxIter = maxBlocks * 3 + 30;
 
@@ -241,16 +241,30 @@ module.exports = {
         let best = null;
         for (const n of ORDER) if (evals[n].ok && (!best || evals[n].score > evals[best].score)) best = n;
         if (!best) {
-          // потолок тонкий (над туннелем поверхность/воздух), а под ногами копаемая порода — углубиться на 1 вниз и посмотреть заново
-          if (sunk < 2 && ORDER.some(n => /потолок/.test(evals[n].reason || ''))) {
+          // потолок тонкий (над туннелем поверхность/воздух), а под ногами копаемая порода — углубиться на 1 вниз и посмотреть заново.
+          // Стоим на поверхности (во все стороны впереди воздух, без воды и лавы) — так же: туннель копается только в сплошной
+          // породе, поэтому навык сам уходит вниз (до 3 блоков), а не бросает дело на первой секунде (разбор 1-го мира этапа 2).
+          const reasonsAll = ORDER.map(n => evals[n].reason || '').join('; ');
+          const surface = fromTop || mined === 0 && !/вода|лава/.test(reasonsAll) && ORDER.every(n => /впереди на \d м .*(пустота\/жидкость\/поверхность)|рядом с туннелем/.test(evals[n].reason || ''));
+          if (sunk < 3 && (ORDER.some(n => /потолок/.test(evals[n].reason || '')) || surface)) {
             const kb = kind(g(bx, by - 1, bz), tier), kb2 = kind(g(bx, by - 2, bz), tier);
             const sideOpen = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([ox, oz]) => kind(g(bx + ox, by - 1, bz + oz), tier) === 'open');
-            if (diggable(kb, tier) && kb2 !== 'open' && kb2 !== 'unknown' && !sideOpen) {
+            // с поверхности блок на 2 ниже ног честному глазу не виден ('?'): копаем всё равно (как игрок), а на следующем шаге смотрим заново
+            if (diggable(kb, tier) && kb2 !== 'open' && (kb2 !== 'unknown' || surface) && !sideOpen) {
+              if (surface) fromTop = true;
               try {
                 await api.cmd('dig_at', { x: bx, y: by - 1, z: bz });
                 sunk++; notes.push('потолок тонкий — углубилась на 1 вниз');
                 api.log('потолок тонкий — копаю на 1 вниз и смотрю заново');
                 await api.sleep(700);
+                // со второго шага вниз над головой — открытая шахта: закрываем её блоком, чтобы сверху не свалились мобы
+                if (sunk >= 2) {
+                  const s2 = (await api.snapshot()).position;
+                  const ny = Math.floor(s2.y + 0.001);
+                  if (ny < by && kind(g(bx, by + 1, bz), tier) === 'open') {
+                    if (await place(bx, ny + 2, bz)) notes.push('закрыла шахту над головой');
+                  }
+                }
                 continue;
               } catch (e) { api.log('углубиться не вышло: ' + e.message); }
             }

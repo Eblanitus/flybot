@@ -21,6 +21,25 @@ assert.strictEqual(h.act.params.x, 40); assert.strictEqual(h.act.params.z, 0);
 assert.strictEqual(h.prior, 0.40);
 console.log('охота днём: hunt_go к мухе: OK');
 
+// goto идёт до расстояния боя (дошла = 8 м), а не вплотную: раньше r 4 → «дошла» только с 2 м, у другой мухи падало «нет продвижения, осталось 3 м»
+assert(h.act.params.r >= 16, 'goto до расстояния боя: ' + JSON.stringify(h.act.params));
+
+// муха рядом и видна телу (12 м) — дело погони сразу бой: fight тела с этой мухой (разбор 1-го мира этапа 2: удара не было ни разу)
+D._reset();
+{
+  const vec = (x, y, z) => ({ x, y, z, distanceTo: q => Math.hypot(q.x - x, q.y - y, q.z - z) });
+  const ctx = { bot: { username: 'HC_1', entity: { position: vec(0, 64, 0) }, players: { HC_2: { entity: { position: vec(12, 64, 0) } } } } };
+  h = D.huntOption(ctx, sReady, [row({ d: 12, at: [12, 64, 0] })]);
+  assert(h && h.key === 'hunt_go' && h.act.kind === 'body' && h.act.name === 'fight' && h.act.params.target === 'HC_2', JSON.stringify(h));
+  assert.strictEqual(h.prior, 0.40);
+  // та же муха в 40 м (видна, но дальше погони боя) — снова goto
+  D._reset();
+  ctx.bot.players.HC_2.entity.position = vec(40, 64, 0);
+  h = D.huntOption(ctx, sReady, [row()]);
+  assert(h && h.act.name === 'goto', JSON.stringify(h));
+}
+console.log('муха рядом — бой, дальше — подход: OK');
+
 // ночью и 40 м — hunt_go есть, но подсказка низкая (запрета нет, муху не ограничиваем)
 D._reset();
 h = D.huntOption(ctxAt(0, 0), { ...sReady, isNight: true }, [row()]);

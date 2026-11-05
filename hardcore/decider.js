@@ -98,6 +98,13 @@ function choose(ctx, s, act, out) {
   return tag({ ...ch.act, score: Math.round(ch.prior * 100), explore: ch.explore, why: `${ch.act.why} — решатель: ${ch.why}` });
 }
 // --- охота как дело (Б6): мухи на локаторе → кандидат hunt_go в общем списке решателя ---
+const FIGHT_R = 16;  // ближе — сразу бой (fight тела гонится за мухой не дальше 16 м, lib/aggressors CHASE_MAX)
+const GOTO_R = 16;   // goto тела «дошла» при половине r: 8 м до мухи — уже в радиусе боя
+// расстояние до мухи, если тело её видит (позиция загружена), иначе null
+function nearFly(bot, name) {
+  try { const p = bot.players && bot.players[name]; if (p && p.entity && p.entity.position && bot.entity && bot.entity.position) return bot.entity.position.distanceTo(p.entity.position); } catch (e) {}
+  return null;
+}
 const SEEN = new Map(); // мухи на локаторе: имя → { name, d, at, heading, far, t }; помним HUNT.memorySec (120 с)
 function huntOption(ctx, s, bar) { // bar — панель локатора; в тесте подаётся готовой
   const prefix = process.env.HC_BR_PREFIX; if (!prefix) return null;
@@ -113,11 +120,18 @@ function huntOption(ctx, s, bar) { // bar — панель локатора; в 
   const tgt = [...SEEN.values()].sort((a, b) => a.d - b.d)[0];
   if (!tgt) return null;
   const far = s.isNight && tgt.d > 32; // ночью далеко: раньше запрет (huntDecision), теперь только низкая подсказка — муху не ограничиваем (хозяин 05.11)
+  const ready = s.hp >= BR.HUNT.hp && s.food >= BR.HUNT.food && (s.hasWeapon || process.uptime() >= BR.HUNT.prepSec);
+  const prior = ready && !far ? 0.40 : 0.05;
+  // муха уже рядом и видна телу — погоня кончается боем: fight тела сам догоняет в своём радиусе и бьёт (как охотник этапа 1в).
+  // Разбор 1-го мира этапа 2: дело было только «дойти» — подходила на 3–4 м, засчитывался провал, удара не было ни разу.
+  const near = nearFly(ctx.bot, tgt.name);
+  if (near != null && near <= FIGHT_R) return { key: 'hunt_go', prior, act: { key: 'hunt_go', kind: 'body', name: 'fight',
+    params: { target: tgt.name, radius: FIGHT_R, flee_hp: 6, timeout: 40 }, why: `${tgt.name} в ${Math.round(near)} м — бой` } };
   const leg = BR.farLeg(ctx.bot.entity.position, tgt);
   if (!leg) return null;
-  const ready = s.hp >= BR.HUNT.hp && s.food >= BR.HUNT.food && (s.hasWeapon || process.uptime() >= BR.HUNT.prepSec);
-  return { key: 'hunt_go', prior: ready && !far ? 0.40 : 0.05, act: { key: 'hunt_go', kind: 'body', name: 'goto',
-    params: { x: leg.x, z: leg.z, r: 4, timeout: 60, label: `к мухе ${tgt.name}`, fail: `не дошла до ${tgt.name}` },
+  // дошла — значит подошла на расстояние боя (8 м), а не вплотную: вплотную к другой мухе не встать, goto падал «нет продвижения, осталось 3 м»
+  return { key: 'hunt_go', prior, act: { key: 'hunt_go', kind: 'body', name: 'goto',
+    params: { x: leg.x, z: leg.z, r: GOTO_R, timeout: 60, label: `к мухе ${tgt.name}`, fail: `не дошла до ${tgt.name}` },
     why: `иду к ${tgt.name} (${tgt.d === BR.FAR_D ? 'далеко' : tgt.d + ' м'})` } };
 }
 // --- пул (Б8): навыки пула дела — кандидаты решателя с подсказкой 0; новичков пробуем первыми, дальше — их средние очки ---

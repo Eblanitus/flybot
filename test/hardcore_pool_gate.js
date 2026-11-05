@@ -59,6 +59,21 @@ async function spinChild() {
   assert(G.present(V([['1,64,1', 'iron_ore'], ['2,64,2', 'coal_ore']], { iron_ingot: 5 }), 'v3.craftIronLeggingsAndBoots'), '5 слитков, руда и уголь рядом — доступны');
   assert(!G.present(V([['1,64,1', 'iron_ore']], { iron_ingot: 5 }), 'v3.craftIronLeggingsAndBoots'), 'угля мало и рядом нет — не предлагаю');
 
+  // 2б) готовка и рыбалка (разбор 1-го мира этапа 2): без сырья в сумке готовку не предлагаем, без удочки (ниток, паука рядом) — рыбалку
+  for (const [id, item] of [['v3.cookRawBeef', 'beef'], ['o.cookBeef', 'beef'], ['v3.cookChicken', 'chicken'], ['v3.cookRawMutton', 'mutton'],
+    ['v1.cookPorkchops', 'porkchop'], ['o.cookPorkchop', 'porkchop'], ['v3.eatCookedMuttonIfHungry', 'cooked_mutton']]) {
+    assert(!G.present(V([], {}), id), 'без сырья не предлагаю: ' + id);
+    assert(G.present(V([], { [item]: 1 }), id), 'сырьё в сумке — предлагаю: ' + id);
+  }
+  assert(!G.present(V([], { wheat: 2 }), 'o.makeBread') && G.present(V([], { wheat: 3 }), 'o.makeBread'), 'хлеб — от 3 пшеницы');
+  const W = [['1,63,1', 'water']];
+  assert(!G.present(V(W, {}), 'v2.catchThreeFish'), 'вода есть, удочки нет — не предлагаю');
+  assert(G.present(V(W, { fishing_rod: 1 }), 'v2.catchThreeFish'), 'вода и удочка — предлагаю');
+  assert(G.present(V(W, { string: 2 }), 'v2.fishInNearbyWaterSafely'), 'вода и нитки на удочку — предлагаю');
+  assert(G.present(G.makeView(new Map(W), [{ name: 'spider', d: 10 }], {}), 'v2.catchThreeFish'), 'вода и паук рядом (нитки) — предлагаю');
+  assert(!G.present(V([], { fishing_rod: 1 }), 'v2.catchThreeFish'), 'удочка без воды — не предлагаю');
+  assert(!G.present(V([], { string: 1 }), 'o.craftFishingRod') && G.present(V([], { string: 2 }), 'o.craftFishingRod'), 'удочка — от 2 ниток');
+
   // 3) кандидаты: в пустом мире животных нет — охота и разведение не предлагаются; натив и готовка остаются
   const kept = G.withTarget(bare, RUN.candidates('food', 'day_routine_v6')).map(c => c.id);
   for (const id of ['v3.killThreeCows', 'v3.killThreeChickens', 'v3.killThreeSheep', 'v1.killTwoPigs', 'o.breedCow', 'o.breedSheep', 'o.breedChicken'])

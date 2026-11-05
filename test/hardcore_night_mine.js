@@ -6,18 +6,18 @@ const assert = require('assert');
 const { decide } = require('../behavior/autopilot');
 
 // фальшивый API навыка — как nightApi в test/core_fixes.js (копия: тот файл не экспортирует его)
-function nightApi(world, { phase = 'ночь', pos = { x: 0.5, y: 64, z: 0.5 } } = {}) {
+function nightApi(world, { phase = 'ночь', pos = { x: 0.5, y: 64, z: 0.5 }, inv = null } = {}) {
   const set = new Map(), key = (x, y, z) => x + ',' + y + ',' + z;
   const g = (x, y, z) => (set.has(key(x, y, z)) ? set.get(key(x, y, z)) : world(x, y, z));
   const st = { pos: { ...pos }, yaw: 0, calls: [], logs: [] };
-  const CH = { air: '.', stone: 's', snow: '*', dripstone_block: 'd', obsidian: 'o' };
+  const CH = { air: '.', stone: 's', snow: '*', dripstone_block: 'd', obsidian: 'o', water: 'w' };
   const api = {
     log: m => st.logs.push(m), sleep: async () => {},
-    snapshot: async () => ({ position: st.pos, health: 20, inventory: [{ name: 'stone_pickaxe', count: 1, slot: 36 }, { name: 'cobblestone', count: 8, slot: 37 }], eyes: { time: { phase } } }),
+    snapshot: async () => ({ position: st.pos, health: 20, inventory: inv || [{ name: 'stone_pickaxe', count: 1, slot: 36 }, { name: 'cobblestone', count: 8, slot: 37 }], eyes: { time: { phase } } }),
     cmd: async (name, p) => {
       st.calls.push({ name, p });
       if (name === 'survey') {
-        const layers = {}; const legend = { '.': 'air', s: 'stone', '*': 'snow', d: 'dripstone_block', o: 'obsidian' };
+        const layers = {}; const legend = { '.': 'air', s: 'stone', '*': 'snow', d: 'dripstone_block', o: 'obsidian', w: 'water' };
         for (let y = p.y1; y <= p.y2; y++) { const rows = []; for (let z = p.z1; z <= p.z2; z++) { let r = ''; for (let x = p.x1; x <= p.x2; x++) r += CH[g(x, y, z)] || 's'; rows.push(r); } layers['y=' + y] = rows; }
         return { origin: { x: p.x1, y: p.y1, z: p.z1 }, layers, legend };
       }
@@ -40,10 +40,23 @@ function nightApi(world, { phase = 'ночь', pos = { x: 0.5, y: 64, z: 0.5 } }
   let r = await hc.run(w.api, {});
   assert(r.ok === false && /night_mine: .*не ночь/.test(r.error), JSON.stringify(r));
 
-  // ночью на открытой поверхности: отказ с error и подсказкой
+  // ночью на открытой поверхности с киркой (разбор 1-го мира этапа 2): сама уходит на 3 блока вниз, закрывает шахту над головой и копает
   w = nightApi((x, y, z) => (y <= 63 ? 'stone' : 'air'));
+  r = await hc.run(w.api, { max_blocks: 3 });
+  const digs = w.st.calls.filter(c => c.name === 'dig_at').slice(0, 3).map(c => c.p.y);
+  assert.deepStrictEqual(digs, [63, 62, 61], 'с поверхности — три шага вниз: ' + JSON.stringify(digs));
+  assert(w.set.get('0,64,0') === 'stone' && w.set.get('0,63,0') === 'stone', 'шахта над головой закрыта: ' + JSON.stringify([...w.set]));
+  assert(r.ok === true && r.mined >= 1, JSON.stringify(r));
+
+  // на поверхности без кирки, вокруг камень: вниз не уйти — отказ с error и подсказкой, как раньше
+  w = nightApi((x, y, z) => (y <= 63 ? 'stone' : 'air'), { inv: [{ name: 'cobblestone', count: 8, slot: 37 }] });
   r = await hc.run(w.api, {});
   assert(r.ok === false && /^night_mine: нет безопасного направления/.test(r.error) && /mine_stairs/.test(r.error), JSON.stringify(r));
+
+  // на поверхности у воды: вниз не уходит (вода затечёт), отказ как раньше
+  w = nightApi((x, y, z) => (x === 1 && y === 64 ? 'water' : y <= 63 ? 'stone' : 'air'));
+  r = await hc.run(w.api, {});
+  assert(r.ok === false && !w.st.calls.some(c => c.name === 'dig_at'), JSON.stringify(r));
 
   // dripstone_block — не «не копаем»: направление выбирается
   w = nightApi((x, y, z) => ((x === 0 && z === 0 && (y === 64 || y === 65)) ? 'air' : y <= 70 ? 'dripstone_block' : 'air'));
@@ -57,7 +70,7 @@ function nightApi(world, { phase = 'ночь', pos = { x: 0.5, y: 64, z: 0.5 } }
   const firstDig = w.st.calls.find(c => c.name === 'dig_at');
   assert(firstDig && firstDig.p.x === 0 && firstDig.p.y === 63 && firstDig.p.z === 0, 'углубился: ' + JSON.stringify(firstDig));
   assert(r.ok === true && r.mined >= 1, JSON.stringify(r));
-  console.log('hc_night_mine: четыре сценария OK');
+  console.log('hc_night_mine: шесть сценариев OK');
 
   // v4 и v6 падают на той же яме: доказываем, что взята рабочая версия
   const v6 = require('../brain/learned/night_mine_v6.js');
