@@ -8,6 +8,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const L = require('./lib');
 const timeline = require('./timeline');
@@ -15,9 +16,14 @@ const TEACH = require('./teach');
 
 const HERE = __dirname;
 const DEFAULTS = {
-  serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
+  // -Dmax.bg.threads=4: генерация мира идёт в 4 потока, а не во все ядра — ПК не фризит на старте мира (хозяин 05.11); мир от этого не меняется
+  serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G', '-Dmax.bg.threads=4'], serverCmd: null,
+  serverLowPriority: true,   // сервер с пониженным приоритетом Windows: при нагрузке ПК отдаёт процессор сначала остальному
+
   version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b', flyCtlBase: 3310, flyRunnerBase: 3410, flyJoinSec: 120,
-  battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
+  // brViewDistance 12 (было 20, 05.11): мухи (mineflayer) сами просят 12 чанков, сервер берёт меньшее — видели и так 12; 20 только грузило
+  // и генерировало вокруг каждой мухи втрое больше земли. Для мух ничего не меняется, пока их дальность ≤ этой.
+  battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 12,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
   pool: false,   // пул навыков (hardcore/pool): включает хозяин в конфиге. С stage2 — навыки пула в списке решателя (HC_POOL); без — day_routine_v7/night_mine_v7 по HC_POOL_RUNS, как было
   stage2: false, controlBots: 3, teach: null,   // этап 2 (хозяин 05.11): учащиеся мухи; последние controlBots — контроль (без общей памяти и без проб решателя); teach: {id, offer, worlds} — правка учителя (В2)
   brStartTime: 12000,   // 1в (хозяин 04.11): мир начинается сразу вечером (12000 — закат, ночь с 13000), чтобы мухи не успевали спокойно развиться; null — как раньше
@@ -133,6 +139,9 @@ function clearLeftover(cfg) {
 function startServer(cfg, serverLog) {
   const [cmd, ...args] = cfg.serverCmd || [cfg.java, ...cfg.javaArgs, '-jar', cfg.serverJar, 'nogui'];
   const p = spawn(cmd, args, { cwd: cfg.serverDir, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  if (cfg.serverLowPriority && p.pid) {
+    try { os.setPriority(p.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch (e) {}   // не вышло — работает как раньше
+  }
   const lines = [];
   let buf = '';
   const onData = d => {

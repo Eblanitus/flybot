@@ -43,8 +43,8 @@ function worldProperties(cfg, seed) {
     'max-players': Math.max(10, cfg.bots + 2),
     'enable-rcon': 'false',
     'pvp': 'true',
-    // баттл-рояль (1в): локатор мухи видит только тех, чья позиция дошла до бота, — дальность прорисовки на всю расстановку
-    ...(cfg.battleRoyale && cfg.botMode !== '1a' ? { 'view-distance': cfg.brViewDistance || 20 } : {}),
+    // баттл-рояль (1в): дальность = та, что просят сами мухи (mineflayer 'far' = 12); больше — сервер грузит лишнюю землю, мухам её не шлёт
+    ...(cfg.battleRoyale && cfg.botMode !== '1a' ? { 'view-distance': cfg.brViewDistance || 12 } : {}),
     'motd': 'flybot hardcore stand'
   };
 }
