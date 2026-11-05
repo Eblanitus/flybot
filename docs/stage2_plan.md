@@ -39,15 +39,16 @@
    - 30% выборов — проба, 70% — лучшее по опыту.
    - Новички (меньше 5 запусков в такой обстановке) пробуются первыми.
    - Доля проб падает до 10% по мере опыта.
-   - Без проб — когда враг рядом или HP низкое.
+   - Пробы не запрещены нигде: ночью, при враге рядом, при низком HP (хозяин 05.11: «муху никак не ограничиваем»).
+   - Оценка дела в похожей обстановке — только итог матча: средние очки жизней, в которых его выбирали (хозяин 05.11). Никаких окон и подсказок за муху.
 5. **Общая память.** Опыт решателя и способов (`variants`, `experience`) сливается после каждого мира и даётся мухам следующего.
 6. **Пул PR #5** (87 навыков Voyager/Odyssey) не выбирает отдельно 70/30, а стоит в общем списке решателя.
-7. **Контроль.** 2 мухи из 10 без общей памяти и без проб.
+7. **Контроль.** 2 мухи из 10 без общей памяти и без проб. Группа каждой мухи видна в ленте, карточке и логе стенда (хозяин 05.11).
 8. **Учитель.**
    - Запускается по кнопке хозяина и делает не больше 2 правок.
    - Сначала ищет готовое на GitHub, потом тест.
    - Правку получают 5 мух, сравниваем с учащимися мухами без неё. Если с правкой хуже, откат сам.
-   - В В2 это 5 против 3: двое — постоянный контроль (см. «Что проверить хозяину» в конце).
+   - В В2 это 5 против 3, двое — постоянный контроль (хозяин 05.11: ок). В ленте у мух видно, кто с правкой, кто без.
 9. **Режим мира зафиксирован:** баттл-рояль, 10 мух, старт вечером, спавн 300–900.
 
 **Не в этом плане:**
@@ -141,7 +142,6 @@ function makePoints() {
       fails[key] = (fails[key] || 0) + 1;
       if (fails[key] >= CYCLE_FAILS) { fails[key] = 0; add(t, 'cycle', -1, `${key}: ${CYCLE_FAILS} провала`); }
     },
-    at(t) { let s = 0; for (const e of list) if (e.t <= t) s += e.d; return s; }, // очки к секунде жизни t (нужно в Б9)
     toJSON() { return { total, byKind, nights, list: list.slice(-300) }; }
   };
 }
@@ -165,7 +165,6 @@ module.exports = { makePoints, killPoints, IDLE_SEC, IDLE_R, CYCLE_FAILS };
   - провал, провал, успех, провал — 0;
   - провал ×6 — −2;
   - провалы разных ключей вперемешку (a, b, a, b, a) — −1 за `a`.
-- `at(t)` возвращает сумму событий до t включительно.
 - `npm test` зелёный.
 
 ### А2. Событие «дело кончилось» из автопилота
@@ -531,7 +530,7 @@ const runsIn = st => Object.values(st).reduce((a, x) => a + (x.n || 0), 0);
 const exploreRate = runs => Math.max(EXPLORE_LO, EXPLORE_HI - (EXPLORE_HI - EXPLORE_LO) * Math.min(1, runs / EXPLORE_RUNS));
 // оценка: подсказка автопилота (счёт/100) как K запусков + средние очки дела
 const value = (o, st) => { const x = st[o.key] || { n: 0, sum: 0 }; return (o.prior * K + x.sum) / (K + x.n); };
-// opts: [{ key, prior, act }]; calm — можно пробовать (нет врага рядом и HP не низкое); rate — доля проб
+// opts: [{ key, prior, act }]; calm — можно ли пробовать (решатель стенда пробует везде, хозяин 05.11; false — для тестов и этапа 2м); rate — доля проб
 function pickOption(opts, st, { calm = true, rate = EXPLORE_HI, rnd = Math.random } = {}) {
   if (!opts.length) return null;
   const runs = o => (st[o.key] ? st[o.key].n : 0);
@@ -545,13 +544,13 @@ function pickOption(opts, st, { calm = true, rate = EXPLORE_HI, rnd = Math.rando
   for (const o of opts) if (value(o, st) > value(best, st)) best = o;
   return { ...best, explore: false, why: `лучшее по опыту: ${value(best, st).toFixed(2)} очка (${runs(best)} раз здесь)` };
 }
-// награда дела: очки за 10 мин от его начала (смерть обрывает окно — дело, после которого умирают, получает меньше);
-// окно, обрезанное концом мира (муха жива), не учим — cut
-const H = 600;
-function rewards(deeds, at, end, died) {
-  return deeds.map(d => ({ ...d, r: at(Math.min(d.t + H, end)) - at(d.t), cut: d.t + H > end && !died }));
+// награда дела = итог матча: очки жизни мухи за весь мир (хозяин 05.11: «та муха, которая лучше выжила, используя
+// из сотни навыков конкретные, та и круче»). Каждое дело жизни получает итог этой жизни; оценка дела в обстановке —
+// средние очки жизней по его запускам. Смерть — конец счёта: у рано погибшей мухи мало очков, и все её дела получают мало.
+function rewards(deeds, total) {
+  return deeds.map(d => ({ ...d, r: total }));
 }
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO, H };
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
 ```
 
 **Проверка** (`test/hardcore_decider.js`):
@@ -565,9 +564,7 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
 - `calm: false` при `rate: 1` — проб нет.
 - `exploreRate(0)` — 0.30, `exploreRate(200)` — 0.10, `exploreRate(100)` — 0.20. Дробные числа сравнивай с допуском: `Math.abs(a - b) < 1e-9`.
 - `statsFor`: в точной у дела 1 запуск, в грубой 10 — берёт грубую.
-- `rewards`:
-  - дело на t = 100, конец 400, муха умерла — окно до 400, `cut: false`;
-  - то же, но мир кончился, муха жива — `cut: true`.
+- `rewards([{ key: 'a' }, { key: 'b' }], 5)` — у обоих `r: 5`.
 - `npm test` зелёный.
 
 ### Б5. Решатель в автопилоте: один выбор вместо `pick()`
@@ -623,9 +620,8 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
      // Б6: охота, Б8: пул — добавляются сюда
      if (!opts.length) return tag(act);              // список пуст — что дал decide (idle_move или null)
      const st = statsFor(memory(), sit);
-     const calm = !(s.enemies && s.enemies.length) && !(s.hostilesNear > 0) && s.hp >= 10;
-     const rate = process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st));
-     const ch = pickOption(opts, st, { calm, rate });
+     const rate = process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st)); // пробы везде: муху никак не ограничиваем (хозяин 05.11)
+     const ch = pickOption(opts, st, { rate });
      return tag({ ...ch.act, score: Math.round(ch.prior * 100), explore: ch.explore, why: `${ch.act.why} — решатель: ${ch.why}` });
    }
    const _reset = () => { MEM = null; }; // для тестов
@@ -636,7 +632,7 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
 **Почему так:**
 
 - **Без памяти и без проб** решатель берёт кандидата с наибольшим счётом автопилота — ровно то, что берёт сейчас `pick()`. Холодный старт = нынешнее поведение.
-- **Ночью пробы разрешены, если рядом нет мобов и мухи** (в укрытии), иначе ночные навыки пула не попробуются никогда. Смерть сама снижает оценку дела: окно наград обрывается, очков за ночь нет.
+- **Пробы везде** — ночью, при враге рядом, при низком HP (хозяин 05.11: «муху никак не ограничиваем»). Смерть сама снижает оценку: у рано погибшей мухи мало очков за матч, и все её дела получают мало.
 - **Срочное** (враг рядом) решатель не трогает до Б7.
 
 **Проверка** (`test/hardcore_decider_ap.js`):
@@ -682,11 +678,12 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
      }
      for (const [n, m] of SEEN) if (now - m.t > BR.HUNT.memorySec * 1000) SEEN.delete(n);
      const tgt = [...SEEN.values()].sort((a, b) => a.d - b.d)[0];
-     if (!tgt || (s.isNight && tgt.d > 32)) return null; // ночью далеко не ходим (как в huntDecision)
+     if (!tgt) return null;
+     const far = s.isNight && tgt.d > 32; // ночью далеко: раньше запрет (huntDecision), теперь только низкая подсказка — муху не ограничиваем (хозяин 05.11)
      const leg = BR.farLeg(ctx.bot.entity.position, tgt);
      if (!leg) return null;
      const ready = s.hp >= BR.HUNT.hp && s.food >= BR.HUNT.food && (s.hasWeapon || process.uptime() >= BR.HUNT.prepSec);
-     return { key: 'hunt_go', prior: ready ? 0.40 : 0.05, act: { key: 'hunt_go', kind: 'body', name: 'goto',
+     return { key: 'hunt_go', prior: ready && !far ? 0.40 : 0.05, act: { key: 'hunt_go', kind: 'body', name: 'goto',
        params: { x: leg.x, z: leg.z, r: 4, timeout: 60, label: `к мухе ${tgt.name}`, fail: `не дошла до ${tgt.name}` },
        why: `иду к ${tgt.name} (${tgt.d === BR.FAR_D ? 'далеко' : tgt.d + ' м'})` } };
    }
@@ -694,7 +691,7 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
 
    - В `choose` на месте «Б6»: `const h = huntOption(ctx, s); if (h && !(s.blocked && s.blocked.hunt_go)) opts.push(h);`.
    - Дополни `_reset`, чтобы он чистил и `SEEN` (`SEEN.clear()`). В тестах зови `_reset()` перед каждым сценарием: муха помнится 120 с. Экспортируй `huntOption`.
-   - Подсказка 0.40 — между `day_routine` (35) и `job` (50). Решатель дальше учится сам: охота приносит +1/+2 за убийство в окне 10 мин.
+   - Подсказка 0.40 — между `day_routine` (35) и `job` (50). Дальше решатель учится сам: охоту оценивают очки жизней, в которых муха охотилась.
    - `timeout` в секундах, как у `go_base` (`T.baseTimeoutSec`). `name: 'goto'` идёт через `baseTravel`, как `go_base`.
 3. В `fly.js`, в `huntTick`, сразу после цикла, который заполняет `seenFlies`:
 
@@ -710,20 +707,21 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
   - `bot.username: 'HC_1'`, `entity.position: { x: 0, y: 64, z: 0 }`;
   - панель локатора подаётся третьим аргументом `bar` — строки вида `{ name, d, at, onBar: true, hidden: null, gamemode: null }`;
   - муха `HC_2` в 40 м на панели — есть `hunt_go` с `params.x/z` в её сторону;
-  - ночью и 40 м — `null`;
+  - ночью и 40 м — `hunt_go` есть, но с `prior: 0.05` (запрета нет, только низкая подсказка);
   - `hidden: 'sneak'` — `null`;
   - чужой ник (`Steve`) — `null`.
 - `fly.js` с `--stage2 1` и поддельным телом (как в `test/hardcore_fly.js`) не шлёт `/cmd` (`follow`, `fight`, `goto`), хотя на локаторе есть муха.
 - `npm test` зелёный (`test/hardcore_br.js` — тоже).
 
-### Б7. Враг рядом: бой или побег — выбор по выживанию, без проб
+### Б7. Враг рядом: бой или побег — тот же решатель, с пробами
 
 **Что:** две ветки автопилота сейчас берут первое подходящее правило. Под `HC_STAGE2` они отдают решателю короткий срочный список, а прежний порядок становится порядком по умолчанию:
 
 - «враг-игрок рядом» (`fight_player` / `escape_player`);
 - «моб подошёл, пока идёт работа» (`safety_fight` / `safety_shelter` / `safety_escape`).
 
-Решатель выбирает по доле выживания в похожей обстановке из `lib/experience.js`. Это тот же опыт, по которому уже выбирает рефлекс. Проб нет: смерть стоит всей жизни.
+Решатель выбирает так же, как все дела: по средним очкам жизней, в которых мухи в похожей обстановке так поступали. Прежний порядок правил — только подсказка для холодного старта.
+Пробы — как везде (хозяин 05.11: «муху никак не ограничиваем»): так опыт узнаёт, когда бой лучше побега. `lib/experience.js` тут не нужен, им по-прежнему пользуются рефлексы тела.
 
 Ночная защита (`nightDefense`) и рефлексы тела (лава, удушье, застрял, еда при низком HP) остаются как были. Это тело, а не выбор дела.
 
@@ -734,7 +732,7 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
 1. В ветке `if (en) { … }`, после строки с `critHere`, перед старым кодом:
 
    ```js
-       if (process.env.HC_STAGE2 && out) { // этап 2: бой или побег от мухи — решатель по выживанию (lib/experience.js), без проб
+       if (process.env.HC_STAGE2 && out) { // этап 2: бой или побег от мухи — выбирает решатель (общая таблица, итоги матчей); прежний порядок — подсказка
          const fightA = body('fight_player', 'fight', { target: en.name, radius: T.apFightRadius, flee_hp: T.apFleeHp, timeout: T.apFightTimeout }, `дерусь с ${en.name}`, true);
          const escA = critHere && s.sheltered ? null : body('escape_player', 'escape', { distance: T.apEscapeDist, shelter: true }, `убегаю от ${en.name} (${en.why})`, true);
          const oldFight = en.aggressor && s.hasWeapon && s.hp >= T.apFightHp && s.alone; // прежнее правило — порядок по умолчанию
@@ -762,22 +760,22 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
 3. В `hardcore/decider.js`:
 
    ```js
-   // срочное (враг рядом): без проб, по доле выживания в похожей обстановке (lib/experience.js); мало опыта — прежний порядок
-   const EXP_NAME = { fight_player: 'fight', safety_fight: 'fight', escape_player: 'escape', safety_escape: 'escape', safety_shelter: 'shelter' };
-   function urgentPick(ctx, list, sc) {
+   // срочное (враг рядом): тот же выбор, что для всех дел — средние очки жизней в похожей обстановке, с пробами (хозяин 05.11);
+   // подсказка для холодного старта — прежний порядок правил: первый 0.9, второй 0.8, …
+   function urgentPick(list, st, { rate = 0, rnd = Math.random } = {}) {
      if (list.length < 2) return list[0];
-     if (!sc) try { const E = require('../lib/experience'); sc = E.scores(ctx, E.situation(ctx), list.map(a => EXP_NAME[a.key] || a.name)); } catch (e) { return list[0]; }
-     const of = a => sc[EXP_NAME[a.key] || a.name] || { wn: 0, rate: 0.5 };
-     let best = list[0];
-     for (const a of list.slice(1)) if (of(a).wn >= 3 && of(a).rate > of(best).rate + 0.05) best = a;
-     return best === list[0] ? best : { ...best, why: `${best.why} — решатель: выживали ${Math.round(of(best).rate * 100)}% против ${Math.round(of(list[0]).rate * 100)}%` };
+     const ch = pickOption(list.map((a, i) => ({ key: a.key, prior: 0.9 - 0.1 * i, act: a })), st, { rate, rnd });
+     return ch.act === list[0] && !ch.explore ? list[0] : { ...ch.act, explore: ch.explore, why: `${ch.act.why} — решатель: ${ch.why}` };
    }
    ```
 
    В `choose`, первой строкой после `tag`:
 
    ```js
-     if (out && out.urgent && out.urgent.length) return tag(urgentPick(ctx, out.urgent));
+     if (out && out.urgent && out.urgent.length) { // срочное — тот же выбор по общей таблице
+       const st = statsFor(memory(), sit);
+       return tag(urgentPick(out.urgent, st, { rate: process.env.HC_EXPLORE === '0' ? 0 : exploreRate(runsIn(st)) }));
+     }
    ```
 
    Экспортируй `urgentPick`.
@@ -788,9 +786,10 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
   - `out.urgent` — `[fight_player, escape_player]`;
   - ответ — `fight_player`.
 - Без оружия — порядок `[escape_player, fight_player]`.
-- `urgentPick(ctx, list, sc)` с поданной таблицей:
-  - `fight` — `{ wn: 10, rate: 0.2 }`, `escape` — `{ wn: 10, rate: 0.8 }` — `escape_player`;
-  - при `wn: 1` — первый из списка.
+- `urgentPick(list, st, { rate: 0 })`, `list` — `[fight_player, escape_player]`:
+  - без памяти (`st = {}`) — `fight_player`: прежнее правило;
+  - память `{ escape_player: { n: 10, sum: 50 }, fight_player: { n: 10, sum: 10 } }` — `escape_player`.
+- `urgentPick(list, { fight_player: { n: 10, sum: 30 } }, { rate: 1, rnd: () => 0 })` — проба новичка: `escape_player` с `explore: true`.
 - Без `HC_STAGE2` — старое поведение, `out.urgent` нет. Старые тесты `test/autopilot.js` и `test/defense.js` зелёные.
 - `npm test` зелёный.
 
@@ -842,7 +841,7 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
    }
    ```
 
-   В `choose` на месте «Б8»: `if (calm) opts.push(...poolOptions(ctx, s));`.
+   В `choose` на месте «Б8»: `opts.push(...poolOptions(ctx, s));` — всегда, без условий (хозяин 05.11).
 3. `fly.js`, строка с пулом в `env`:
 
    ```js
@@ -863,9 +862,8 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
 
 **Что:**
 
-- Награда дела — очки жизни за 10 мин от его начала (`rewards` из Б4).
-- Смерть обрывает окно, поэтому у дела, после которого гибнут, награда меньше. В очках жизни смерть по-прежнему 0.
-- Окна, обрезанные концом мира (муха жива), не учим.
+- Награда каждого дела жизни — итог этой жизни: очки мухи за весь матч (`rewards` из Б4). Хозяин 05.11: какая муха лучше выжила и развилась, её выбор навыков и круче.
+- Смерть — конец счёта: у рано погибшей мухи мало очков, и все её дела получают мало. В очках жизни смерть по-прежнему 0.
 
 **Файлы:** `hardcore/fly.js`, `test/hardcore_fly.js` и `test/hardcore_fakes/fly_body.js` (дополнить).
 
@@ -881,22 +879,21 @@ module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pick
 2. В `writeCard()`, до записи карточки:
 
    ```js
-     const rated = require('./decider').rewards(deeds, t => pts.at(t), lifeSec, result === 'death');
+     const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни — итог этой жизни
      try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
-     const learnt = rated.filter(x => !x.cut);
    ```
 
    В `card`:
 
    ```js
-   deeds: { n: rated.length, explore: rated.filter(x => x.explore).length, avgR: learnt.length ? Math.round(learnt.reduce((a, x) => a + x.r, 0) / learnt.length * 100) / 100 : null },
+   deeds: { n: rated.length, explore: rated.filter(x => x.explore).length },
    ```
 
 3. Поддельное тело: в `/events` событие `deed_start` в начале жизни.
 
 **Проверка:**
 
-- После конца жизни в `test/hardcore_fly.js` есть `<ник>.fly/deeds.jsonl`: одна строка с полями `r` и `cut`.
+- После конца жизни в `test/hardcore_fly.js` есть `<ник>.fly/deeds.jsonl`: одна строка, её `r` равен `pointsTotal` карточки.
 - В карточке `deeds.n === 1`.
 - `npm test` зелёный.
 
@@ -931,11 +928,11 @@ function addDelta(shared, start, end) {
   }
   return shared;
 }
-// строки deeds.jsonl → { exact: { обстановка: { дело: { n, sum } } }, coarse: { … } }; обрезанные концом мира (cut) не учим
+// строки deeds.jsonl → { exact: { обстановка: { дело: { n, sum } } }, coarse: { … } }; sum — сумма итогов матчей (очков жизней)
 function foldDeeds(mem, rows) {
   mem.exact = mem.exact || {}; mem.coarse = mem.coarse || {};
   for (const r of rows) {
-    if (!r || r.cut || !r.key || !r.sit || typeof r.r !== 'number') continue;
+    if (!r || !r.key || !r.sit || typeof r.r !== 'number') continue;
     for (const [tab, k] of [['exact', r.sit], ['coarse', r.coarse]]) {
       if (!k) continue;
       const row = mem[tab][k] = mem[tab][k] || {};
@@ -1004,7 +1001,6 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
   - две жизни по +3 от одного старта — `n: 8`;
   - новые ключи появляются.
 - `foldDeeds`:
-  - строка с `cut: true` не попадает;
   - две строки одного дела в одной обстановке — `n: 2`, `sum` — сумма.
 - `prepareLife` и `mergeLife` на поддельных файлах:
   - копия легла в `data/`;
@@ -1029,7 +1025,7 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
    - поменяй `pool: true` на `pool: false`.
 
    Пул включает хозяин в конфиге. Без `stage2` он работал бы по-старому (70/30), а это не то, что решили.
-2. Вынеси сборку аргументов из `startBot` в чистую `botArgs(cfg, w, nick, cardFile)` и экспортируй. Номер мухи — из ника: `Number((/(\d+)$/.exec(nick) || [0, 0])[1])`. Допиши в конец:
+2. Вынеси сборку аргументов из `startBot` в чистую `botArgs(cfg, w, nick, cardFile)` и экспортируй. Группу мухи считай в отдельной чистой `groupOf(cfg, nick)` (`'learn'` / `'control'` / `null` без `stage2`): она же нужна для меток в п. 5. Номер мухи — из ника: `Number((/(\d+)$/.exec(nick) || [0, 0])[1])`. Допиши в конец `botArgs`:
 
    ```js
      ...(fly && cfg.stage2 ? ['--stage2', '1', '--group', num > cfg.bots - cfg.controlBots ? 'control' : 'learn'] : []),
@@ -1047,6 +1043,26 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
 
    - в карточку `group: A.group || null`, а `mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot')`. То же значение по умолчанию — в `stand.js`, где карточке ставится `mode`.
 4. В `config.example.json` добавь `"stage2": false, "controlBots": 2` и поменяй `"pool": true` на `"pool": false`.
+5. **Метки групп** (хозяин 05.11: «как-то помечать, где какие мухи»). Группа мухи видна везде, где виден её ник.
+   - `hardcore/lib.js`:
+
+     ```js
+     // подпись группы мухи для ленты и логов (этап 2): учится / контроль; при проверке правки учителя (В2) — с правкой (А) / без правки (Б)
+     const GROUP_TEXT = { learn: 'учится', control: 'контроль' };
+     function groupLabel(c) {
+       const g = c && GROUP_TEXT[c.group];
+       const t = c && c.teachGroup ? (c.teachGroup === 'A' ? `правка ${c.teach} (А)` : `без правки ${c.teach} (Б)`) : null;
+       return [g, t].filter(Boolean).join(', ');
+     }
+     ```
+
+     Экспортируй `GROUP_TEXT` и `groupLabel`.
+   - `timeline.js`, `svgFor`: под ником второй строкой мелко (`class="s"`) — `groupLabel(c)`. Например «контроль». Подпись пустая (старые миры) — второй строки нет.
+   - `timeline.js`, `worldHtml`:
+     - в таблицу — колонки «Группа» (`groupLabel(c)`) и «Очки» (`c.pointsTotal`);
+     - в шапку — кто в какой группе («учатся HC_1–HC_8 · контроль HC_9, HC_10») и средние очки по группам из `w.pointsByGroup`.
+   - `stand.js`: в лог старта мира — строка с группами (`мир …: учатся HC_1…HC_8, контроль HC_9, HC_10`), в лог конца мира — очки по группам.
+   - `fly.js`: в первый лог мухи (`[fly] HC_9 в мире …`) — `, группа: контроль`.
 
 **Проверка** (`test/hardcore_stage2_stand.js`):
 
@@ -1054,6 +1070,9 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
   - у `HC_1` есть `--stage2 1 --group learn --shared …`;
   - у `HC_10` — `--group control` и нет `--shared`;
   - при `stage2: false` ничего из этого нет, а `--pool` есть, как раньше.
+- `groupOf`: `HC_8` — `'learn'`, `HC_9` — `'control'`; без `stage2` — `null`.
+- `groupLabel({ group: 'control' })` — «контроль»; `groupLabel({ group: 'learn', teach: 't1', teachGroup: 'A' })` — «учится, правка t1 (А)»; `groupLabel({})` — пустая строка.
+- `svgFor([{ nick: 'HC_9', group: 'control', events: [{ wt: 13000, kind: 'night', text: 'ночь' }] }])` содержит «контроль»; `worldHtml` — колонку «Группа».
 - `npm test` зелёный (`test/hardcore.js` со `startBot` — тоже).
 
 ### Б12. Установка и проверка «готово» (хозяин; Claude — только по его «да»)
@@ -1090,7 +1109,7 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
 
    - Обстановка — `coarse`, с не меньше 5 запусками.
    - Навыки пула (`pool:…`) — отдельной таблицей.
-   - Внизу — 5 дел, которые теряют больше всего очков: средние очки × запуски, самые отрицательные.
+   - Внизу — 5 дел с самыми низкими средними очками (не меньше 20 запусков): жизни, в которых их выбирали, кончались хуже всех.
 
 **Проверка:**
 
@@ -1126,7 +1145,7 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
 4. **`decider.js`, в `choose`, рядом с пулом:**
 
    ```js
-     if (calm && process.env.HC_TEACH_OFFER) for (const n of process.env.HC_TEACH_OFFER.split(',').filter(Boolean))
+     if (process.env.HC_TEACH_OFFER) for (const n of process.env.HC_TEACH_OFFER.split(',').filter(Boolean))
        if (!(s.blocked && s.blocked['teach:' + n])) opts.push({ key: 'teach:' + n, prior: 0, act: { key: 'teach:' + n, kind: 'learned', name: n, params: {}, why: `правка учителя: ${n}` } });
    ```
 
@@ -1137,6 +1156,7 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
 - `botArgs` при `teach`: у `HC_1` есть `--learned` и `--teach t1:A`, у `HC_7` — `--teach t1:B` без `--learned`, у `HC_10` — ничего из этого.
 - Папка `learned` собрана: файл правки поверх копии.
 - При готовом `result.json` аргументов нет.
+- В ленте (`svgFor`) у `HC_1` подпись «учится, правка t1 (А)», у `HC_7` — «учится, без правки t1 (Б)» (`groupLabel` из Б11).
 - `npm test` зелёный.
 
 ### В3. Итог правки и откат сам
@@ -1174,7 +1194,7 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
 **Процедура:**
 
 1. Прочитать `hardcore/data/skills_report.md`, ленты последних 3 миров (`hardcore/data/timeline/`) и причины смертей (`lives.jsonl`, поле `cause`).
-2. Выбрать не больше 2 дел, которые теряют больше всего очков (низ сводки В1). Одна правка — одно дело.
+2. Выбрать не больше 2 дел с самыми низкими средними очками (низ сводки В1). Одна правка — одно дело.
 3. **Сначала готовое.** Искать на GitHub, как это дело решают другие боты на mineflayer:
    - Voyager, Odyssey, mc-fleet-bot (`docs`, разбор от 03.11), примеры mineflayer;
    - лицензия MIT или Apache;
@@ -1207,7 +1227,7 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
    - Добавь ссылку на `docs/stage2_plan.md`.
    - Строку про экзаменационные сиды и «медиану жизни ≥ 2×» пометь «заменено решением хозяина 04.11 (очки жизни)».
    - Не удаляй её, чтобы было видно, что было.
-2. **Раздел 8.7.** В начало допиши строку: «Решено 04.11: температура — случайный выбор дел у решателя: 30% проб, к опыту 10%, новички первыми; без проб, когда враг рядом или HP низкое; опыт общий для всех мух и миров».
+2. **Раздел 8.7.** В начало допиши строку: «Решено 04–05.11: температура — случайный выбор дел у решателя: 30% проб, к опыту 10%, новички первыми; проб не запрещаем нигде — муху никак не ограничиваем; дело оценивается только итогом матча (очки жизни); опыт общий для всех мух и миров».
 
 **Проверка:** ссылки в документе живые (`docs/stage2_plan.md` существует), `npm test` зелёный.
 
@@ -1226,9 +1246,8 @@ module.exports = { addDelta, foldDeeds, prepareLife, mergeLife, FILES };
 
 Фазу В можно делать параллельно с прогоном Б12: код учителя поведение мух не меняет, пока нет `teach` в конфиге.
 
-## Что проверить хозяину в этом плане
+## Решения хозяина по отходам от схемы (05.11)
 
-1. **Ночью в укрытии пробы разрешены.** В схеме было «ночью без случайности», но тогда ночные навыки пула не попробуются никогда.
-   Пробы закрыты, когда рядом враг или HP ниже 10. Смерть после пробы снижает оценку дела сама: очков за ночь нет.
-2. **Учитель: 5 мух с правкой против 3 без.** Двое (`HC_9`, `HC_10`) — постоянный контроль, их в сравнение не берём. В схеме было «5 с правкой, 5 без».
-3. **Оценка дела — очки за 10 мин после его начала.** Сами очки жизни как решили: смерть 0. Окно нужно, чтобы дело, которое готовит успех (собрать брёвна), получало часть очков за успех (кирку).
+1. **Муху никак не ограничиваем.** Пробы везде: ночью, при враге рядом, при низком HP. Ночная охота тоже без запрета, только с низкой подсказкой. Без проб — только контроль (`HC_9`, `HC_10`).
+2. **Учитель: 5 мух с правкой против 3 без, двое — постоянный контроль.** Хозяин: ок, но мух помечать. Группа каждой мухи видна в ленте, карточке и логах (Б11, п. 5).
+3. **Дело оценивается только итогом матча** — очками жизни мухи за весь мир. Окна в 10 минут нет («ты опять хочешь обучать муху за неё»): какая муха лучше выжила и развилась, её выбор и круче.
