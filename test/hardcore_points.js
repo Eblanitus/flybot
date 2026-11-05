@@ -13,13 +13,30 @@ const P = require('../hardcore/points');
   console.log('ступени: OK');
 }
 
-// ночи
+// смерть (хозяин 05.11): за пережитую ночь очков нет; смерть — штраф −(7 − прожито игровых дней), дробно до 0,1
 {
+  assert.strictEqual(P.makePoints().night, undefined, '+1 за ночь убран');
+  const at = days => { const p = P.makePoints(); p.death(days, 0); return p.total; };
+  assert.strictEqual(at(0.2), -6.8, 'умер в первую ночь ≈ −7');
+  assert.strictEqual(at(0), -7);
+  assert.strictEqual(at(4), -3, 'прожил 4 дня — −3');
+  assert.strictEqual(at(3.46), -3.5, 'дробно: 3,46 дня → 3,5 → −3,5');
+  assert.strictEqual(at(7), 0, 'дожил до 7 дней — штрафа нет');
+  assert.strictEqual(at(9), 0, 'больше 7 дней — не плюс, а 0');
+  assert.strictEqual(at(null), -7, 'время неизвестно — как в первую ночь');
+  // штраф вместе с остальным: 5 ступеней + убийство камнем − смерть на 2-м дне = 5 + 2 − 5,5 = 1,5
   const p = P.makePoints();
-  p.night(0); p.night(1);
-  assert.strictEqual(p.total, 2);
-  assert.strictEqual(p.toJSON().nights, 2);
-  console.log('ночи: OK');
+  for (let n = 1; n <= 5; n++) p.step(n, 0);
+  p.kill('stone_sword', 1, 'HC_2');
+  p.death(1.5, 2); p.death(0, 3);   // второй раз не считается
+  assert.strictEqual(p.total, 1.5);
+  assert.strictEqual(p.byKind.death, -5.5);
+  assert.strictEqual(p.list.filter(x => x.kind === 'death').length, 1);
+  assert.strictEqual(p.toJSON().ver, 2, 'метка формулы в карточке');
+  // живая муха на конце мира — death() не зовут, штрафа нет
+  const alive = P.makePoints(); alive.step(1, 0);
+  assert.strictEqual(alive.total, 1); assert.strictEqual(alive.byKind.death, undefined);
+  console.log('смерть: OK');
 }
 
 // убийства по оружию

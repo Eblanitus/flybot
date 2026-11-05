@@ -86,10 +86,9 @@ const t0 = Date.now();
 const frames = [], chat = [];
 const chron = L.makeChronicle();
 const ladder = L.makeLadder();
-const pts = P.makePoints();   // очки жизни (этап 2, А1–А3): ступени, ночи, убийства, простой, круг провалов
+const pts = P.makePoints();   // очки жизни (этап 2, А1–А3): ступени, убийства, простой, круг провалов, штраф за раннюю смерть
 const deeds = [];             // дела жизни (этап 2, Б9): каждое начатое дело с обстановкой; награда — итог жизни (writeCard → deeds.jsonl)
 let spawned = false, written = false, age0 = null, tod0 = null, wtStart = null, lastWt = null, lastSnap = null, evSince = 0, lowNoHealSec = 0;
-let ptsNights = 0;
 let lowest = { hp: 20, food: 20 }, eats = 0, flees = 0, everTable = false, wasClosed = false;
 const exits = [], acts = {}, lastDeath = { msg: null };
 // баттл-рояль: свои убийства, кто убил меня, охота (что видели на локаторе, наша текущая команда, счёт решений)
@@ -264,7 +263,6 @@ async function tick() {
     lowest.hp = Math.min(lowest.hp, f.hp); if (f.food != null) lowest.food = Math.min(lowest.food, f.food);
     if (f.hp < 10 && f.food != null && f.food < 18) lowNoHealSec++;
     chron.observe(f);
-    while (ptsNights < chron.nights()) { ptsNights++; pts.night(f.t); } // пережил ночь → +1
     const tod = f.tod == null ? null : ((f.tod % 24000) + 24000) % 24000;
     pts.frame({ t: f.t, day: tod != null && !(tod >= 13000 && tod < 23000), pos: f.pos, inv: invOf(s) });
     // выход из укрытия (8.1): было закрыто со всех сторон — стало открыто; HP и сытость в этот момент — в карточку
@@ -288,6 +286,8 @@ function writeCard(result, extra = {}) {
   chron.note(lastWt, result === 'death' ? 'death' : 'end', endText);
   const lifeSec = Math.round((Date.now() - t0) / 1000);
   const last = exits[exits.length - 1];
+  const gameDays = age0 != null && lastWt != null ? (lastWt - age0) / 24000 : 0;   // прожито игровых дней от старта мира
+  if (result === 'death') pts.death(gameDays, lifeSec);   // хозяин 05.11: умер рано — штраф −(7 − дней); живой на конце мира — без штрафа
   const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
   try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
   const card = {
