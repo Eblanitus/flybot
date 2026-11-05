@@ -128,6 +128,15 @@ function summarizeWorld(cards) {
       const kills = cards.reduce((n, c) => n + (c.killCount || 0), 0);
       const top = cards.slice().sort((a, b) => (b.killCount || 0) - (a.killCount || 0))[0];
       return { kills, killsArmed: cards.reduce((n, c) => n + (c.killsArmed || 0), 0), killsByNick: Object.fromEntries(cards.map(c => [c.nick, c.killCount || 0])), topKiller: top && top.killCount ? top.nick : null };
+    })() : {}),
+    // этап 2: очки жизни — среднее по всем мухам и по группам (group: learn / control; до Б11 группы нет — 'all')
+    ...(cards.some(c => c.pointsTotal != null) ? (() => {
+      const avg = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 100) / 100 : null;
+      const pts = c => Number(c.pointsTotal) || 0;
+      const groups = {};
+      for (const c of cards) (groups[c.group || 'all'] = groups[c.group || 'all'] || []).push(pts(c));
+      return { pointsAvg: avg(cards.map(pts)), pointsByNick: Object.fromEntries(cards.map(c => [c.nick, pts(c)])),
+        pointsByGroup: Object.fromEntries(Object.entries(groups).map(([g, a]) => [g, avg(a)])) };
     })() : {})
   };
 }

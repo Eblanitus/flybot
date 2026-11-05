@@ -55,7 +55,7 @@ function svgFor(cards) {
   }
   cards.forEach((c, i) => {
     const y = top + i * rowH + 16;
-    out.push(`<text x="6" y="${y + 4}">${esc(c.nick)}</text>`);
+    out.push(`<text x="6" y="${y + 4}">${esc(c.nick)}${c.pointsTotal != null ? ` · ${esc(c.pointsTotal)} оч.` : ''}</text>`);
     const ev = (c.events || []).filter(e => e.wt != null);
     if (!ev.length) { out.push(`<text x="${L}" y="${y + 4}" class="s">нет событий: ${esc(c.result || '')} ${esc(c.note || c.reason || '')}</text>`); return; }
     const a = x(c.wtStart != null ? c.wtStart : ev[0].wt), b = x(c.wtEnd != null ? c.wtEnd : ev[ev.length - 1].wt);
@@ -93,7 +93,7 @@ function worldHtml(w, cards) {
 <title>Мир ${esc(w.id)}</title><style>${CSS}</style></head><body><div class="wrap">
 <p class="muted"><a href="index.html">← все миры</a></p>
 <h1>Мир ${esc(w.id)}</h1>
-<p class="muted">сид ${esc(w.seed)} · ботов ${cards.length} · умерло ${cards.filter(c => c.result === 'death').length} · пережили первую ночь ${cards.filter(c => c.firstNightSurvived).length} · мир шёл ${w.durSec != null ? Math.round(w.durSec / 60) + ' мин' : '—'} · читов ${w.cheats != null ? w.cheats : '—'}${w.br ? ` · убийств муха→муха ${w.kills != null ? w.kills : cards.reduce((n, c) => n + (c.killCount || 0), 0)}${cards.some(c => c.killCount) ? ' (' + cards.filter(c => c.killCount).map(c => `${esc(c.nick)} ${c.killCount}`).join(', ') + ')' : ''}` : ''}${w.consoleCommands && w.consoleCommands.length ? ` · команды хозяина: ${esc(w.consoleCommands.join('; '))}` : ''}</p>
+<p class="muted">сид ${esc(w.seed)} · ботов ${cards.length} · умерло ${cards.filter(c => c.result === 'death').length} · пережили первую ночь ${cards.filter(c => c.firstNightSurvived).length}${w.pointsAvg != null ? ` · очки в среднем ${esc(w.pointsAvg)}` : ''} · мир шёл ${w.durSec != null ? Math.round(w.durSec / 60) + ' мин' : '—'} · читов ${w.cheats != null ? w.cheats : '—'}${w.br ? ` · убийств муха→муха ${w.kills != null ? w.kills : cards.reduce((n, c) => n + (c.killCount || 0), 0)}${cards.some(c => c.killCount) ? ' (' + cards.filter(c => c.killCount).map(c => `${esc(c.nick)} ${c.killCount}`).join(', ') + ')' : ''}` : ''}${w.consoleCommands && w.consoleCommands.length ? ` · команды хозяина: ${esc(w.consoleCommands.join('; '))}` : ''}</p>
 <div class="box">${legend()}${svgFor(cards)}</div>
 <div class="box"><table><tr><th>Бот</th><th>Итог</th><th>Прожил</th><th>Игровых дней</th><th>Первая ночь</th><th>Причина</th></tr>${rows}</table></div>
 </div></body></html>`;

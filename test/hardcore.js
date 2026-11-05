@@ -56,6 +56,19 @@ assert.strictEqual(L.firstNightEnd(1000, 6000), 18000);    // полдень
 assert.strictEqual(L.firstNightEnd(0, 15000), 32000);      // появился ночью — считается следующая ночь
 const sum = L.summarizeWorld([{ result: 'death', lifeSec: 10 }, { result: 'death', lifeSec: 30, firstNightSurvived: true }, { result: 'crash', lifeSec: 0 }]);
 assert.deepStrictEqual([sum.bots, sum.deaths, sum.crashes, sum.firstNight, sum.medianLifeSec], [3, 2, 1, 1, 10]);
+// очки жизни (этап 2, А4): средние по мухам и по группам; карточки без очков — полей нет (старые миры не ломаются)
+{
+  const ps = L.summarizeWorld([{ nick: 'HC_1', result: 'death', pointsTotal: 1, group: 'learn' }, { nick: 'HC_2', result: 'death', pointsTotal: 2, group: 'learn' },
+    { nick: 'HC_3', result: 'timeout', pointsTotal: 6, group: 'control' }]);
+  assert.strictEqual(ps.pointsAvg, 3);
+  assert.deepStrictEqual(ps.pointsByGroup, { learn: 1.5, control: 6 });
+  assert.deepStrictEqual(ps.pointsByNick, { HC_1: 1, HC_2: 2, HC_3: 6 });
+  const old = L.summarizeWorld([{ nick: 'HC_1', result: 'death', lifeSec: 100 }]);
+  assert(!('pointsAvg' in old) && !('pointsByGroup' in old));
+  const tlHtml = TL.worldHtml({ id: 'w2', seed: '5', durSec: 120, cheats: 0, pointsAvg: 3 }, [{ nick: 'HC_1', result: 'death', pointsTotal: 4, events: [] }]);
+  assert(tlHtml.includes('очки в среднем 3'), 'шапка мира: очки в среднем');
+  assert(TL.svgFor([{ nick: 'HC_1', pointsTotal: 4, events: [{ wt: 1, kind: 'start', text: 'x' }] }]).includes('HC_1 · 4 оч.'), 'подпись мухи: очки');
+}
 
 // хроника: ночь, пережитая ночь, новый день, HP низкий (повтор — только после HP > 8)
 {

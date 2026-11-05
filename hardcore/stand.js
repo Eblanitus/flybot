@@ -325,7 +325,7 @@ async function main(cfgFile) {
     } catch (e) { log(`лента мира не нарисована: ${e.message}`); }
     if (r.serverOk) {
       fails = 0;
-      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, высшая ступень ${r.topStepMax}${r.br ? `, убийств муха→муха ${r.kills} (оружием ${r.killsArmed})` : ''}, читов ${r.cheats}; лента — ${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
+      log(`мир ${r.id} готов за ${r.durSec} с: смертей ${r.deaths}/${r.bots}, первую ночь пережили ${r.firstNight}, высшая ступень ${r.topStepMax}${r.br ? `, убийств муха→муха ${r.kills} (оружием ${r.killsArmed})` : ''}, читов ${r.cheats}${r.pointsAvg != null ? `, очки в среднем ${r.pointsAvg}` : ''}; лента —${path.join(cfg.dataDir, 'timeline', r.id + '.html')}`);
       prune(cfg);
     } else if (++fails >= cfg.maxServerFails) {
       const msg = `сервер ${fails} раза подряд не поднялся — стенд остановлен. Смотри server.log в ${path.join(cfg.dataDir, 'worlds')}`;
