@@ -123,6 +123,9 @@ async function readEvents() {
     if (e.type === 'death') lastDeath.msg = d.message || d.cause || null;
     if (e.type === 'deed' && (d.verdict === 'ok' || d.verdict === 'провал')) pts.deed(d.key, d.verdict === 'ok', Math.round((Date.now() - t0) / 1000));
     if (e.type === 'deed_start') deeds.push({ t: Math.round((Date.now() - t0) / 1000), key: d.key, name: d.name, sit: d.sit || null, coarse: d.coarse || null, explore: !!d.explore });
+    if (e.type === 'deed') { // В1: итог дела — в последнее дело с тем же ключом без итога, чтобы в deeds.jsonl было видно, чем кончилось
+      for (let i = deeds.length - 1; i >= 0; i--) if (deeds[i].key === d.key && !deeds[i].verdict) { deeds[i].verdict = d.verdict || null; deeds[i].sec = d.sec != null ? d.sec : null; break; }
+    }
     if (e.type === 'chat' || e.type === 'system') {
       const m = String(d.msg || d.text || d.message || '');
       if (m.includes(A.name)) { chat.push(m.slice(0, 200)); while (chat.length > 20) chat.shift(); }

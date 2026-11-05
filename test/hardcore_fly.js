@@ -55,6 +55,9 @@ assert.deepStrictEqual(L.stepsNow({ inv: { stone_pickaxe: 1, stone_sword: 1 }, t
   assert.strictEqual(deedLines[0].key, 'day_routine');
   assert.strictEqual(deedLines[0].r, c.pointsTotal, 'награда дела = итог жизни');
   assert.deepStrictEqual(c.deeds, { n: 1, explore: 0 });
+  // В1: итог дела дописан в его строку — вердикт и время из события deed
+  assert.strictEqual(deedLines[0].verdict, 'провал', JSON.stringify(deedLines[0]));
+  assert.strictEqual(deedLines[0].sec, 3);
   console.log('дела жизни: deeds.jsonl, награда = итог жизни: OK');
   console.log('hardcore_fly: ok');
 })().catch(e => { console.error(e); process.exit(1); });

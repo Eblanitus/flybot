@@ -296,6 +296,14 @@ async function runWorld(cfg, n) {
     return Object.assign({ world: id, seed, nick: b.nick, mode: cfg.botMode === '1a' ? 'stage1a' : cfg.stage2 ? 'stage2' : isBr(cfg) ? 'stage1v-br' : 'stage1b-flybot' }, c);
   });
   for (const c of cards) appendJsonl(path.join(cfg.dataDir, 'lives.jsonl'), c);
+  // этап 2 (В1): дела всех мух мира — в общий журнал для сводки hardcore/skills_report.js (у мух без этапа 2 дел нет — строк нет)
+  for (const b of bots) {
+    const c = cards.find(x => x.nick === b.nick);
+    let rows = [];
+    try { rows = fs.readFileSync(path.join(path.dirname(b.cardFile), b.nick + '.fly', 'deeds.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch (e) {}
+    const lines = rows.map(x => JSON.stringify({ ...x, world: id, nick: b.nick, group: c ? c.group || null : null })).join('\n');
+    if (lines) fs.appendFileSync(path.join(cfg.dataDir, 'deeds_all.jsonl'), lines + '\n');
+  }
   // этап 2 (Б10): общая память — только учащиеся мухи (группа learn), только законченные жизни (смерть или срок); мухи мира друг у друга не учатся
   if (cfg.stage2) for (const b of bots) {
     const c = cards.find(x => x.nick === b.nick);
