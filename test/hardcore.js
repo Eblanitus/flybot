@@ -50,6 +50,22 @@ assert.strictEqual(L.causeOf('HC_1 was shot by Skeleton using Bow'), 'Skeleton')
 assert.strictEqual(L.causeOf('HC_1 starved to death'), 'starve');
 assert.strictEqual(L.causeOf('HC_1 fell from a high place'), 'fall');
 assert.strictEqual(L.causeOf(null), null);
+// умерла в воде, но добил моб или муха — причина он, а не «утонула»; моб-утопленник Drowned — тоже моб
+assert.strictEqual(L.causeOf('HC_1 drowned'), 'drown');
+assert.strictEqual(L.causeOf('HC_1 drowned whilst trying to escape Zombie'), 'Zombie');
+assert.strictEqual(L.causeOf('HC_1 drowned whilst trying to escape HC_2'), 'HC_2');
+assert.strictEqual(L.causeOf('HC_1 drowned whilst trying to escape HC_2 using Stone Sword'), 'HC_2');
+assert.strictEqual(L.causeOf('HC_1 was slain by Drowned'), 'Drowned');
+assert.strictEqual(L.causeOf('HC_1 was impaled by Drowned using Trident'), 'Drowned');
+assert.strictEqual(L.causeOf('HC_1 was killed while fighting Eblanitus228'), 'Eblanitus228');
+assert.strictEqual(L.causeOf('HC_1 was smashed by Eblanitus228'), 'Eblanitus228');
+{
+  const { causeFromMessage } = require('../lib/body_events');
+  assert.strictEqual(causeFromMessage('HC_1 drowned', 'HC_1'), 'утонул');
+  assert.strictEqual(causeFromMessage('HC_1 drowned whilst trying to escape Zombie', 'HC_1'), 'zombie');
+  assert.strictEqual(causeFromMessage('HC_1 drowned whilst trying to escape HC_2 using [Stone Sword]', 'HC_1'), 'hc_2');
+  assert.strictEqual(causeFromMessage('HC_1 was slain by Drowned', 'HC_1'), 'drowned');
+}
 
 assert.strictEqual(L.firstNightEnd(0, 0), 23000);          // утро первого дня — до конца первой ночи
 assert.strictEqual(L.firstNightEnd(1000, 6000), 18000);    // полдень
