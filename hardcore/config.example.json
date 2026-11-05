@@ -3,7 +3,8 @@
   "serverJar": "server.jar",
   "java": "java",
   "javaArgs": [
-    "-Xmx4G"
+    "-Xmx4G",
+    "-Dmax.bg.threads=4"
   ],
   "version": "26.1",
   "port": 25566,
@@ -16,7 +17,7 @@
   "brSpawnMin": 300,
   "brSpawnMax": 900,
   "brStartTime": 12000,
-  "brViewDistance": 20,
+  "brViewDistance": 12,
   "pool": false,
   "stage2": false,
   "controlBots": 3,
