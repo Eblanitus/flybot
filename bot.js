@@ -27,6 +27,7 @@ const path = require('path');
 const http = require('http');
 const mineflayer = require('mineflayer');
 const { pathfinder } = require('mineflayer-pathfinder');
+const body26Plugin = require('./lib/body26/plugin'); // штатный плагин mineflayer под протокол 26.1
 
 const { EventHub } = require('./lib/events');
 const { TaskManager } = require('./lib/tasks');
@@ -159,7 +160,7 @@ async function fromBrainOrAutopilot(req, cmd, srcParam) {
 // 2 → 60 с, сторож зависшего входа, событие reconnected. Здесь — только что подключить к новому боту.
 const link = new Link(ctx, {
   host: HOST, port: PORT, user: USER,
-  createBot: () => mineflayer.createBot({ host: HOST, port: PORT, username: USER, version: process.env.MC_VERSION || '26.1' }),
+  createBot: () => mineflayer.createBot({ host: HOST, port: PORT, username: USER, version: process.env.MC_VERSION || '26.1', plugins: { body26: body26Plugin } }),
   attach(session) {
     const bot = session.bot;
     bot.loadPlugin(pathfinder);

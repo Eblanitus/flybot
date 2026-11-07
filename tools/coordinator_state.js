@@ -40,7 +40,10 @@ try { VER = require(path.join(ROOT, 'hardcore', 'points.js')).VER; } catch (e) {
 const cfg = json('hardcore/config.json') || {};
 const teacher = read('docs/teacher_stage2.md') || '';
 const goal = read('docs/goal_path.md') || '';
+const stand = read('hardcore/stand.js') || '';
+const teachA = /const TEACH_A = (\d+)/.exec(stand);
 const staleScheme = /А \(HC_1.HC_5\)/.test(goal);
+const teacherOld = /controlBots: 2|А — HC_1/.test(teacher);
 const staleSkill = exists('brain/learned/hc_night_mine_v1.js');
 const branch = git(['branch', '--show-current']) || '(detached)';
 const last = git(['log', '-1', '--format=%h|%ad|%s', '--date=iso']);
@@ -73,7 +76,11 @@ L.push('## Что работает прямо сейчас');
 L.push('');
 L.push(`- Очки жизни: \`points.VER = ${VER}\` (\`hardcore/points.js\`). Штраф за смерть −(7 − прожито игровых дней), ночь больше не +1.`);
 L.push('- Опыт решателя: `hardcore/data/shared/decider_v2.json`; база и учитель берут только миры `pointsVer 2`.');
-L.push(`- Учитель: \`controlBots: ${cfg.controlBots ?? 3}\` при \`bots: ${cfg.bots ?? 10}\` — учащиеся HC_1–HC_${(cfg.bots ?? 10) - (cfg.controlBots ?? 3)} с правкой, остальные контроль. Второго деления нет, вердикт «до правки против после».`);
+if (teachA) {
+  L.push(`- Учитель в коде ЭТОЙ ветки: \`TEACH_A = ${teachA[1]}\`, деление А/Б, вердикт «А против Б». Локальный \`config.json\` при этом \`controlBots: ${cfg.controlBots ?? 3}\`. Схемы из разных версий — перед обсуждением сверить ветку.`);
+} else {
+  L.push(`- Учитель: \`controlBots: ${cfg.controlBots ?? 3}\` при \`bots: ${cfg.bots ?? 10}\` — учащиеся HC_1–HC_${(cfg.bots ?? 10) - (cfg.controlBots ?? 3)} с правкой, остальные контроль. Второго деления нет, вердикт «до правки против после».`);
+}
 L.push(`- Стенд (локальный \`hardcore/config.json\`): stage2=${cfg.stage2 ?? '?'}, pool=${cfg.pool ?? '?'}, brViewDistance=${cfg.brViewDistance ?? '?'}, ботов ${cfg.bots ?? '?'}.`);
 L.push(`- Последний мир в \`worlds.jsonl\`: ${world ? world.id : 'нет данных'}.`);
 L.push('');
@@ -82,7 +89,7 @@ L.push('');
 L.push(`- \`docs/goal_path.md\` (${kb('docs/goal_path.md')}): ${staleScheme ? 'всё ещё описывает группы А/Б и контроль HC_9–HC_10 — не цитировать как состояние' : 'схема групп обновлена, сверить с кодом'}.`);
 L.push(`- \`docs/stage2_plan.md\` (${kb('docs/stage2_plan.md')}): пошаговый план для Haiku, в основном отработан. Не состояние.`);
 L.push(`- \`brain/learned/hc_night_mine_v1.js\`: ${staleSkill ? 'мусорная копия «из истории», подменяет починенный навык, не в git' : 'удалён'}.`);
-L.push(`- \`docs/teacher_stage2.md\`: ${/второго деления нет/i.test(teacher) ? 'актуальна (7+3, до/после)' : 'проверить схему групп'}.`);
+L.push(`- \`docs/teacher_stage2.md\`: ${teacherOld ? 'старая схема А/Б/контроль 5+3+2 — в этой ветке не соответствует локальному config.json' : (/второго деления нет/i.test(teacher) ? 'схема 7+3, до/после' : 'проверить схему групп')}.`);
 L.push('');
 L.push('## Правило');
 L.push('');

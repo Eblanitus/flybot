@@ -138,7 +138,7 @@ function summarizeWorld(cards) {
       const pts = c => Number(c.pointsTotal) || 0;
       const groups = {};
       for (const c of cards) (groups[c.group || 'all'] = groups[c.group || 'all'] || []).push(pts(c));
-      return { pointsAvg: avg(cards.map(pts)), pointsByNick: Object.fromEntries(cards.map(c => [c.nick, pts(c)])),
+      return { pointsVer: require('./points').VER, pointsAvg: avg(cards.map(pts)), pointsByNick: Object.fromEntries(cards.map(c => [c.nick, pts(c)])),
         pointsByGroup: Object.fromEntries(Object.entries(groups).map(([g, a]) => [g, avg(a)])) };
     })() : {})
   };

@@ -489,10 +489,16 @@ function attach(api) {
         const next = rescuePlan(getB, p, st);
         if (next.action !== plan.action) ctx.events.push('info', { msg: `тону: ${next.why}`, reflex: true, drown: true, action: next.action });
         plan = next;
+        // 26.1: водная ветка физики ускоряется только при control.sprint (vendor/prismarine-physics).
+        // Без этого рефлекс гребёт «прыжком» на обычной скорости и не выныривает. На остальных
+        // действиях (копать/ставить/вверх) спринт снимаем, чтобы не держать его на суше.
+        if (plan.action !== 'swim') bot.setControlState('sprint', false);
         if (plan.action === 'swim') {
           const tg = new Vec3(plan.target.x + 0.5, plan.target.y + 0.5, plan.target.z + 0.5);
+          const swimForward = Math.hypot(tg.x - p.x, tg.z - p.z) > 0.4;
           await bot.lookAt(tg, true).catch(() => {});
-          bot.setControlState('forward', Math.hypot(tg.x - p.x, tg.z - p.z) > 0.4);
+          bot.setControlState('forward', swimForward);
+          bot.setControlState('sprint', swimForward); // есть направление — быстрое плавание, нет — не шлём лишний пакет
           bot.setControlState('jump', true);
           await sleep(150);
         } else if (plan.action === 'dig') {
