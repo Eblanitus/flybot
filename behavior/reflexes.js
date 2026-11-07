@@ -29,6 +29,9 @@ const E = L('experience');
 const SURV = L('skills/survival');
 const T = require('./thresholds');
 const D = L('danger');
+// этап 2 стенда (HC_REFLEX — путь к hardcore/reflexes.js, только у учащихся мух): какой ответ рефлекса — выбирает муха по очкам;
+// автоеда, «моб подходит» и «ожила ночью» здесь выключены (еда и ночь — дела общего списка, моб вплотную — рефлекс там)
+const RX = process.env.HC_REFLEX ? require(process.env.HC_REFLEX) : null;
 
 function hasWeapon(bot) { return bot.inventory.items().some(i => /_sword$|_axe$/.test(i.name)); }
 function hostilesNear(bot, r) {
@@ -463,7 +466,7 @@ function attach(api) {
     const cur = tm && tm.current;
     const taskName = cur ? cur.name + (cur.params && cur.params.label ? ` «${cur.params.label}»` : '')
       : (tm && tm.legacyBusy ? (tm.legacy && tm.legacy.name) || 'простая команда' : 'нет');
-    const st = { skipSwim: false, stuck: false, noDig: false, canPlace: !!pillarItem() };
+    const st = { skipSwim: false, stuck: false, noDig: false, canPlace: !!pillarItem(), ...(RX ? RX.drownStart(ctx) : {}) };   // HC_REFLEX: с чего начать — выбор мухи
     let plan = rescuePlan(getB, bot.entity.position, st);
     ctx.events.push('info', { msg: `тону: под водой ${Math.round(underMs / 1000)} с, не всплываю (y ${r1(bot.entity.position.y)}) — бросаю задачу ${taskName}, ${plan.why}`, reflex: true, drown: true, action: plan.action, task: taskName });
     let paused = '';
@@ -486,10 +489,16 @@ function attach(api) {
         const next = rescuePlan(getB, p, st);
         if (next.action !== plan.action) ctx.events.push('info', { msg: `тону: ${next.why}`, reflex: true, drown: true, action: next.action });
         plan = next;
+        // 26.1: водная ветка физики ускоряется только при control.sprint (vendor/prismarine-physics).
+        // Без этого рефлекс гребёт «прыжком» на обычной скорости и не выныривает. На остальных
+        // действиях (копать/ставить/вверх) спринт снимаем, чтобы не держать его на суше.
+        if (plan.action !== 'swim') bot.setControlState('sprint', false);
         if (plan.action === 'swim') {
           const tg = new Vec3(plan.target.x + 0.5, plan.target.y + 0.5, plan.target.z + 0.5);
+          const swimForward = Math.hypot(tg.x - p.x, tg.z - p.z) > 0.4;
           await bot.lookAt(tg, true).catch(() => {});
-          bot.setControlState('forward', Math.hypot(tg.x - p.x, tg.z - p.z) > 0.4);
+          bot.setControlState('forward', swimForward);
+          bot.setControlState('sprint', swimForward); // есть направление — быстрое плавание, нет — не шлём лишний пакет
           bot.setControlState('jump', true);
           await sleep(150);
         } else if (plan.action === 'dig') {
@@ -546,6 +555,7 @@ function attach(api) {
   let eating = false;
   let hungerWarned = false;
   every(2000, async () => {
+    if (RX) return; // этап 2: поесть — дело общего списка, не рефлекс (хозяин 05.11)
     if (eating || bot.currentWindow) return;
     const needs = needsEat(bot.food, bot.health);
     if (!needs) { if (bot.food > T.hungerWarnResetFood) hungerWarned = false; return; }
@@ -602,6 +612,7 @@ function attach(api) {
 
   // ---- Самооборона от игрока: драться (есть оружие, HP>=12, обидчик один) или убегать ----
   api.handle('player_attack', async ({ player, name }) => {
+    if (RX) { await RX.onHit(ctx, 'player', { player, name }); return; } // этап 2: ответ выбирает муха
     const cur = ctx.tasks.current;
     const low = String(name).toLowerCase();
     if (cur && (cur.name === 'escape' || cur.name === 'defend')) return;
@@ -642,6 +653,7 @@ function attach(api) {
 
   // ---- Самооборона от моба ----
   api.handle('mob_hurt', async ({ att, source, cause, sure, what }) => {
+    if (RX) { if (att && !isAutoTarget(att) && att === source) return; await RX.onHit(ctx, 'mob', { att }); return; } // этап 2: ответ выбирает муха
     // указалки: сталагмит под ногами или упавший сталактит (what: 'сталактит') — уходим с места, не бой
     if (cause === 'сталагмит' || cause === 'сталактит' || what === 'сталактит') {
       const plan = { skill: 'escape', params: {}, why: what === 'сталактит' || cause === 'сталактит' ? 'урон от упавшего сталактита — ухожу из-под свода' : 'урон от сталагмита', options: ['escape', 'shelter'] };
@@ -681,6 +693,7 @@ function attach(api) {
       if (now - lastCheck < 1500) return; // мини- débounce
       lastCheck = now;
       try { scanEscapes(ctx); } catch (e) {} // итоги побегов: fled:false → ctx.escapeFail
+      if (RX) return; // этап 2: «моб вплотную», крипер, стрелок — рефлексы hardcore/reflexes.js
       if (ctx.manualControl) return;
       const bot = ctx.bot;
       if (!bot.entity || !bot.entity.position) return;
@@ -732,6 +745,7 @@ function attach(api) {
   // ---- Респаун ночью среди мобов: голыми руками не воевать, сразу укрыться (иначе — смерть по кругу на спавне) ----
   api.on(bot, 'spawn', () => {
     api.after(T.respawnDelayMs, () => {
+      if (RX) return; // этап 2: ожила ночью среди мобов — не рефлекс, ночь решают дела общего списка и рефлексы опасности
       if (!ctx.ready || bot.health <= 0) return;
       if (!timeInfo(bot).isNight || hasWeapon(bot) || hostilesNear(bot, T.respawnHostilesR) === 0) return;
       const cur = ctx.tasks.current;
@@ -740,6 +754,8 @@ function attach(api) {
       startDefense(ctx, { skill: ch.action, params: {}, why: ch.why, options: ['shelter', 'escape'] }).catch(() => {});
     }, 'респаун ночью');
   });
+
+  if (RX) RX.attach(api, { startDefense, inShelter }); // этап 2: рефлексы опасности — свой опрос 0.5 с
 
   // при выгрузке версии — отпустить «прыжок», если держали его сами
   return { detach() {

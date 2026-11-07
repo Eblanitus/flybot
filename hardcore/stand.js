@@ -8,6 +8,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const L = require('./lib');
 const timeline = require('./timeline');
@@ -15,9 +16,14 @@ const TEACH = require('./teach');
 
 const HERE = __dirname;
 const DEFAULTS = {
-  serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G'], serverCmd: null,
+  // -Dmax.bg.threads=4: генерация мира идёт в 4 потока, а не во все ядра — ПК не фризит на старте мира (хозяин 05.11); мир от этого не меняется
+  serverDir: '', serverJar: 'server.jar', java: 'java', javaArgs: ['-Xmx4G', '-Dmax.bg.threads=4'], serverCmd: null,
+  serverLowPriority: true,   // сервер с пониженным приоритетом Windows: при нагрузке ПК отдаёт процессор сначала остальному
+
   version: '26.1', port: 25566, levelName: 'hc_world', levelType: 'minecraft\\:large_biomes', bots: 5, botPrefix: 'HC_', botCmd: null, botMode: '1b', flyCtlBase: 3310, flyRunnerBase: 3410, flyJoinSec: 120,
-  battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 20,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
+  // brViewDistance 12 (было 20, 05.11): мухи (mineflayer) сами просят 12 чанков, сервер берёт меньшее — видели и так 12; 20 только грузило
+  // и генерировало вокруг каждой мухи втрое больше земли. Для мух ничего не меняется, пока их дальность ≤ этой.
+  battleRoyale: true, brSpawnMin: 300, brSpawnMax: 900, brViewDistance: 12,   // этап 1в (хозяин 04.11): мухи охотятся друг на друга; расстановка ×3 (было 100–300)
   pool: false,   // пул навыков (hardcore/pool): включает хозяин в конфиге. С stage2 — навыки пула в списке решателя (HC_POOL); без — day_routine_v7/night_mine_v7 по HC_POOL_RUNS, как было
   stage2: false, controlBots: 3, teach: null,   // этап 2 (хозяин 05.11): учащиеся мухи; последние controlBots — контроль (без общей памяти и без проб решателя); teach: {id, offer, worlds} — правка учителя (В2)
   brStartTime: 12000,   // 1в (хозяин 04.11): мир начинается сразу вечером (12000 — закат, ночь с 13000), чтобы мухи не успевали спокойно развиться; null — как раньше
@@ -133,6 +139,9 @@ function clearLeftover(cfg) {
 function startServer(cfg, serverLog) {
   const [cmd, ...args] = cfg.serverCmd || [cfg.java, ...cfg.javaArgs, '-jar', cfg.serverJar, 'nogui'];
   const p = spawn(cmd, args, { cwd: cfg.serverDir, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  if (cfg.serverLowPriority && p.pid) {
+    try { os.setPriority(p.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch (e) {}   // не вышло — работает как раньше
+  }
   const lines = [];
   let buf = '';
   const onData = d => {
@@ -165,11 +174,30 @@ async function stopServer(cfg, p) {
 
 const isBr = cfg => !!cfg.battleRoyale && cfg.botMode !== '1a';   // баттл-рояль только у бота FlyBot (1б/1в)
 
-// этап 2: группа мухи по нику — последние controlBots мух (HC_8–HC_10 при 10 мухах и 3 контрольных) контроль, остальные учатся; без stage2 — null
+// Ники мух (хозяин 05.11): на этапе 2 у каждой мухи свой игровой ник, а группа видна по приставке — Uch_ учится, Kon_ контроль.
+// Место мухи (слот 1..bots) прежнее: слот N — это бывшая HC_N (Uch_Krot — бывшая HC_1). Группа, группа учителя и порты — по слоту.
+// Без этапа 2 (или "groupNicks": false в конфиге) — старые ники botPrefix + N (HC_1…).
+const NICK_TAGS = ['Krot', 'Shmel', 'Kaktus', 'Turbo', 'Zubilo', 'Glitch', 'Bagor', 'Pixel', 'Viper', 'Tormoz'];
+const GROUP_PREFIX = { learn: 'Uch_', control: 'Kon_' };
+const groupNicks = cfg => !!cfg.stage2 && cfg.groupNicks !== false;
+const groupOfSlot = (cfg, n) => (n > cfg.bots - cfg.controlBots ? 'control' : 'learn');
+function nickOf(cfg, n) {
+  if (!groupNicks(cfg)) return `${cfg.botPrefix}${n}`;
+  const tag = [].concat(cfg.nickTags || NICK_TAGS)[n - 1] || String(n);
+  return (GROUP_PREFIX[groupOfSlot(cfg, n)] + tag).slice(0, 16);   // ник Minecraft — до 16 знаков
+}
+const nicksOf = cfg => Array.from({ length: cfg.bots }, (_, i) => nickOf(cfg, i + 1));
+// слот мухи по нику: по списку ников мира, иначе по цифрам в конце (HC_7 → 7)
+function slotOf(cfg, nick) {
+  const i = nicksOf(cfg).indexOf(nick);
+  return i >= 0 ? i + 1 : Number((/(\d+)$/.exec(nick) || [0, 0])[1]);
+}
+// приставки «наших» мух — для охоты и учёта убийств (баттл-рояль): через запятую
+const flyPrefixes = cfg => (groupNicks(cfg) ? Object.values(GROUP_PREFIX).join(',') : cfg.botPrefix);
+// этап 2: группа мухи — последние controlBots слотов (8–10 при 10 мухах и 3 контрольных) контроль, остальные учатся; без stage2 — null
 function groupOf(cfg, nick) {
   if (!cfg.stage2) return null;
-  const num = Number((/(\d+)$/.exec(nick) || [0, 0])[1]);
-  return num > cfg.bots - cfg.controlBots ? 'control' : 'learn';
+  return groupOfSlot(cfg, slotOf(cfg, nick));
 }
 // правка учителя (В2): id проверки, пока нет вердикта (result.json); группа А — учащиеся HC_1–HC_5 (с правкой), Б — остальные учащиеся
 const TEACH_A = 5;
@@ -196,11 +224,11 @@ function teachAfterWorld(cfg, worldId, cards, log = () => {}) {
 }
 function teachGroupOf(cfg, nick) {
   if (!teachId(cfg) || teachDone(cfg) || groupOf(cfg, nick) !== 'learn') return null;
-  return Number((/(\d+)$/.exec(nick) || [0, 0])[1]) <= TEACH_A ? 'A' : 'B';
+  return slotOf(cfg, nick) <= TEACH_A ? 'A' : 'B';
 }
 // состав групп для лога мира: «учатся HC_1–HC_8, контроль HC_9, HC_10»
 function groupsText(cfg) {
-  const nicks = Array.from({ length: cfg.bots }, (_, i) => cfg.botPrefix + (i + 1));
+  const nicks = nicksOf(cfg);
   const span = a => (a.length > 2 ? `${a[0]}–${a[a.length - 1]}` : a.join(', '));
   const learn = nicks.filter(n => groupOf(cfg, n) === 'learn'), ctl = nicks.filter(n => groupOf(cfg, n) === 'control');
   return [learn.length ? `учатся ${span(learn)}` : '', ctl.length ? `контроль ${span(ctl)}` : ''].filter(Boolean).join(', ');
@@ -213,7 +241,8 @@ function botArgs(cfg, w, nick, cardFile) {
   return ['--host', '127.0.0.1', '--port', String(cfg.port), '--name', nick, '--version', cfg.version,
     '--world', w.id, '--seed', w.seed, '--out', cardFile, '--maxSec', String(cfg.maxWorldMin * 60 + 60),
     ...(fly ? ['--ctlBase', String(cfg.flyCtlBase), '--runnerBase', String(cfg.flyRunnerBase), '--joinSec', String(cfg.flyJoinSec)] : []),
-    ...(isBr(cfg) ? ['--br', cfg.botPrefix] : []), ...(fly && cfg.pool ? ['--pool', path.join(cfg.dataDir, 'pool_runs.jsonl')] : []),
+    '--slot', String(slotOf(cfg, nick)),
+    ...(isBr(cfg) ? ['--br', flyPrefixes(cfg)] : []), ...(fly && cfg.pool ? ['--pool', path.join(cfg.dataDir, 'pool_runs.jsonl')] : []),
     ...(fly && group ? ['--stage2', '1', '--group', group] : []),
     ...(fly && group === 'learn' ? ['--shared', path.join(cfg.dataDir, 'shared')] : []),
     ...(fly && tg === 'A' ? ['--learned', path.join(cfg.dataDir, 'teach', tid, 'learned')] : []),   // группа А: папка навыков с правкой
@@ -265,7 +294,7 @@ async function runWorld(cfg, n) {
   const bots = [];
   currentBots = bots;
   // Баттл-рояль: каждую муху сразу после входа переносим на её точку (пары в brSpawnMin..brSpawnMax блоков).
-  // spreadplayers с разбросом 0 и радиусом 1 ставит на поверхность у точки — не в воздух и не в камень. Это расстановка стенда,
+  // spreadplayers с разбросом 0 и радиусом 1 ставит на поверхность у точки — не в воздух и не в камень; у воды — новая точка (см. onSpread). Это расстановка стенда,
   // а не вмешательство: команды пишутся в строку мира (brSpawn), а не в consoleCommands.
   if (isBr(cfg)) {
     const BR = require('./br');
@@ -273,34 +302,50 @@ async function runWorld(cfg, n) {
     w.brSpawn = { ok: sp.ok, points: {} };
     if (!sp.ok) log(`мир ${id}: ${cfg.bots} мух не расставить так, чтобы все пары были в ${cfg.brSpawnMin}–${cfg.brSpawnMax} блоках — беру лучшую найденную расстановку`);
     const byPoint = {};   // «x z» → ник: ответ сервера на spreadplayers называет точку, а не муху
-    sp.points.forEach((pt, i) => { const nick = `${cfg.botPrefix}${i + 1}`; w.brSpawn.points[nick] = pt; byPoint[`${pt.x} ${pt.z}`] = nick; });
+    sp.points.forEach((pt, i) => { const nick = nickOf(cfg, i + 1); w.brSpawn.points[nick] = pt; byPoint[`${pt.x} ${pt.z}`] = nick; });
+    // pt.x/pt.z — исходная точка расстановки, pt.at — куда шлём сейчас (после воды — новая), pt.tries — сколько раз была вода
+    const WIDE = BR.SPREAD_RADII.length - 1;
     const send = (nick, pt) => {
-      try { srv.stdin.write(BR.spreadCmd(pt, nick, pt.tries) + '\n'); return true; }
+      try { srv.stdin.write(BR.spreadCmd(pt.at, nick, pt.wide ? WIDE : 0) + '\n'); return true; }
       catch (e) { log(`мир ${id}: ${nick} не расставлен: ${e.message}`); return false; }
     };
     const onJoin = l => {
       const m = /: ([A-Za-z0-9_]{3,16}) joined the game/.exec(l);
       const pt = m && w.brSpawn.points[m[1]];
       if (!pt || pt.sent) return;
-      pt.sent = true; pt.tries = 0;
+      pt.sent = true; pt.tries = 0; pt.at = { x: pt.x, z: pt.z };
       if (send(m[1], pt)) log(`мир ${id}: ${m[1]} → ${pt.x} ${pt.z}`);
     };
-    // Сервер не нашёл суши у точки (вода) — та же точка с радиусом шире; без этого муха остаётся у точки появления мира, в куче с другими
+    // Сервер не нашёл суши у точки (вода) — хозяин 05.11: не искать рядом, а перебросить на новую случайную точку
+    // на том же расстоянии от центра; после REPICK_MAX водных точек — последний раз ищем сушу в широком радиусе.
     const onSpread = l => {
       const s = BR.parseSpread(l);
       const nick = s && byPoint[`${s.x} ${s.z}`], pt = nick && w.brSpawn.points[nick];
       if (!pt || !pt.sent || pt.placed || pt.failed) return;
+      if (s.x !== pt.at.x || s.z !== pt.at.z) return;   // ответ на старую точку
       if (s.ok) {
         pt.placed = true;
-        if (pt.tries) log(`мир ${id}: ${nick} поставлен в ${BR.SPREAD_RADII[pt.tries]} блоках от точки ${pt.x} ${pt.z}`);
+        if (pt.tries) log(`мир ${id}: ${nick} поставлен ${pt.wide ? `в ${BR.SPREAD_RADII[WIDE]} блоках от` : 'на новую точку'} ${pt.at.x} ${pt.at.z} (водных точек до этого: ${pt.tries})`);
         return;
       }
-      if (++pt.tries >= BR.SPREAD_RADII.length) {
+      pt.tries++;
+      if (pt.wide) {
         pt.failed = true;
-        log(`мир ${id}: ${nick} не поставлен — в ${BR.SPREAD_RADII[BR.SPREAD_RADII.length - 1]} блоках от ${pt.x} ${pt.z} нет суши, остался у точки появления мира`);
+        log(`мир ${id}: ${nick} не поставлен — водных точек: ${pt.tries}, остался у точки появления мира`);
         return;
       }
-      log(`мир ${id}: ${nick} — у ${pt.x} ${pt.z} нет суши, пробую в ${BR.SPREAD_RADII[pt.tries]} блоках`);
+      if (pt.tries > BR.REPICK_MAX) {
+        pt.wide = true;
+        log(`мир ${id}: ${nick} — ${BR.REPICK_MAX} новых точек и все в воде, ищу сушу в ${BR.SPREAD_RADII[WIDE]} блоках от ${pt.at.x} ${pt.at.z}`);
+        send(nick, pt);
+        return;
+      }
+      const others = Object.entries(w.brSpawn.points).filter(([n]) => n !== nick).map(([, o]) => o.at || o);
+      let q = BR.repickPoint({ x: pt.x, z: pt.z }, others, { min: cfg.brSpawnMin, from: pt.at });   // не ближе brSpawnMin к водной точке и к другим мухам
+      while (byPoint[`${q.x} ${q.z}`]) q = { x: q.x + 1, z: q.z };   // ответ сервера узнаём по точке — она должна быть своя
+      byPoint[`${q.x} ${q.z}`] = nick;
+      log(`мир ${id}: ${nick} — у ${pt.at.x} ${pt.at.z} вода, перебрасываю на ${q.x} ${q.z} (попытка ${pt.tries + 1})`);
+      pt.at = q;
       send(nick, pt);
     };
     for (const l of srv.lines.slice()) { onJoin(l); onSpread(l); }   // вошёл раньше, чем мы начали слушать
@@ -309,10 +354,10 @@ async function runWorld(cfg, n) {
   }
   if (teachId(cfg) && !teachDone(cfg)) { // В2: папка навыков группы А — копия brain/learned и правка учителя поверх (hardcore/teach/<id>/learned)
     const tid = teachId(cfg), over = TEACH.buildLearned(path.join(HERE, '..', 'brain', 'learned'), path.join(HERE, 'teach', tid, 'learned'), path.join(cfg.dataDir, 'teach', tid, 'learned'));
-    log(`правка учителя ${tid}: группа А (HC_1–HC_${TEACH_A}) — ${over.length ? 'правка: ' + over.join(', ') : 'файлов правки нет, группа А идёт без правки'}`);
+    log(`правка учителя ${tid}: группа А (${nicksOf(cfg).slice(0, TEACH_A).join(', ')}) — ${over.length ? 'правка: ' + over.join(', ') : 'файлов правки нет, группа А идёт без правки'}`);
   }
   for (let i = 1; i <= cfg.bots; i++) {
-    const nick = `${cfg.botPrefix}${i}`;
+    const nick = nickOf(cfg, i);
     const cardFile = path.join(dir, `${nick}.json`);
     bots.push({ nick, cardFile, p: startBot(cfg, w, nick, cardFile) });
     if (i < cfg.bots) await sleep(cfg.botStaggerSec * 1000);
@@ -441,5 +486,5 @@ async function main(cfgFile) {
   return 0;
 }
 
-module.exports = { main, loadConfig, checkSetup, DEFAULTS, botArgs, groupOf, groupsText, teachGroupOf, teachId, teachDone, teachAfterWorld, TEACH_A };
+module.exports = { main, loadConfig, checkSetup, DEFAULTS, botArgs, groupOf, groupsText, nickOf, nicksOf, slotOf, flyPrefixes, NICK_TAGS, teachGroupOf, teachId, teachDone, teachAfterWorld, TEACH_A };
 if (require.main === module) main().then(c => process.exit(c), e => { log(`стенд упал: ${e.stack || e}`); process.exit(1); });   // exit: консоль держит stdin открытым

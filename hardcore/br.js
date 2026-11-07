@@ -52,6 +52,29 @@ function pairError(pts, min, max) {
 // у точки появления мира — вместе с другими такими же (05.11: в мире 210036 так вышло у 9 мух из 10). Тогда та же точка
 // с радиусом шире: попытка tryN берёт SPREAD_RADII[tryN]. Пары мух при этом могут сдвинуться на радиус — это лучше, чем куча у спавна.
 const SPREAD_RADII = [1, 24, 64, 160, 400];
+// 05.11 хозяин: у точки вода — не искать сушу рядом, а перебросить муху на новую случайную точку на том же расстоянии
+// от центра расстановки (случайный угол). До REPICK_MAX новых точек; если всё вода — последний раз ищем сушу
+// в широком радиусе (SPREAD_RADII[последний]), иначе муха осталась бы в куче у точки появления мира.
+const REPICK_MAX = 20;
+// Новая точка вместо водной: то же расстояние от (cx, cz), что у исходной (не меньше minR — у самого центра «то же
+// расстояние» почти та же точка), случайный угол. Точка должна быть не ближе moveMin к той, что оказалась в воде (from;
+// 05.11 хозяин: бросок должен быть настоящим, а не на 50 блоков), и по возможности не ближе min к остальным мухам;
+// нет такой — самая дальняя от них. Не нашлось и дальней от воды — самая дальняя от воды.
+function repickPoint(orig, others = [], { min = 300, moveMin = min, from = orig, cx = 0, cz = 0, minR = 150, rand = Math.random, tries = 300 } = {}) {
+  const r = Math.max(Math.hypot(orig.x - cx, orig.z - cz), minR);
+  let best = null, bestD = -1, far = null, farMoved = -1;
+  for (let j = 0; j < tries; j++) {
+    const a = rand() * Math.PI * 2;
+    const q = { x: Math.round(cx + Math.cos(a) * r), z: Math.round(cz + Math.sin(a) * r) };
+    const moved = Math.hypot(q.x - from.x, q.z - from.z);
+    if (moved > farMoved) { far = q; farMoved = moved; }
+    if (moved < moveMin) continue;
+    const d = others.length ? Math.min(...others.map(o => Math.hypot(o.x - q.x, o.z - q.z))) : Infinity;
+    if (d >= min) return q;
+    if (d > bestD) { best = q; bestD = d; }
+  }
+  return best || far;
+}
 const spreadCmd = (pt, nick, tryN = 0) => `spreadplayers ${pt.x} ${pt.z} 0 ${SPREAD_RADII[Math.min(tryN, SPREAD_RADII.length - 1)]} false ${nick}`;
 // Ответ сервера на spreadplayers одной мухи → { ok, x, z } (x, z — точка, как её передал стенд; сервер пишет центр блока X.5), иначе null
 function parseSpread(line) {
@@ -63,12 +86,15 @@ function parseSpread(line) {
 // Сообщение о смерти → { victim, killer } если смерть засчитана мухе (ник с префиксом), иначе null.
 // Ванильные формы: «A was slain by B», «A was shot by B using …», «A didn't want to live in the same world as B»,
 // «A drowned whilst trying to escape B», «A was doomed to fall by B»… Жертва — первое слово, убийца — последняя другая муха в тексте.
+// Наша ли муха: ник начинается с одной из приставок (через запятую: «Uch_,Kon_» на этапе 2, «HC_» раньше)
+const prefixList = p => String(p || '').split(',').map(x => x.trim()).filter(Boolean);
+const isFly = (name, prefixes) => { const n = String(name || ''); return prefixList(prefixes).some(p => n.startsWith(p)); };
 function parseKill(msg, prefix = 'HC_') {
   const s = String(msg || '').trim().replace(/^.*?\]: /, '');
   const words = s.split(/\s+/).map(w => w.replace(/[.,!:;'"]+$/, ''));
   const victim = words[0];
-  if (!victim || !victim.startsWith(prefix) || words.length < 3) return null;
-  const others = words.slice(1).filter(w => w.startsWith(prefix) && w !== victim && /^[A-Za-z0-9_]{3,16}$/.test(w));
+  if (!victim || !isFly(victim, prefix) || words.length < 3) return null;
+  const others = words.slice(1).filter(w => isFly(w, prefix) && w !== victim && /^[A-Za-z0-9_]{3,16}$/.test(w));
   if (!others.length) return null;
   return { victim, killer: others[others.length - 1] };
 }
@@ -134,4 +160,4 @@ function farLeg(pos, m) {
   return { x: Math.round(pos.x + dx * k), z: Math.round(pos.z + dz * k) };
 }
 
-module.exports = { spawnPoints, pairError, SPREAD_RADII, spreadCmd, parseSpread, parseKill, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };
+module.exports = { spawnPoints, pairError, SPREAD_RADII, REPICK_MAX, repickPoint, spreadCmd, parseSpread, parseKill, isFly, weaponOf, isWeapon, huntDecision, HUNT, FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg };

@@ -43,8 +43,8 @@ function worldProperties(cfg, seed) {
     'max-players': Math.max(10, cfg.bots + 2),
     'enable-rcon': 'false',
     'pvp': 'true',
-    // баттл-рояль (1в): локатор мухи видит только тех, чья позиция дошла до бота, — дальность прорисовки на всю расстановку
-    ...(cfg.battleRoyale && cfg.botMode !== '1a' ? { 'view-distance': cfg.brViewDistance || 20 } : {}),
+    // баттл-рояль (1в): дальность = та, что просят сами мухи (mineflayer 'far' = 12); больше — сервер грузит лишнюю землю, мухам её не шлёт
+    ...(cfg.battleRoyale && cfg.botMode !== '1a' ? { 'view-distance': cfg.brViewDistance || 12 } : {}),
     'motd': 'flybot hardcore stand'
   };
 }
@@ -138,7 +138,7 @@ function summarizeWorld(cards) {
       const pts = c => Number(c.pointsTotal) || 0;
       const groups = {};
       for (const c of cards) (groups[c.group || 'all'] = groups[c.group || 'all'] || []).push(pts(c));
-      return { pointsAvg: avg(cards.map(pts)), pointsByNick: Object.fromEntries(cards.map(c => [c.nick, pts(c)])),
+      return { pointsVer: require('./points').VER, pointsAvg: avg(cards.map(pts)), pointsByNick: Object.fromEntries(cards.map(c => [c.nick, pts(c)])),
         pointsByGroup: Object.fromEntries(Object.entries(groups).map(([g, a]) => [g, avg(a)])) };
     })() : {})
   };

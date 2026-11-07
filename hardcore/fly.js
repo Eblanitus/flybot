@@ -22,7 +22,7 @@ const A = {
   host: arg('host', '127.0.0.1'), port: +arg('port', 25566), name: arg('name', 'HC_1'), version: arg('version', '26.1'),
   world: arg('world', ''), seed: arg('seed', ''), out: arg('out', `card-${Date.now()}.json`), maxSec: +arg('maxSec', 7260),
   ctlBase: +arg('ctlBase', 3310), runnerBase: +arg('runnerBase', 3410), joinSec: +arg('joinSec', 120),
-  br: arg('br', ''),   // префикс ников мух баттл-рояля (этап 1в); пусто — обычный 1б
+  br: arg('br', ''),   // приставки ников мух баттл-рояля через запятую (этап 1в: «HC_», этап 2: «Uch_,Kon_»); пусто — обычный 1б
   pool: arg('pool', ''),  // этап 2: общая память пула навыков (hardcore/pool); пусто — пул выключен, day_routine/night_mine как раньше
   shared: arg('shared', ''),  // этап 2 (Б10): общая память мух (<папка>/variants.json, experience.json, decider_v2.json); жизнь берёт копию, стенд сливает после мира
   group: arg('group', ''),    // этап 2 (Б11): learn — учащаяся муха, control — контроль (без проб решателя; общей памяти нет — stand не даёт --shared)
@@ -32,7 +32,8 @@ const A = {
   stage2: arg('stage2', '') === '1'   // этап 2 (Б6+): охота и бой — дела решателя, охотник здесь только смотрит
 };
 const ROOT = path.join(__dirname, '..');
-const num = Number((/(\d+)$/.exec(A.name) || [0, 0])[1]);
+// слот мухи (стенд передаёт --slot): по нему порты тела и навыков; ники этапа 2 без цифр (Uch_Krot), у старых — цифра в конце (HC_3)
+const num = Number(arg('slot', '')) || Number((/(\d+)$/.exec(A.name) || [0, 0])[1]);
 const CTL = A.ctlBase + num, RUN = A.runnerBase + num;
 const life = path.join(path.dirname(path.resolve(A.out)), A.name + '.fly');
 const dirs = { data: path.join(life, 'data'), runner: path.join(life, 'runner') };
@@ -51,7 +52,8 @@ const env = Object.assign({}, process.env, {
   ...(A.shared ? { HC_DECIDER_MEM: path.join(path.resolve(A.shared), require('./memory').DECIDER_FILE) } : {}),   // Б10: таблица решателя (читается раз за жизнь; файл по версии очков)
   ...(A.learned ? { RUNNER_LEARNED: path.resolve(A.learned) } : {}),   // В2: навыки группы А — с правкой учителя (бегун читает их отсюда)
   ...(teachGroup === 'A' && A.offer ? { HC_TEACH_OFFER: A.offer } : {}),   // В2: новые навыки правки — в списке решателя
-  ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя
+  ...(A.stage2 && A.group !== 'control' ? { HC_REFLEX: path.join(__dirname, 'reflexes.js') } : {}),   // рефлексы с выбором ответа по очкам и правила автопилота в общем списке (хозяин 05.11); контроль — старый код
+  ...(A.stage2 ? { HC_STAGE2: '1' } : {}), ...(A.group === 'control' ? { HC_EXPLORE: '0', HC_STEPS: '0' } : {}),   // Б11: этап 2 у тела; контроль — без проб решателя
   ...(A.pool ? (A.stage2 ? { HC_POOL: '1' } : { HC_POOL_RUNS: path.resolve(A.pool) }) : {})   // без этапа 2: по HC_POOL_RUNS day_routine_v7 и night_mine_v7 берут навык из пула; на этапе 2 навыки пула — дела решателя (HC_POOL)
 });
 const kids = [];
@@ -127,7 +129,7 @@ async function readEvents() {
     }
     if (e.type === 'info' && typeof d.msg === 'string' && /^съел /.test(d.msg)) eats++;   // автоеда тела (behavior/reflexes.js)
     if (e.type === 'death') lastDeath.msg = d.message || d.cause || null;
-    if (e.type === 'deed' && (d.verdict === 'ok' || d.verdict === 'провал')) pts.deed(d.key, d.verdict === 'ok', Math.round((Date.now() - t0) / 1000));
+    if (e.type === 'deed' && (d.verdict === 'ok' || d.verdict === 'провал')) pts.deed(d.key, d.verdict === 'ok', Math.round((Date.now() - t0) / 1000), d.sec);
     if (e.type === 'deed_start') deeds.push({ t: Math.round((Date.now() - t0) / 1000), key: d.key, name: d.name, sit: d.sit || null, coarse: d.coarse || null, explore: !!d.explore });
     if (e.type === 'deed') { // В1: итог дела — в последнее дело с тем же ключом без итога, чтобы в deeds.jsonl было видно, чем кончилось
       for (let i = deeds.length - 1; i >= 0; i--) if (deeds[i].key === d.key && !deeds[i].verdict) { deeds[i].verdict = d.verdict || null; deeds[i].sec = d.sec != null ? d.sec : null; break; }
@@ -161,7 +163,7 @@ const gone = new Set();
 function noteGone(m) {
   if (!m || m.startsWith('<')) return;
   const s = m.replace(/^.*?\]: /, '').trim(), who = s.split(/\s+/)[0].replace(/[.,!:;'"]+$/, '');
-  if (!who || !who.startsWith(A.br) || who === A.name) return;
+  if (!who || !BR.isFly(who, A.br) || who === A.name) return;
   if (L.DEATH_WORDS.test(s) || / left the game$/.test(s)) { gone.add(who); seenFlies.delete(who); }
   else if (/ joined the game$/.test(s)) gone.delete(who);
 }
@@ -171,13 +173,13 @@ function noteGone(m) {
 // Дальняя метка: расстояние неизвестно — считаем FAR_D (дальше любой видимой); идём отрезками до LEG блоков (goto тела, LEG_SEC),
 // после каждого — снова смотрим метку. Ближе NEAR_FOLLOW и муха загружена — follow.
 const { FAR_D, LEG, LEG_SEC, NEAR_FOLLOW, farLeg } = BR;   // сами функции — в hardcore/br.js (их берёт и решатель, Б6)
-const BUSY_SKILLS = new Set(['escape', 'eat', 'shelter', 'wait_night', 'defend', 'recover', 'swim_to', 'pillar_up']);
+const BUSY_SKILLS = new Set(['escape', 'eat', 'shelter', 'wait_night', 'defend', 'recover', 'swim_to', 'shore_exit', 'pillar_up']);
 async function huntTick(s, f) {
   if (!A.br || Date.now() - hunt.lastAt < 2000) return;
   hunt.lastAt = Date.now();
   const now = Date.now();
   for (const m of s.locator || []) {
-    if (!m || !m.name || !m.name.startsWith(A.br) || m.name === A.name || gone.has(m.name)) continue;
+    if (!m || !m.name || !BR.isFly(m.name, A.br) || m.name === A.name || gone.has(m.name)) continue;
     if (m.gamemode === 3 || m.gamemode === 'spectator') { gone.add(m.name); seenFlies.delete(m.name); continue; }
     if (!m.onBar || m.hidden) continue;   // как у игрока: метка видна только в конусе 120° и если муха не прячется
     // дальняя метка (tracked_waypoint): позиция примерная (чанк) или только направление (heading) — расстояние неизвестно
@@ -291,7 +293,7 @@ function writeCard(result, extra = {}) {
   const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
   try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
   const card = {
-    nick: A.name, world: A.world, seed: A.seed, result, mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot'), group: A.group || null, teach: teachId || null, teachGroup: teachGroup || null,
+    nick: A.name, slot: num || null, world: A.world, seed: A.seed, result, mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot'), group: A.group || null, teach: teachId || null, teachGroup: teachGroup || null,
     startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), lifeSec,
     gameDays: age0 != null && lastWt != null ? r1((lastWt - age0) / 24000) : null,
     spawnTimeOfDay: tod0, firstNightSurvived: chron.events.some(e => e.kind === 'night_survived'),
