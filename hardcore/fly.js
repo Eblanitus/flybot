@@ -290,7 +290,10 @@ function writeCard(result, extra = {}) {
   const last = exits[exits.length - 1];
   const gameDays = age0 != null && lastWt != null ? (lastWt - age0) / 24000 : 0;   // прожито игровых дней от старта мира
   if (result === 'death') pts.death(gameDays, lifeSec);   // хозяин 05.11: умер рано — штраф −(7 − дней); живой на конце мира — без штрафа
-  const rated = require('./decider').rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
+  const DEC = require('./decider');
+  const back = A.group === 'learn';   // хозяин 17.11: учащимся — ступени и смерть делам перед событием (1, 1/2, 1/4…); контроль — как было
+  const rated = back ? DEC.rewardsBack(deeds, DEC.backEvents(pts.list), pts.total)
+    : DEC.rewards(deeds, pts.total); // каждое дело жизни получает итог этой жизни (Б4): у рано погибшей мало очков
   try { fs.writeFileSync(path.join(life, 'deeds.jsonl'), rated.map(x => JSON.stringify(x)).join('\n') + (rated.length ? '\n' : '')); } catch (e) { console.error('дела не записаны:', e.message); }
   const card = {
     nick: A.name, slot: num || null, world: A.world, seed: A.seed, result, mode: A.stage2 ? 'stage2' : (A.br ? 'stage1v-br' : 'stage1b-flybot'), group: A.group || null, teach: teachId || null, teachGroup: teachGroup || null,
@@ -304,7 +307,7 @@ function writeCard(result, extra = {}) {
     autopilot: lastSnap && lastSnap.autopilot ? lastSnap.autopilot : null,
     invLast: invOf(aliveSnap), handLast: aliveSnap && aliveSnap.heldItem ? (aliveSnap.heldItem.name || aliveSnap.heldItem) : null,
     points: pts.toJSON(), pointsTotal: pts.total,
-    deeds: { n: rated.length, explore: rated.filter(x => x.explore).length },
+    deeds: { n: rated.length, explore: rated.filter(x => x.explore).length }, reward: back ? 'back' : 'life',   // как оценены дела: «назад» или итогом жизни
     ...(A.br ? { br: true, kills, killCount: kills.length, killsArmed: kills.filter(k => BR.isWeapon(k.weapon)).length, killedBy, hunt: { follows: hunt.follows, fights: hunt.fights, legs: hunt.legs, lastWhy: hunt.why } } : {}),
     ...extra
   };

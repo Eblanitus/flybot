@@ -17,13 +17,14 @@ function summarize(rows) {
   let total = 0;
   for (const r of rows || []) {
     if (!r || !r.key || typeof r.r !== 'number') continue;   // строка без итога жизни — не считаем
+    const life = typeof r.rLife === 'number' ? r.rLife : r.r;   // с 17.11 у учащихся r — оценка «назад»; отчёт, как раньше, по итогу жизни
     total++;
     const a = by[r.key] = by[r.key] || { key: r.key, n: 0, sum: 0, ok: 0, fail: 0, sit: {} };
-    a.n++; a.sum += r.r;
+    a.n++; a.sum += life;
     if (r.verdict === 'ok') a.ok++; else if (r.verdict === 'провал') a.fail++;
     const co = r.coarse || '—';
     const s = a.sit[co] = a.sit[co] || { n: 0, sum: 0 };
-    s.n++; s.sum += r.r;
+    s.n++; s.sum += life;
   }
   const list = Object.values(by).map(a => {
     const sits = Object.entries(a.sit).filter(([, s]) => s.n >= MIN_SIT).map(([k, s]) => ({ coarse: k, n: s.n, avg: avg(s.sum, s.n) }));

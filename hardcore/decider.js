@@ -56,6 +56,28 @@ function pickOption(opts, st, { calm = true, rate = EXPLORE_HI, rnd = Math.rando
 function rewards(deeds, total) {
   return deeds.map(d => ({ ...d, r: total }));
 }
+// награда «назад» (хозяин 17.11, только учащиеся мухи; проверена офлайн на мирах v3 в треде «Научный разбор данных мух»):
+// новых очков нет — те же ступень (+1) и смерть (−(7 − прожито дней)) из points.js, но не всем делам жизни,
+// а делам перед событием: дело, шедшее в момент события, получает всё, предыдущее — половину, ещё раньше — четверть и т.д.
+// Пример: брёвна → верстак → «сделать кирку», и тут ступень «деревянная кирка» (+1): кирка +1, верстак +0,5, брёвна +0,25.
+// Дело, после которого ни ступени, ни смерти, получает 0. Доля меньше 1/10000 (≈14 дел назад) не раздаётся — как в проверке.
+// Пороги рефлексов (обстановка 'life', reflexes.js) — выбор раз на всю жизнь, а не дело в моменте: в цепочку не входят
+// и, как раньше, получают итог жизни. events — [{ t, d }] (секунды жизни, очки); deeds — [{ t, … }] по порядку.
+// rLife — прежний итог жизни, только для разборов (в память идёт r).
+const BACK_MIN = 1e-4;
+function rewardsBack(deeds, events, total) {
+  const r = deeds.map(() => 0);
+  for (const ev of events || []) {
+    let w = 1;
+    for (let i = deeds.length - 1; i >= 0 && w >= BACK_MIN; i--) {
+      if (deeds[i].t > ev.t || deeds[i].sit === 'life') continue;   // начато после события или порог жизни — не в цепочке
+      r[i] += ev.d * w; w /= 2;
+    }
+  }
+  return deeds.map((d, i) => ({ ...d, r: d.sit === 'life' ? total : Math.round(r[i] * 1e4) / 1e4, rLife: total }));
+}
+// события для награды «назад»: только ступени и смерть из счёта очков (убийства, простой, круги — не раздаём)
+const backEvents = list => (list || []).filter(x => x.kind === 'step' || x.kind === 'death').map(x => ({ t: x.t, d: x.d }));
 // --- часть с живой мухой (Б5): решатель в автопилоте ---
 let MEM = null;
 function memory() { // общая память решателя: читается раз за жизнь (пишет её стенд между мирами, Б10); нет файла — пусто
@@ -167,4 +189,4 @@ function teachOptions(s) {
 }
 const _reset = () => { MEM = null; SEEN.clear(); }; // для тестов
 
-module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, choose, urgentPick, memory, biomeOf, huntOption, poolOptions, stepOptions, teachOptions, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };
+module.exports = { sitOf, biomeGroup, statsFor, exploreRate, runsIn, value, pickOption, rewards, rewardsBack, backEvents, choose, urgentPick, memory, biomeOf, huntOption, poolOptions, stepOptions, teachOptions, _reset, K, PROBE_RUNS, EXPLORE_HI, EXPLORE_LO };

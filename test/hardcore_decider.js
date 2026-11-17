@@ -65,4 +65,25 @@ console.log('точная или грубая обстановка: OK');
 }
 console.log('награда: OK');
 
+// награда «назад» (хозяин 17.11, учащиеся): ступень и смерть — делу в момент события целиком, раньше — 1/2, 1/4…
+{
+  const deeds = [{ key: 'log', t: 10 }, { key: 'thr', t: 11, sit: 'life' }, { key: 'table', t: 20 }, { key: 'pick', t: 30 }, { key: 'walk', t: 50 }];
+  const ev = D.backEvents([{ kind: 'step', t: 35, d: 1 }, { kind: 'kill', t: 36, d: 2 }, { kind: 'idle', t: 40, d: -1 }, { kind: 'death', t: 60, d: -6.5 }]);
+  assert.deepStrictEqual(ev, [{ t: 35, d: 1 }, { t: 60, d: -6.5 }], 'убийства и простой не раздаются');
+  const rw = D.rewardsBack(deeds, ev, -4.5);
+  const nearR = (a, b) => assert(Math.abs(a - b) <= 0.0005, `${a} ≠ ${b}`);   // r округляется до 0,0001
+  nearR(rw[3].r, 1 - 6.5 / 2);        // кирка: ступень целиком, смерть — половина
+  nearR(rw[2].r, 0.5 - 6.5 / 4);      // верстак
+  nearR(rw[0].r, 0.25 - 6.5 / 8);     // брёвна (порог жизни в цепочку не входит)
+  nearR(rw[4].r, -6.5);               // шёл в момент смерти
+  assert.strictEqual(rw[1].r, -4.5, 'порог жизни — итог жизни, как раньше');
+  assert.strictEqual(rw[0].rLife, -4.5);
+  // нет событий — 0; дальше ~14 дел назад не раздаём
+  assert.strictEqual(D.rewardsBack([{ key: 'a', t: 1 }], [], 3)[0].r, 0);
+  const many = Array.from({ length: 20 }, (_, i) => ({ key: 'k' + i, t: i }));
+  const rm = D.rewardsBack(many, [{ t: 100, d: 1 }], 0);
+  assert.strictEqual(rm[0].r, 0); assert(rm[19 - 13].r > 0);
+}
+console.log('награда «назад»: OK');
+
 console.log('hardcore_decider: OK');

@@ -74,12 +74,12 @@ const M = require('../hardcore/memory');
     assert.deepStrictEqual(sv.recent, [], 'recent не сливаем');
     const se = JSON.parse(fs.readFileSync(path.join(shared, 'experience.json'), 'utf8'));
     assert.deepStrictEqual(se.stats['k|x'].walk, { n: 4, survived: 4, died: 0, hp: 12 });
-    assert.strictEqual(M.DECIDER_FILE, 'decider_v2.json', 'таблица решателя — по версии очков');
+    assert.strictEqual(M.DECIDER_FILE, 'decider_v3_back.json', 'таблица решателя — по версии очков и способу оценки');
     const dec = JSON.parse(fs.readFileSync(path.join(shared, M.DECIDER_FILE), 'utf8'));
     assert.deepStrictEqual(dec.exact[SIT].day_routine, { n: 2, sum: 14 });
     assert.deepStrictEqual(dec.coarse[CO].day_routine, { n: 2, sum: 14 });
     assert.strictEqual(fs.readFileSync(path.join(shared, 'decider.json'), 'utf8'), oldDec, 'старый decider.json как был');
-    console.log('prepareLife + mergeLife: разница жизни в общие файлы, дела — в decider_v2.json, старый decider.json не тронут: OK');
+    console.log('prepareLife + mergeLife: разница жизни в общие файлы, дела — в decider_v3_back.json, старый decider.json не тронут: OK');
 
     // 4) fly с --shared: жизнь получает копию общей памяти до старта тела (проверяем после конца жизни)
     const before = fs.readFileSync(path.join(shared, 'variants.json'), 'utf8');
