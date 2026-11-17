@@ -6,7 +6,9 @@ const fs = require('fs'), path = require('path');
 const FILES = ['variants.json', 'experience.json'];
 // таблица решателя: оценки дел — очки жизни, поэтому файл по версии формулы очков (hardcore/points.js VER). Хозяин 06.11:
 // опыт по старым очкам (decider.json, смерть = 0) не смешиваем с новыми — он остаётся на диске, мухи учатся заново в decider_v2.json
-const DECIDER_FILE = `decider_v${require('./points').VER}.json`;
+// Хозяин 17.11: учащиеся оценивают дела «назад» (decider.js rewardsBack) — это новая версия памяти: опыт снова с нуля
+// в decider_v3_back.json, старый decider_v3.json остаётся на диске. Сравнивать только миры с reward: 'back' в карточке.
+const DECIDER_FILE = `decider_v${require('./points').VER}_back.json`;
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return d; } };
 const writeJson = (f, o) => { const tmp = f + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(o)); fs.renameSync(tmp, f); };
 // сумма без хвостов float (0.1 + 0.2 → 0.3); целые — как есть
@@ -31,7 +33,7 @@ function foldDeeds(mem, rows) {
       if (!k) continue;
       const row = mem[tab][k] = mem[tab][k] || {};
       const a = row[r.key] = row[r.key] || { n: 0, sum: 0 };
-      a.n++; a.sum = Math.round((a.sum + r.r) * 100) / 100;
+      a.n++; a.sum = Math.round((a.sum + r.r) * 1e4) / 1e4;   // 0,0001: доли «назад» (1/2, 1/4 …) мельче сотых
     }
   }
   return mem;
